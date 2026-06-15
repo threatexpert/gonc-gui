@@ -1,0 +1,14 @@
+html {
+  background: #f4f7fb;
+  color: #152033;
+}
+
+body {
+  margin: 0;
+  color: #152033;
+  font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
