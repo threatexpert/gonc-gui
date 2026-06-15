@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -140,6 +141,11 @@ func List(ctx context.Context, serverURL, subPath string) ([]FileInfo, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if len(files) == 0 {
+		if file, ok := singleFileFromHeaders(resp); ok {
+			return []FileInfo{file}, nil
+		}
 	}
 	return files, nil
 }
@@ -390,7 +396,7 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 func (d *Downloader) localPath(file FileInfo) (string, error) {
 	remotePath := strings.TrimPrefix(path.Clean(file.Path), "/")
 	if remotePath == "." || remotePath == "" {
-		remotePath = file.Name
+		remotePath = safeLocalFilename(file.Name)
 	}
 	localPath := filepath.Clean(filepath.Join(d.root, filepath.FromSlash(remotePath)))
 	rel, err := filepath.Rel(d.root, localPath)
@@ -401,6 +407,56 @@ func (d *Downloader) localPath(file FileInfo) (string, error) {
 		return "", fmt.Errorf("remote path escapes save directory: %s", file.Path)
 	}
 	return localPath, nil
+}
+
+func singleFileFromHeaders(resp *http.Response) (FileInfo, bool) {
+	disposition := resp.Header.Get("Content-Disposition")
+	name := ""
+	if disposition != "" {
+		if _, params, err := mime.ParseMediaType(disposition); err == nil {
+			name = params["filename"]
+		}
+	}
+	name = safeLocalFilename(name)
+	if name == "" {
+		return FileInfo{}, false
+	}
+
+	size := resp.ContentLength
+	if size < 0 {
+		size = 0
+	}
+	return FileInfo{
+		Name:    name,
+		IsDir:   false,
+		ModTime: headerModTime(resp.Header.Get("Last-Modified")),
+		Size:    size,
+		Path:    "/",
+	}, true
+}
+
+func safeLocalFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Base(path.Clean("/" + name))
+	name = strings.TrimSpace(name)
+	if name == "." || name == "/" || name == "" {
+		return ""
+	}
+	return name
+}
+
+func headerModTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 func (d *Downloader) setFileProgress(file string, absoluteBytes int64) int64 {

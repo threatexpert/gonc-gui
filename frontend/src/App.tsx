@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+﻿import {useEffect, useMemo, useRef, useState} from 'react';
 import './App.css';
 import {
   GeneratePassword,
@@ -11,7 +11,7 @@ import {
   StopHTTPDownload,
   StopTransfer
 } from '../wailsjs/go/main/App';
-import {BrowserOpenURL, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
+import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive';
 type Lang = 'zh' | 'en';
@@ -27,10 +27,13 @@ type LogEvent = {
 };
 
 type P2PReport = {
+  topic: string;
   status: string;
   network: string;
   mode: string;
   peer: string;
+  timestamp: number;
+  pid: number;
 };
 
 type DownloadEvent = {
@@ -72,60 +75,78 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
+const appVersion = 'v1.0.0';
+
 const text = {
   zh: {
-    brand: 'Gonc \u4f20\u8f93',
-    subtitle: '\u70b9\u5bf9\u70b9\u6587\u4ef6\u4f20\u8f93',
-    send: '\u53d1\u9001',
-    receive: '\u63a5\u6536',
-    running: '\u8fd0\u884c\u4e2d',
-    idle: '\u7a7a\u95f2',
-    sender: '\u53d1\u9001\u65b9',
-    receiver: '\u63a5\u6536\u65b9',
-    sendTitle: '\u901a\u8fc7 gonc P2P \u5206\u4eab\u6587\u4ef6',
-    receiveTitle: '\u6d4f\u89c8\u5bf9\u7aef\u6587\u4ef6\u5e76\u6309\u9700\u4e0b\u8f7d',
-    stop: '\u505c\u6b62',
-    start: '\u5f00\u59cb',
-    p2pStatus: 'P2P \u72b6\u6001',
-    peer: '\u5bf9\u7aef',
-    network: '\u7f51\u7edc',
-    speed: '\u901f\u5ea6',
-    passphrase: '\u53e3\u4ee4',
-    passPlaceholder: '\u4e24\u7aef\u4f7f\u7528\u76f8\u540c\u53e3\u4ee4',
-    generate: '\u751f\u6210',
-    copy: '\u590d\u5236',
-    copied: '\u53e3\u4ee4\u5df2\u590d\u5236',
-    sharedList: '\u8981\u53d1\u9001\u7684\u6587\u4ef6\u548c\u76ee\u5f55',
-    addFiles: '\u6dfb\u52a0\u6587\u4ef6',
-    addFolder: '\u6dfb\u52a0\u76ee\u5f55',
-    stopBeforeEdit: '\u8bf7\u5148\u505c\u6b62\u53d1\u9001\u4efb\u52a1\uff0c\u518d\u4fee\u6539\u5206\u4eab\u5217\u8868\u3002',
-    dropHint: '\u53ef\u5c06\u6587\u4ef6\u6216\u76ee\u5f55\u62d6\u653e\u5230\u8fd9\u91cc\uff0c\u4e5f\u53ef\u4ee5\u7528\u4e0a\u9762\u7684\u6309\u94ae\u6dfb\u52a0\u3002',
-    remove: '\u79fb\u9664',
-    saveDir: '\u4fdd\u5b58\u76ee\u5f55',
-    savePlaceholder: '\u9009\u62e9\u4e0b\u8f7d\u6587\u4ef6\u4fdd\u5b58\u7684\u4f4d\u7f6e',
-    choose: '\u9009\u62e9',
-    currentDir: '\u5f53\u524d\u76ee\u5f55',
-    parent: '\u4e0a\u7ea7\u76ee\u5f55',
-    localHTTP: '\u672c\u5730 HTTP',
-    waitingHTTP: '\u7b49\u5f85 -httplocal \u7aef\u53e3\u5efa\u7acb',
-    useUDP: '\u4f7f\u7528 UDP \u534f\u8bae',
-    remoteFiles: '\u8fdc\u7aef\u6587\u4ef6',
-    refresh: '\u5237\u65b0',
-    stopDownload: '\u505c\u6b62\u4e0b\u8f7d',
-    downloadSelected: '\u4e0b\u8f7d\u9009\u4e2d',
-    noSelection: '\u8bf7\u5148\u52fe\u9009\u8981\u4e0b\u8f7d\u7684\u6587\u4ef6\u6216\u76ee\u5f55\u3002',
-    noList: '\u5c1a\u672a\u8bfb\u53d6\u76ee\u5f55',
-    files: '\u4e2a\u6587\u4ef6',
-    folders: '\u4e2a\u76ee\u5f55',
-    selected: '\u5df2\u9009',
-    listHint: '\u672c\u5730 HTTP \u5efa\u7acb\u540e\u4f1a\u81ea\u52a8\u8bfb\u53d6\u5f53\u524d\u76ee\u5f55\uff1b\u53ef\u70b9\u51fb\u76ee\u5f55\u8fdb\u5165\uff0c\u5e76\u52fe\u9009\u9700\u8981\u4e0b\u8f7d\u7684\u9879\u3002',
-    activity: '\u6d3b\u52a8\u65e5\u5fd7',
-    clear: '\u6e05\u7a7a',
-    logHint: '\u4f20\u8f93\u5f00\u59cb\u540e\u65e5\u5fd7\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002',
-    file: '\u6587\u4ef6',
-    dir: '\u76ee\u5f55',
-    goncMissing: '\u672a\u627e\u5230 gonc \u53ef\u6267\u884c\u6587\u4ef6\u3002\u8bf7\u786e\u8ba4\u53d1\u5e03\u76ee\u5f55\u4e2d\u5305\u542b bundled/gonc/\u5f53\u524d\u5e73\u53f0/gonc(.exe)\uff0c\u6216\u5df2\u628a gonc \u52a0\u5165 PATH\u3002',
-    senderLockedDrop: '\u53d1\u9001\u4efb\u52a1\u8fd0\u884c\u4e2d\uff0c\u4e0d\u80fd\u4fee\u6539\u5206\u4eab\u5217\u8868\u3002',
+    brand: 'Gonc 传输',
+    subtitle: '点对点文件传输',
+    send: '发送',
+    receive: '接收',
+    running: '运行中',
+    idle: '空闲',
+    sender: '发送方',
+    receiver: '接收方',
+    sendTitle: '发送文件',
+    receiveTitle: '接收文件',
+    stop: '停止',
+    start: '开始',
+    startShare: '开始分享',
+    startReceive: '开始接收',
+    receiveAll: '接收全部',
+    connectedReceivers: '已连接',
+    connectingReceivers: '正在建立',
+    connections: '连接',
+    establishing: '建立中',
+    waitingConnection: '等待连接',
+    newConnection: '有新连接',
+    connectedShort: '已连接',
+    connectionFailed: '连接失败',
+    disconnected: '已断开',
+    transferSpeed: '传输速度',
+    receiverUnit: '个接收端',
+    connectingYes: '有',
+    connectingNo: '无',
+    p2pStatus: 'P2P 状态',
+    peer: '对端',
+    network: '网络',
+    speed: '速度',
+    passphrase: '口令',
+    passPlaceholder: '两端使用相同口令',
+    generate: '生成',
+    copy: '复制',
+    paste: '粘贴',
+    copied: '口令已复制',
+    sharedList: '文件',
+    addFiles: '添加文件',
+    addFolder: '添加目录',
+    stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
+    dropHint: '拖放文件或目录到这里',
+    remove: '移除',
+    saveDir: '保存目录',
+    savePlaceholder: '选择下载文件保存的位置',
+    choose: '选择',
+    currentDir: '当前目录',
+    parent: '上级目录',
+    useUDP: '使用 UDP 协议',
+    remoteFiles: '远端文件',
+    refresh: '刷新',
+    stopDownload: '停止下载',
+    downloadSelected: '下载选中',
+    noSelection: '请先勾选要下载的文件或目录。',
+    noList: '尚未读取目录',
+    files: '个文件',
+    folders: '个目录',
+    selected: '已选',
+    listHint: '连接建立后会自动读取对方分享的文件目录；可点击目录进入，并勾选需要下载的项。',
+    activity: '活动日志',
+    diagnostics: '状态和日志',
+    clear: '清空',
+    logHint: '传输开始后日志会显示在这里。',
+    file: '文件',
+    dir: '目录',
+    goncMissing: '未找到 gonc 可执行文件。请确认发布目录中包含 bundled/gonc/当前平台/gonc(.exe)，或已把 gonc 加入 PATH。',
+    senderLockedDrop: '发送任务运行中，不能修改分享列表。',
   },
   en: {
     brand: 'Gonc Transfer',
@@ -136,10 +157,26 @@ const text = {
     idle: 'Idle',
     sender: 'Sender',
     receiver: 'Receiver',
-    sendTitle: 'Share files through gonc P2P',
-    receiveTitle: 'Browse peer files and download selected items',
+    sendTitle: 'Send files',
+    receiveTitle: 'Receive files',
     stop: 'Stop',
     start: 'Start',
+    startShare: 'Start Sharing',
+    startReceive: 'Start Receiving',
+    receiveAll: 'Receive All',
+    connectedReceivers: 'Connected',
+    connectingReceivers: 'Establishing',
+    connections: 'Connections',
+    establishing: 'Establishing',
+    waitingConnection: 'Waiting',
+    newConnection: 'New Connection',
+    connectedShort: 'Connected',
+    connectionFailed: 'Failed',
+    disconnected: 'Disconnected',
+    transferSpeed: 'Transfer Speed',
+    receiverUnit: 'receivers',
+    connectingYes: 'Yes',
+    connectingNo: 'No',
     p2pStatus: 'P2P status',
     peer: 'Peer',
     network: 'Network',
@@ -148,20 +185,19 @@ const text = {
     passPlaceholder: 'Same passphrase on both sides',
     generate: 'Generate',
     copy: 'Copy',
+    paste: 'Paste',
     copied: 'Passphrase copied',
-    sharedList: 'Files and folders to send',
+    sharedList: 'Files',
     addFiles: 'Add Files',
     addFolder: 'Add Folder',
     stopBeforeEdit: 'Stop the sender before changing the shared list.',
-    dropHint: 'Drag and drop files or folders into this list, or add them with the buttons above.',
+    dropHint: 'Drop files or folders here',
     remove: 'Remove',
     saveDir: 'Save directory',
     savePlaceholder: 'Choose where downloaded files will be saved',
     choose: 'Choose',
     currentDir: 'Current directory',
     parent: 'Parent directory',
-    localHTTP: 'Local HTTP',
-    waitingHTTP: 'Waiting for -httplocal endpoint',
     useUDP: 'Use UDP protocol',
     remoteFiles: 'Remote Files',
     refresh: 'Refresh',
@@ -172,8 +208,9 @@ const text = {
     files: 'files',
     folders: 'folders',
     selected: 'selected',
-    listHint: 'After the local HTTP endpoint appears, this directory is loaded automatically. Click folders to browse and tick items to download.',
+    listHint: 'After the connection is ready, shared files from the peer are loaded automatically. Click folders to browse and tick items to download.',
     activity: 'Activity',
+    diagnostics: 'Status and Logs',
     clear: 'Clear',
     logHint: 'Logs will appear here after a transfer starts.',
     file: 'FILE',
@@ -201,6 +238,7 @@ function App() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
   const [p2pReport, setP2PReport] = useState<P2PReport | null>(null);
+  const [p2pReports, setP2PReports] = useState<Record<string, P2PReport>>({});
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
@@ -217,6 +255,17 @@ function App() {
   );
   const canStart = !status.running && password.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
+  const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !status.downloading);
+  const primaryLabel = mode === 'send' ? t.startShare : t.startReceive;
+  const p2pSessions = useMemo(() => Object.values(p2pReports), [p2pReports]);
+  const connectedCount = p2pSessions.filter((report) => report.topic && report.status === 'connected').length;
+  const connectingCount = p2pSessions.filter((report) => report.topic && report.status === 'connecting').length;
+  const transferSpeed = mode === 'send'
+    ? freshSpeed(traffic?.time, traffic?.outBps, nowTick)
+    : activeSpeed;
+  const sendStatusLabel = connectingCount > 0 ? t.newConnection : (status.running ? t.waitingConnection : t.idle);
+  const receiveStatus = receiveConnectionStatus(p2pReport, status.running, Boolean(status.localHTTPUrl), t);
+  const statusTone = mode === 'receive' ? receiveStatus.tone : (status.running ? 'running' : 'idle');
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -244,7 +293,10 @@ function App() {
         refreshStatus();
       }
     });
-    EventsOn('p2p:report', (report: P2PReport) => setP2PReport(report));
+    EventsOn('p2p:report', (report: P2PReport) => {
+      setP2PReport(report);
+      setP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
+    });
     EventsOn('download:event', (event: DownloadEvent) => {
       if (event.type === 'progress') {
         setDownloadProgress(event);
@@ -323,6 +375,23 @@ function App() {
     }
   }
 
+  async function pastePassword() {
+    setError('');
+    try {
+      const value = await ClipboardGetText();
+      setPassword(value.trim());
+      revealPasswordTemporarily();
+    } catch (err) {
+      try {
+        const value = await navigator.clipboard.readText();
+        setPassword(value.trim());
+        revealPasswordTemporarily();
+      } catch {
+        setError(localizeError(String(err)));
+      }
+    }
+  }
+
   function revealPasswordTemporarily() {
     setPasswordVisible(true);
     if (passwordTimer.current) {
@@ -335,6 +404,7 @@ function App() {
     setError('');
     setLogs([]);
     setP2PReport(null);
+    setP2PReports({});
     setRemoteList(null);
     setSelectedPaths(new Set());
     setDownloadProgress(null);
@@ -362,6 +432,7 @@ function App() {
       await StopHTTPDownload();
       await StopTransfer();
       setP2PReport((current) => current ? {...current, status: 'stopped'} : null);
+      setP2PReports({});
       setTraffic(null);
       await refreshStatus();
     } catch (err) {
@@ -394,6 +465,16 @@ function App() {
     }
     try {
       await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths));
+      await refreshStatus();
+    } catch (err) {
+      setError(localizeError(String(err)));
+    }
+  }
+
+  async function startDownloadAll() {
+    setError('');
+    try {
+      await StartHTTPDownload(saveDir, currentRemotePath, []);
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
@@ -451,114 +532,106 @@ function App() {
   return (
     <main className="shell">
       <section className="workspace">
-        <aside className="rail">
+        <header className="app-header">
           <div className="brand">
-            <div className="brand-mark">G</div>
-            <div>
+          <div className="brand-mark">G</div>
+          <div>
+            <div className="brand-title">
               <h1>{t.brand}</h1>
-              <p>{t.subtitle}</p>
+              <span>{appVersion}</span>
             </div>
+            <p>{t.subtitle}</p>
           </div>
+        </div>
+        {mode === 'send' && (
+          <div className={`status-block ${statusTone}`}>
+            <span className={`dot ${statusTone}`} />
+            <span>{sendStatusLabel}</span>
+            <span className="status-divider" />
+            <span>{t.connectedShort} {connectedCount}</span>
+            <span>{formatRate(transferSpeed)}</span>
+          </div>
+        )}
+        </header>
 
-          <div className="mode-switch" role="tablist" aria-label="Transfer mode">
-            <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>{t.send}</button>
-            <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>{t.receive}</button>
-          </div>
-
-          <div className="status-block">
-            <span className={status.running ? 'dot running' : 'dot'} />
-            <span>{status.running ? t.running : t.idle}</span>
-          </div>
-        </aside>
+        <div className="mode-switch" role="tablist" aria-label="Transfer mode">
+          <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>{t.send}</button>
+          <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>{t.receive}</button>
+        </div>
 
         <section className="main-pane">
-          <header className="topbar">
-            <div>
-              <p className="eyebrow">{mode === 'send' ? t.sender : t.receiver}</p>
-              <h2>{mode === 'send' ? t.sendTitle : t.receiveTitle}</h2>
-            </div>
-            <div className="actions">
-              {status.running ? (
-                <button className="danger" onClick={stop}>{t.stop}</button>
-              ) : (
-                <button className="primary" disabled={!canStart} onClick={start}>{t.start}</button>
-              )}
-            </div>
-          </header>
-
           {error && <div className="alert">{error}</div>}
 
-          <section className="status-grid">
-            <Metric label={t.p2pStatus} value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
-            <Metric label={t.peer} value={p2pReport?.peer || '-'} />
-            <Metric label={t.network} value={p2pReport?.network || '-'} />
-            <Metric label={t.speed} value={formatRate(activeSpeed)} />
-          </section>
-
-          <section className="form-grid">
-            <div className="field wide">
-              <label>{t.passphrase}</label>
-              <div className="inline">
-                <input
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder={t.passPlaceholder}
-                />
-                <button className="secondary" onClick={generatePassword}>{t.generate}</button>
-                <button className="secondary" disabled={!password} onClick={copyPassword}>{t.copy}</button>
-              </div>
-            </div>
-
+          <section className="flow-panel">
             {mode === 'send' ? (
-              <div className="field wide">
-                <label>{t.sharedList}</label>
-                <div className="button-row">
-                  <button className="secondary" disabled={status.running} onClick={addFiles}>{t.addFiles}</button>
-                  <button className="secondary" disabled={status.running} onClick={addFolder}>{t.addFolder}</button>
-                </div>
-                {status.running && <p className="muted">{t.stopBeforeEdit}</p>}
-                <div className="drop-zone">
-                  <div className="path-list">
-                    {sharePaths.length === 0 ? (
-                      <p className="muted">{t.dropHint}</p>
-                    ) : sharePaths.map((path) => (
-                      <div className="path-row" key={path}>
-                        <span>{path}</span>
-                        <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
-                      </div>
-                    ))}
+              <>
+                <div className="field">
+                  <div className="field-heading">
+                    <label>{t.sharedList}</label>
+                    <span>{sharePaths.length} {t.files}</span>
+                  </div>
+                  <div className="file-actions">
+                    <button className="primary-light" disabled={status.running} onClick={addFiles}>{t.addFiles}</button>
+                    <button className="secondary" disabled={status.running} onClick={addFolder}>{t.addFolder}</button>
+                  </div>
+                  <div className="drop-zone">
+                    <div className="path-list">
+                      {sharePaths.length === 0 ? (
+                        <p className="drop-hint">{t.dropHint}</p>
+                      ) : sharePaths.map((path) => (
+                        <div className="path-row" key={path}>
+                          <span>{path}</span>
+                          <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             ) : (
               <>
-                <div className="field wide">
+                <div className="field">
                   <label>{t.saveDir}</label>
                   <div className="inline">
                     <input value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
                     <button className="secondary" onClick={chooseSaveDir}>{t.choose}</button>
                   </div>
                 </div>
-                <div className="field">
-                  <label>{t.currentDir}</label>
-                  <input value={currentRemotePath} readOnly />
-                </div>
-                <div className="field">
-                  <label>{t.localHTTP}</label>
-                  {status.localHTTPUrl ? (
-                    <button className="link-button" onClick={() => BrowserOpenURL(status.localHTTPUrl)}>{status.localHTTPUrl}</button>
-                  ) : (
-                    <div className="placeholder-link">{t.waitingHTTP}</div>
-                  )}
-                </div>
               </>
             )}
+
+            <div className="field">
+              <label>{t.passphrase}</label>
+              <div className="inline password-line">
+                <input
+                  type={passwordVisible ? 'text' : 'password'}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={t.passPlaceholder}
+                />
+                {mode === 'send' ? (
+                  <>
+                    <button className="secondary" onClick={generatePassword}>{t.generate}</button>
+                    <button className="secondary" disabled={!password} onClick={copyPassword}>{t.copy}</button>
+                  </>
+                ) : (
+                  <button className="secondary" onClick={pastePassword}>{t.paste}</button>
+                )}
+              </div>
+            </div>
 
             <label className="check">
               <input type="checkbox" checked={useUDP} onChange={(event) => setUseUDP(event.target.checked)} />
               <span>{t.useUDP}</span>
             </label>
+
+            <div className="primary-actions">
+              {status.running ? (
+                <button className="danger big-action" onClick={stop}>{t.stop}</button>
+              ) : (
+                <button className="primary big-action" disabled={!canStart} onClick={start}>{primaryLabel}</button>
+              )}
+            </div>
           </section>
 
           {mode === 'receive' && (
@@ -566,15 +639,23 @@ function App() {
               <div className="log-header">
                 <h3>{t.remoteFiles}</h3>
                 <div className="button-row">
+                  <span className={`connection-chip ${receiveStatus.tone}`}>
+                    <span className={`dot ${receiveStatus.tone}`} />
+                    {receiveStatus.label}
+                  </span>
                   <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
                   {status.downloading ? (
                     <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
                   ) : (
-                    <button className="primary" disabled={!canDownload} onClick={startDownload}>{t.downloadSelected}</button>
+                    <>
+                      <button className="primary" disabled={!canDownloadAll} onClick={startDownloadAll}>{t.receiveAll}</button>
+                      <button className="secondary" disabled={!canDownload} onClick={startDownload}>{t.downloadSelected}</button>
+                    </>
                   )}
                 </div>
               </div>
               <div className="remote-summary">
+                <span>{t.currentDir}: {currentRemotePath}</span>
                 <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
                 <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
                 <span>{selectedPaths.size} {t.selected}</span>
@@ -624,7 +705,15 @@ function App() {
             </section>
           )}
 
-          <section className="log-pane">
+          <details className="diagnostics">
+            <summary>{t.diagnostics}</summary>
+            <section className="status-grid">
+              <Metric label={t.p2pStatus} value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
+              <Metric label={t.peer} value={p2pReport?.peer || '-'} />
+              <Metric label={t.network} value={p2pReport?.network || '-'} />
+              <Metric label={t.speed} value={formatRate(activeSpeed)} />
+            </section>
+            <section className="log-pane">
             <div className="log-header">
               <h3>{t.activity}</h3>
               <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
@@ -639,7 +728,8 @@ function App() {
                 </div>
               ))}
             </div>
-          </section>
+            </section>
+          </details>
         </section>
       </section>
     </main>
@@ -655,12 +745,45 @@ function Metric({label, value}: { label: string; value: string }) {
   );
 }
 
+function p2pSessionKey(report: P2PReport) {
+  return report.topic || report.peer || `${report.pid || 'p2p'}-${report.timestamp || Date.now()}-${report.status}`;
+}
+
+function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh) {
+  if (!running) {
+    return {label: t.idle, tone: 'idle'};
+  }
+  const reportStatus = report?.status || '';
+  if (reportStatus.startsWith('error:')) {
+    return {label: t.connectionFailed, tone: 'error'};
+  }
+  if (reportStatus === 'disconnected' || reportStatus === 'stopped' || reportStatus === 'finished') {
+    return {label: t.disconnected, tone: 'idle'};
+  }
+  if (reportStatus === 'connecting') {
+    return {label: t.establishing, tone: 'connecting'};
+  }
+  if (reportStatus === 'connected') {
+    return {label: t.connectedShort, tone: 'connected'};
+  }
+  if (reportStatus === 'wait') {
+    return {label: t.waitingConnection, tone: 'waiting'};
+  }
+  if (localHTTPReady && !reportStatus) {
+    return {label: t.connectedShort, tone: 'connected'};
+  }
+  return {label: t.waitingConnection, tone: 'waiting'};
+}
+
 function shallowEntries(files: RemoteFile[], currentPath: string): VisibleEntry[] {
   const current = normalizeRemotePath(currentPath);
   const byPath = new Map<string, VisibleEntry>();
   for (const file of files) {
     const filePath = normalizeRemotePath(file.path);
     if (filePath === current) {
+      if (current === '/' && !file.is_dir) {
+        byPath.set(filePath, file);
+      }
       continue;
     }
     const rel = relativeRemotePath(filePath, current);
@@ -756,3 +879,4 @@ function freshSpeed(time: string | undefined, value: number | undefined, now: nu
 }
 
 export default App;
+

@@ -84,3 +84,70 @@ func TestDownloaderRetriesAndResumesInterruptedFile(t *testing.T) {
 		t.Fatalf("resume range = %q, want %q", got, "bytes=5-")
 	}
 }
+
+func TestListSynthesizesSingleFileFromAttachment(t *testing.T) {
+	content := []byte("single file content")
+	modTime := time.Date(2026, 6, 14, 14, 17, 48, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="OpenAI.Codex.7z"`)
+		w.Header().Set("Content-Length", fmt.Sprint(len(content)))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	files, err := List(context.Background(), server.URL, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files length = %d, want 1", len(files))
+	}
+	if files[0].Name != "OpenAI.Codex.7z" || files[0].Path != "/" || files[0].Size != int64(len(content)) {
+		t.Fatalf("single file = %+v", files[0])
+	}
+
+	root := t.TempDir()
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := downloader.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "OpenAI.Codex.7z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("downloaded content = %q, want %q", data, content)
+	}
+}
+
+func TestSingleFileNameCannotEscapeSaveDirectory(t *testing.T) {
+	root := t.TempDir()
+	downloader, err := New(Config{ServerURL: "http://127.0.0.1", SaveDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	localPath, err := downloader.localPath(FileInfo{
+		Name: "OpenAI/../../../../../../Windows/notepad.exe",
+		Path: "/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localPath != filepath.Join(root, "notepad.exe") {
+		t.Fatalf("local path = %q, want %q", localPath, filepath.Join(root, "notepad.exe"))
+	}
+	if rel, err := filepath.Rel(root, localPath); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		t.Fatalf("local path escapes root: %q", localPath)
+	}
+}
