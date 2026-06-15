@@ -206,12 +206,22 @@ function App() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [traffic, setTraffic] = useState<LogEvent | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
 
   const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
-  const activeSpeed = Math.max(downloadProgress?.bytesPerSecond || 0, traffic?.inBps || 0, traffic?.outBps || 0);
+  const activeSpeed = Math.max(
+    freshSpeed(downloadProgress?.time, downloadProgress?.bytesPerSecond, nowTick),
+    freshSpeed(traffic?.time, traffic?.inBps, nowTick),
+    freshSpeed(traffic?.time, traffic?.outBps, nowTick)
+  );
   const canStart = !status.running && password.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     refreshStatus();
@@ -573,9 +583,9 @@ function App() {
                 <div className="progress">
                   <div>
                     {formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}
-                    {' '}· {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
-                    {' '}· {formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
-                    {' '}· {formatRate(downloadProgress.bytesPerSecond || 0)}
+                    {' - '}{downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
+                    {' - '}{formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
+                    {' - '}{formatRate(freshSpeed(downloadProgress.time, downloadProgress.bytesPerSecond, nowTick))}
                   </div>
                   <progress max={downloadProgress.totalBytes || 1} value={downloadProgress.doneBytes || 0} />
                 </div>
@@ -732,6 +742,17 @@ function formatPercent(done: number, total: number) {
     return '0.0%';
   }
   return `${Math.min(100, (done / total) * 100).toFixed(1)}%`;
+}
+
+function freshSpeed(time: string | undefined, value: number | undefined, now: number) {
+  if (!time || !value) {
+    return 0;
+  }
+  const eventTime = Date.parse(time);
+  if (!Number.isFinite(eventTime) || now - eventTime > 3000) {
+    return 0;
+  }
+  return value;
 }
 
 export default App;

@@ -66,10 +66,12 @@ type progress struct {
 }
 
 type Downloader struct {
-	cfg      Config
-	root     string
-	files    []FileInfo
-	progress *progress
+	cfg       Config
+	root      string
+	files     []FileInfo
+	progress  *progress
+	countedMu sync.Mutex
+	counted   map[string]int64
 }
 
 func New(cfg Config) (*Downloader, error) {
@@ -93,6 +95,7 @@ func New(cfg Config) (*Downloader, error) {
 		progress: &progress{
 			lastSpeedNanos: atomic.Int64{},
 		},
+		counted: make(map[string]int64),
 	}, nil
 }
 
@@ -143,7 +146,7 @@ func List(ctx context.Context, serverURL, subPath string) ([]FileInfo, error) {
 
 func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	emit(sink, "status", "info", "fetching remote file list")
-	files, err := List(ctx, d.cfg.ServerURL, d.cfg.SubPath)
+	files, err := d.fetchListWithRetry(ctx, sink)
 	if err != nil {
 		return err
 	}
@@ -164,6 +167,19 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 
 	queue := make(chan FileInfo, d.cfg.Concurrency*2)
 	var wg sync.WaitGroup
+	var workerErrMu sync.Mutex
+	var workerErr error
+	setWorkerErr := func(err error) {
+		if err == nil || errors.Is(err, context.Canceled) {
+			return
+		}
+		workerErrMu.Lock()
+		defer workerErrMu.Unlock()
+		if workerErr == nil {
+			workerErr = err
+		}
+	}
+
 	for i := 0; i < d.cfg.Concurrency; i++ {
 		wg.Add(1)
 		go func() {
@@ -173,9 +189,9 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := d.downloadOne(ctx, client, file, sink); err != nil {
-					emit(sink, "log", "error", err.Error())
-					continue
+				if err := d.downloadWithRetry(ctx, client, file, sink); err != nil {
+					setWorkerErr(err)
+					return
 				}
 				d.progress.doneFiles.Add(1)
 				emitProgress(sink, d.progress, file.Path, false)
@@ -194,9 +210,80 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	}
 	close(queue)
 	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	workerErrMu.Lock()
+	err = workerErr
+	workerErrMu.Unlock()
+	if err != nil {
+		return err
+	}
 	emitProgress(sink, d.progress, "", true)
 	emit(sink, "status", "info", "download complete")
 	return nil
+}
+
+func (d *Downloader) fetchListWithRetry(ctx context.Context, sink Sink) ([]FileInfo, error) {
+	attempt := 0
+	for {
+		files, err := List(ctx, d.cfg.ServerURL, d.cfg.SubPath)
+		if err == nil {
+			if attempt > 0 {
+				emit(sink, "status", "info", "remote file list is available again")
+			}
+			return files, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		attempt++
+		emit(sink, "log", "warn", fmt.Sprintf("remote file list is unavailable, retrying: %v", err))
+		emitProgress(sink, d.progress, "", true)
+		if err := waitRetry(ctx, attempt); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (d *Downloader) downloadWithRetry(ctx context.Context, client *http.Client, file FileInfo, sink Sink) error {
+	if file.IsDir {
+		return d.downloadOne(ctx, client, file, sink)
+	}
+	attempt := 0
+	for {
+		err := d.downloadOne(ctx, client, file, sink)
+		if err == nil {
+			if attempt > 0 {
+				emit(sink, "status", "info", fmt.Sprintf("resumed %s", file.Path))
+			}
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		attempt++
+		emit(sink, "log", "warn", fmt.Sprintf("download interrupted for %s, retrying: %v", file.Path, err))
+		emitProgress(sink, d.progress, file.Path, true)
+		if err := waitRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+}
+
+func waitRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt) * time.Second
+	if delay > 5*time.Second {
+		delay = 5 * time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file FileInfo, sink Sink) error {
@@ -219,12 +306,11 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 
 	fileMode := os.O_CREATE | os.O_WRONLY
 	if d.cfg.Resume && localExists && localSize >= file.Size {
-		d.addExistingBytes(localSize)
+		d.setFileProgress(file.Path, file.Size)
 		return nil
 	}
 	if d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size {
 		fileMode |= os.O_APPEND
-		d.addExistingBytes(localSize)
 	}
 
 	downloadURL, err := resolveURL(d.cfg.ServerURL, file.Path)
@@ -249,8 +335,10 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	responseOffset := int64(0)
 	if resp.StatusCode == http.StatusPartialContent {
 		responseOffset = localSize
+		d.setFileProgress(file.Path, localSize)
 	} else if resp.StatusCode == http.StatusOK {
 		fileMode = os.O_CREATE | os.O_WRONLY
+		d.setFileProgress(file.Path, 0)
 	} else {
 		return fmt.Errorf("server returned %s for %s", resp.Status, file.Path)
 	}
@@ -279,10 +367,11 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	}
 
 	copied, err := io.Copy(&progressWriter{
-		writer:   out,
-		progress: d.progress,
-		sink:     sink,
-		file:     file.Path,
+		writer:     out,
+		downloader: d,
+		sink:       sink,
+		file:       file.Path,
+		offset:     responseOffset,
 	}, reader)
 	if err != nil {
 		return err
@@ -294,6 +383,7 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	if !file.ModTime.IsZero() {
 		_ = os.Chtimes(localPath, time.Now(), file.ModTime)
 	}
+	d.setFileProgress(file.Path, file.Size)
 	return nil
 }
 
@@ -313,29 +403,44 @@ func (d *Downloader) localPath(file FileInfo) (string, error) {
 	return localPath, nil
 }
 
-func (d *Downloader) addExistingBytes(n int64) {
-	if n <= 0 {
-		return
+func (d *Downloader) setFileProgress(file string, absoluteBytes int64) int64 {
+	if absoluteBytes < 0 {
+		absoluteBytes = 0
 	}
-	d.progress.doneBytes.Add(n)
+	d.countedMu.Lock()
+	previous := d.counted[file]
+	if previous == absoluteBytes {
+		d.countedMu.Unlock()
+		return 0
+	}
+	d.counted[file] = absoluteBytes
+	d.countedMu.Unlock()
+	delta := absoluteBytes - previous
+	d.progress.doneBytes.Add(delta)
+	return delta
 }
 
 type progressWriter struct {
-	writer   io.Writer
-	progress *progress
-	sink     Sink
-	file     string
-	lastEmit time.Time
+	writer     io.Writer
+	downloader *Downloader
+	sink       Sink
+	file       string
+	offset     int64
+	written    int64
+	lastEmit   time.Time
 }
 
 func (w *progressWriter) Write(data []byte) (int, error) {
 	n, err := w.writer.Write(data)
 	if n > 0 {
-		w.progress.doneBytes.Add(int64(n))
-		w.progress.intervalBytes.Add(int64(n))
+		w.written += int64(n)
+		delta := w.downloader.setFileProgress(w.file, w.offset+w.written)
+		if delta > 0 {
+			w.downloader.progress.intervalBytes.Add(delta)
+		}
 		if time.Since(w.lastEmit) > time.Second {
 			w.lastEmit = time.Now()
-			emitProgress(w.sink, w.progress, w.file, false)
+			emitProgress(w.sink, w.downloader.progress, w.file, false)
 		}
 	}
 	return n, err
