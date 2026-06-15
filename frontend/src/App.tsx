@@ -75,7 +75,7 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.0.0';
+const appVersion = 'v1.0.1';
 
 const text = {
   zh: {
