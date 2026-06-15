@@ -3,17 +3,19 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
@@ -97,11 +99,7 @@ func (a *App) SelectFolder(title string) (string, error) {
 }
 
 func (a *App) GeneratePassword() (string, error) {
-	buf := make([]byte, 18)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	return generateSecureRandomString(24)
 }
 
 func (a *App) Status() AppStatus {
@@ -393,4 +391,58 @@ func findGonc(preferred string) (string, error) {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+const passwordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func generateSecureRandomString(length int) (string, error) {
+	for {
+		result, err := generateRandomString(length)
+		if err != nil {
+			return "", err
+		}
+		if !isWeakPassword(result) {
+			return result, nil
+		}
+	}
+}
+
+func generateRandomString(length int) (string, error) {
+	result := make([]byte, length)
+	max := big.NewInt(int64(len(passwordCharset)))
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		result[i] = passwordCharset[n.Int64()]
+	}
+	return string(result), nil
+}
+
+func isWeakPassword(password string) bool {
+	if len(password) < 8 {
+		return true
+	}
+
+	lowerPassword := strings.ToLower(password)
+	weakList := []string{
+		"123456", "password", "12345678", "qwerty", "abc123", "111111", "123123",
+	}
+	for _, weak := range weakList {
+		if lowerPassword == weak {
+			return true
+		}
+	}
+
+	var hasLetter, hasDigit bool
+	for _, c := range password {
+		if unicode.IsLetter(c) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(c) {
+			hasDigit = true
+		}
+	}
+	return !hasLetter || !hasDigit
 }

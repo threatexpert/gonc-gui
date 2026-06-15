@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import './App.css';
 import {
   GeneratePassword,
@@ -12,7 +12,7 @@ import {
   StopHTTPDownload,
   StopTransfer
 } from '../wailsjs/go/main/App';
-import {EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
+import {BrowserOpenURL, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive';
 
@@ -22,6 +22,11 @@ type LogEvent = {
   message: string;
   time: string;
   localUrl?: string;
+  inBytes?: number;
+  outBytes?: number;
+  inBps?: number;
+  outBps?: number;
+  elapsed?: string;
 };
 
 type P2PReport = {
@@ -90,6 +95,9 @@ function App() {
   const [p2pReport, setP2PReport] = useState<P2PReport | null>(null);
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
+  const [traffic, setTraffic] = useState<LogEvent | null>(null);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const passwordTimer = useRef<number | null>(null);
 
   const canStart = useMemo(() => {
     if (status.running || password.trim().length === 0) {
@@ -101,16 +109,29 @@ function App() {
     return true;
   }, [mode, password, sharePaths.length, status.running]);
 
-  const canDownload = mode === 'receive' && status.localHTTPUrl && saveDir && !status.downloading;
+  const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && !status.downloading);
+  const activeSpeed = status.downloading
+    ? (downloadProgress?.bytesPerSecond || 0)
+    : (mode === 'send' ? (traffic?.outBps || 0) : (traffic?.inBps || 0));
 
   useEffect(() => {
     refreshStatus();
     EventsOn('gonc:event', (event: LogEvent) => {
+      if (event.type === 'traffic') {
+        setTraffic(event);
+        return;
+      }
       setLogs((current) => [...current.slice(-399), event]);
       if (event.localUrl) {
         setStatus((current) => ({...current, localHTTPUrl: event.localUrl || current.localHTTPUrl}));
+        if (mode === 'receive') {
+          window.setTimeout(() => loadRemoteFiles(true), 700);
+        }
       }
       if (event.type === 'status' || event.type === 'local_http') {
+        if (event.message.includes('stopped') || event.message.includes('finished')) {
+          setP2PReport((current) => current ? {...current, status: event.message.includes('stopped') ? 'stopped' : 'finished'} : null);
+        }
         refreshStatus();
       }
     });
@@ -128,17 +149,22 @@ function App() {
       }
     });
     OnFileDrop((_x, _y, paths) => {
-      if (mode === 'send') {
+      if (mode === 'send' && !status.running) {
         appendSharePaths(paths);
+      } else if (mode === 'send' && status.running) {
+        setError('Stop the current sender before changing the shared file list.');
       }
-    }, false);
+    }, true);
     return () => {
       EventsOff('gonc:event');
       EventsOff('p2p:report');
       EventsOff('download:event');
       OnFileDropOff();
+      if (passwordTimer.current) {
+        window.clearTimeout(passwordTimer.current);
+      }
     };
-  }, [mode]);
+  }, [mode, status.running]);
 
   async function refreshStatus() {
     try {
@@ -175,13 +201,23 @@ function App() {
   async function generatePassword() {
     setError('');
     setPassword(await GeneratePassword());
+    revealPasswordTemporarily();
   }
 
   async function copyPassword() {
     if (password) {
       await navigator.clipboard.writeText(password);
+      revealPasswordTemporarily();
       appendLog('status', 'info', 'passphrase copied');
     }
+  }
+
+  function revealPasswordTemporarily() {
+    setPasswordVisible(true);
+    if (passwordTimer.current) {
+      window.clearTimeout(passwordTimer.current);
+    }
+    passwordTimer.current = window.setTimeout(() => setPasswordVisible(false), 5000);
   }
 
   async function checkGoncPath() {
@@ -202,6 +238,7 @@ function App() {
     setP2PReport(null);
     setRemoteList(null);
     setDownloadProgress(null);
+    setTraffic(null);
     try {
       await StartTransfer({
         mode,
@@ -223,19 +260,25 @@ function App() {
     try {
       await StopHTTPDownload();
       await StopTransfer();
+      setP2PReport((current) => current ? {...current, status: 'stopped'} : null);
+      setTraffic(null);
       await refreshStatus();
     } catch (err) {
       setError(String(err));
     }
   }
 
-  async function loadRemoteFiles() {
-    setError('');
+  async function loadRemoteFiles(silent = false) {
+    if (!silent) {
+      setError('');
+    }
     try {
       const list = await RemoteFiles(downloadSubPath || '/');
       setRemoteList(list);
     } catch (err) {
-      setError(String(err));
+      if (!silent) {
+        setError(String(err));
+      }
     }
   }
 
@@ -327,7 +370,7 @@ function App() {
             <Metric label="P2P status" value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
             <Metric label="Peer" value={p2pReport?.peer || '-'} />
             <Metric label="Network" value={p2pReport?.network || '-'} />
-            <Metric label="Speed" value={formatRate(downloadProgress?.bytesPerSecond || 0)} />
+            <Metric label="Speed" value={formatRate(activeSpeed)} />
           </section>
 
           <section className="form-grid">
@@ -335,7 +378,7 @@ function App() {
               <label>Passphrase</label>
               <div className="inline">
                 <input
-                  type="text"
+                  type={passwordVisible ? 'text' : 'password'}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   placeholder="Same passphrase on both sides"
@@ -358,17 +401,18 @@ function App() {
               <div className="field wide">
                 <label>Files and folders to send</label>
                 <div className="button-row">
-                  <button className="secondary" onClick={addFiles}>Add Files</button>
-                  <button className="secondary" onClick={addFolder}>Add Folder</button>
+                  <button className="secondary" disabled={status.running} onClick={addFiles}>Add Files</button>
+                  <button className="secondary" disabled={status.running} onClick={addFolder}>Add Folder</button>
                 </div>
+                {status.running && <p className="muted">Stop the sender before changing the shared list.</p>}
                 <div className="drop-zone">
                   <div className="path-list">
                     {sharePaths.length === 0 ? (
-                      <p className="muted">Drop files or folders here, or add them with the buttons above.</p>
+                      <p className="muted">Drag and drop files or folders into this list, or add them with the buttons above.</p>
                     ) : sharePaths.map((path) => (
                       <div className="path-row" key={path}>
                         <span>{path}</span>
-                        <button onClick={() => removeSharePath(path)} aria-label={`Remove ${path}`}>Remove</button>
+                        <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`Remove ${path}`}>Remove</button>
                       </div>
                     ))}
                   </div>
@@ -393,7 +437,13 @@ function App() {
                 </div>
                 <div className="field">
                   <label>Local HTTP</label>
-                  <input value={status.localHTTPUrl || ''} readOnly placeholder="Waiting for -httplocal endpoint" />
+                  {status.localHTTPUrl ? (
+                    <button className="link-button" onClick={() => BrowserOpenURL(status.localHTTPUrl)}>
+                      {status.localHTTPUrl}
+                    </button>
+                  ) : (
+                    <div className="placeholder-link">Waiting for -httplocal endpoint</div>
+                  )}
                 </div>
               </>
             )}
@@ -413,7 +463,7 @@ function App() {
               <div className="log-header">
                 <h3>Remote Files</h3>
                 <div className="button-row">
-                  <button className="secondary" disabled={!status.localHTTPUrl} onClick={loadRemoteFiles}>Refresh</button>
+                  <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>Refresh</button>
                   {status.downloading ? (
                     <button className="danger" onClick={stopDownload}>Stop Download</button>
                   ) : (
@@ -429,8 +479,10 @@ function App() {
               {downloadProgress && (
                 <div className="progress">
                   <div>
-                    {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} files
+                    {formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}
+                    {' '}· {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} files
                     {' '}· {formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
+                    {' '}· {formatRate(downloadProgress.bytesPerSecond || 0)}
                   </div>
                   <progress max={downloadProgress.totalBytes || 1} value={downloadProgress.doneBytes || 0} />
                 </div>
@@ -496,6 +548,13 @@ function formatBytes(value: number) {
 
 function formatRate(value: number) {
   return `${formatBytes(value)}/s`;
+}
+
+function formatPercent(done: number, total: number) {
+  if (!total) {
+    return '0.0%';
+  }
+  return `${Math.min(100, (done / total) * 100).toFixed(1)}%`;
 }
 
 export default App;

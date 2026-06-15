@@ -253,10 +253,38 @@ input:focus {
 }
 
 .drop-zone {
+  --wails-drop-target: drop;
   border: 1px dashed #8fb2df;
   border-radius: 8px;
   padding: 8px;
   background: #f8fbff;
+}
+
+.link-button,
+.placeholder-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 40px;
+  border-radius: 6px;
+  padding: 0 12px;
+  font: inherit;
+}
+
+.link-button {
+  width: 100%;
+  overflow: hidden;
+  background: #e5edf8;
+  color: #2266cc;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.placeholder-link {
+  border: 1px solid #cad6e6;
+  background: #ffffff;
+  color: #71839b;
 }
 
 .path-row {

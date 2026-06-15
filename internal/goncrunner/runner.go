@@ -1,13 +1,14 @@
 package goncrunner
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,11 +31,16 @@ type Request struct {
 }
 
 type Event struct {
-	Type     string `json:"type"`
-	Level    string `json:"level"`
-	Message  string `json:"message"`
-	Time     string `json:"time"`
-	LocalURL string `json:"localUrl,omitempty"`
+	Type     string  `json:"type"`
+	Level    string  `json:"level"`
+	Message  string  `json:"message"`
+	Time     string  `json:"time"`
+	LocalURL string  `json:"localUrl,omitempty"`
+	InBytes  int64   `json:"inBytes,omitempty"`
+	OutBytes int64   `json:"outBytes,omitempty"`
+	InBps    float64 `json:"inBps,omitempty"`
+	OutBps   float64 `json:"outBps,omitempty"`
+	Elapsed  string  `json:"elapsed,omitempty"`
 }
 
 type Sink func(Event)
@@ -182,29 +188,106 @@ func buildArgs(req Request) ([]string, error) {
 }
 
 var localHTTPPattern = regexp.MustCompile(`http://127\.0\.0\.1:\d+`)
+var trafficPattern = regexp.MustCompile(`IN:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+OUT:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+(\d{2}:\d{2}:\d{2})`)
 
 func scan(reader io.Reader, stream string, sink Sink) {
 	if sink == nil {
 		_, _ = io.Copy(io.Discard, reader)
 		return
 	}
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	level := "info"
 	if stream == "stderr" {
 		level = "warn"
 	}
-	for scanner.Scan() {
-		line := scanner.Text()
-		if localURL := localHTTPPattern.FindString(line); localURL != "" {
-			event := newEvent("local_http", "info", "local HTTP endpoint is ready")
-			event.LocalURL = localURL
-			sink(event)
+
+	buf := make([]byte, 4096)
+	var line strings.Builder
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			for _, b := range buf[:n] {
+				switch b {
+				case '\r', '\n':
+					flushLine(line.String(), level, sink)
+					line.Reset()
+				default:
+					line.WriteByte(b)
+					if line.Len() > 4*1024*1024 {
+						flushLine(line.String(), level, sink)
+						line.Reset()
+					}
+				}
+			}
 		}
-		emit(sink, "log", level, line)
+		if err != nil {
+			if err != io.EOF {
+				emit(sink, "log", "error", err.Error())
+			}
+			if text := line.String(); text != "" {
+				flushLine(text, level, sink)
+			}
+			return
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		emit(sink, "log", "error", err.Error())
+}
+
+func flushLine(line, level string, sink Sink) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if localURL := localHTTPPattern.FindString(line); localURL != "" {
+		event := newEvent("local_http", "info", "local HTTP endpoint is ready")
+		event.LocalURL = localURL
+		sink(event)
+	}
+	if event, ok := parseTraffic(line); ok {
+		sink(event)
+		return
+	}
+	emit(sink, "log", level, line)
+}
+
+func parseTraffic(line string) (Event, bool) {
+	match := trafficPattern.FindStringSubmatch(line)
+	if match == nil {
+		return Event{}, false
+	}
+	inBytes, _ := strconv.ParseInt(match[1], 10, 64)
+	outBytes, _ := strconv.ParseInt(match[3], 10, 64)
+	return Event{
+		Type:     "traffic",
+		Level:    "info",
+		Message:  line,
+		Time:     time.Now().Format(time.RFC3339),
+		InBytes:  inBytes,
+		OutBytes: outBytes,
+		InBps:    parseRate(match[2]),
+		OutBps:   parseRate(match[4]),
+		Elapsed:  match[5],
+	}, true
+}
+
+func parseRate(text string) float64 {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 2 {
+		return 0
+	}
+	value, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	switch strings.ToLower(fields[1]) {
+	case "b":
+		return value
+	case "kb", "kib":
+		return value * 1024
+	case "mb", "mib":
+		return value * 1024 * 1024
+	case "gb", "gib":
+		return value * 1024 * 1024 * 1024
+	default:
+		return value
 	}
 }
 
