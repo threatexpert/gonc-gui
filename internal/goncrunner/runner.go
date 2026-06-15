@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -24,14 +25,16 @@ type Request struct {
 	SharePaths      []string
 	SaveDir         string
 	DownloadSubPath string
-	NoCompress      bool
+	UseUDP          bool
+	ReportURL       string
 }
 
 type Event struct {
-	Type    string `json:"type"`
-	Level   string `json:"level"`
-	Message string `json:"message"`
-	Time    string `json:"time"`
+	Type     string `json:"type"`
+	Level    string `json:"level"`
+	Message  string `json:"message"`
+	Time     string `json:"time"`
+	LocalURL string `json:"localUrl,omitempty"`
 }
 
 type Sink func(Event)
@@ -40,6 +43,7 @@ type Runner struct {
 	mu     sync.Mutex
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func New() *Runner {
@@ -66,6 +70,7 @@ func (r *Runner) Start(parent context.Context, goncPath string, req Request, sin
 
 	ctx, cancel := context.WithCancel(parent)
 	cmd := exec.CommandContext(ctx, goncPath, args...)
+	prepareCommand(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -86,6 +91,7 @@ func (r *Runner) Start(parent context.Context, goncPath string, req Request, sin
 
 	r.cmd = cmd
 	r.cancel = cancel
+	r.done = make(chan struct{})
 	r.mu.Unlock()
 
 	emit(sink, "status", "info", "gonc started: "+goncPath)
@@ -96,14 +102,31 @@ func (r *Runner) Start(parent context.Context, goncPath string, req Request, sin
 }
 
 func (r *Runner) Stop() error {
+	_, err := r.StopWait(0)
+	return err
+}
+
+func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	r.mu.Lock()
 	cancel := r.cancel
+	done := r.done
 	r.mu.Unlock()
 	if cancel == nil {
-		return errors.New("no transfer task is running")
+		return true, errors.New("no transfer task is running")
 	}
 	cancel()
-	return nil
+	if timeout <= 0 || done == nil {
+		return false, nil
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true, nil
+	case <-timer.C:
+		return false, nil
+	}
 }
 
 func (r *Runner) wait(ctx context.Context, cmd *exec.Cmd, sink Sink) {
@@ -113,6 +136,10 @@ func (r *Runner) wait(ctx context.Context, cmd *exec.Cmd, sink Sink) {
 	if r.cmd == cmd {
 		r.cmd = nil
 		r.cancel = nil
+		if r.done != nil {
+			close(r.done)
+			r.done = nil
+		}
 	}
 	r.mu.Unlock()
 
@@ -133,6 +160,12 @@ func buildArgs(req Request) ([]string, error) {
 	}
 
 	args := []string{"-p2p", req.Password}
+	if req.UseUDP {
+		args = append(args, "-u")
+	}
+	if req.ReportURL != "" {
+		args = append(args, "-p2p-report-url", req.ReportURL)
+	}
 	switch req.Mode {
 	case ModeSend:
 		if len(req.SharePaths) == 0 {
@@ -141,24 +174,20 @@ func buildArgs(req Request) ([]string, error) {
 		args = append(args, "-httpserver")
 		args = append(args, req.SharePaths...)
 	case ModeReceive:
-		if req.SaveDir == "" {
-			return nil, errors.New("select a save directory")
-		}
-		args = append(args, "-download", req.SaveDir)
-		if req.DownloadSubPath != "" {
-			args = append(args, "-download-subpath", req.DownloadSubPath)
-		}
+		args = append(args, "-httplocal")
 	default:
 		return nil, fmt.Errorf("unknown mode: %s", req.Mode)
-	}
-
-	if req.NoCompress {
-		args = append(args, "-no-compress")
 	}
 	return args, nil
 }
 
+var localHTTPPattern = regexp.MustCompile(`http://127\.0\.0\.1:\d+`)
+
 func scan(reader io.Reader, stream string, sink Sink) {
+	if sink == nil {
+		_, _ = io.Copy(io.Discard, reader)
+		return
+	}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	level := "info"
@@ -166,7 +195,13 @@ func scan(reader io.Reader, stream string, sink Sink) {
 		level = "warn"
 	}
 	for scanner.Scan() {
-		emit(sink, "log", level, scanner.Text())
+		line := scanner.Text()
+		if localURL := localHTTPPattern.FindString(line); localURL != "" {
+			event := newEvent("local_http", "info", "local HTTP endpoint is ready")
+			event.LocalURL = localURL
+			sink(event)
+		}
+		emit(sink, "log", level, line)
 	}
 	if err := scanner.Err(); err != nil {
 		emit(sink, "log", "error", err.Error())
@@ -177,10 +212,14 @@ func emit(sink Sink, typ, level, message string) {
 	if sink == nil {
 		return
 	}
-	sink(Event{
+	sink(newEvent(typ, level, message))
+}
+
+func newEvent(typ, level, message string) Event {
+	return Event{
 		Type:    typ,
 		Level:   level,
 		Message: message,
 		Time:    time.Now().Format(time.RFC3339),
-	})
+	}
 }

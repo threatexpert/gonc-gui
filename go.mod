@@ -1,8 +1,13 @@
 module gonc-gui
 
-go 1.23.0
+go 1.24
 
-require github.com/wailsapp/wails/v2 v2.12.0
+toolchain go1.24.4
+
+require (
+	github.com/klauspost/compress v1.18.6
+	github.com/wailsapp/wails/v2 v2.12.0
+)
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect

@@ -6,12 +6,18 @@ export function GeneratePassword():Promise<string>;
 
 export function LocateGonc(arg1:string):Promise<string>;
 
+export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
+
 export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder(arg1:string):Promise<string>;
 
+export function StartHTTPDownload(arg1:string,arg2:string):Promise<void>;
+
 export function StartTransfer(arg1:main.TransferRequest):Promise<void>;
 
 export function Status():Promise<main.AppStatus>;
+
+export function StopHTTPDownload():Promise<void>;
 
 export function StopTransfer():Promise<void>;
