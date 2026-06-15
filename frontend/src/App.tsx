@@ -22,11 +22,8 @@ type LogEvent = {
   message: string;
   time: string;
   localUrl?: string;
-  inBytes?: number;
-  outBytes?: number;
   inBps?: number;
   outBps?: number;
-  elapsed?: string;
 };
 
 type P2PReport = {
@@ -34,8 +31,6 @@ type P2PReport = {
   network: string;
   mode: string;
   peer: string;
-  timestamp: number;
-  pid: number;
 };
 
 type DownloadEvent = {
@@ -48,7 +43,6 @@ type DownloadEvent = {
   totalBytes?: number;
   doneBytes?: number;
   bytesPerSecond?: number;
-  currentFile?: string;
 };
 
 type RemoteFile = {
@@ -71,59 +65,67 @@ type AppStatus = {
   running: boolean;
   localHTTPUrl: string;
   downloading: boolean;
+  defaultSaveDir: string;
+};
+
+type VisibleEntry = RemoteFile & {
+  synthetic?: boolean;
 };
 
 const text = {
   zh: {
-    brand: 'Gonc 传输',
-    subtitle: '点对点文件传输',
-    send: '发送',
-    receive: '接收',
-    running: '运行中',
-    idle: '空闲',
-    sender: '发送方',
-    receiver: '接收方',
-    sendTitle: '通过 gonc P2P 分享文件',
-    receiveTitle: '连接并通过本地 HTTP 下载',
-    stop: '停止',
-    start: '开始',
-    p2pStatus: 'P2P 状态',
-    peer: '对端',
-    network: '网络',
-    speed: '速度',
-    passphrase: '口令',
-    passPlaceholder: '两端使用相同口令',
-    generate: '生成',
-    copy: '复制',
-    copied: '口令已复制',
-    sharedList: '要发送的文件和目录',
-    addFiles: '添加文件',
-    addFolder: '添加目录',
-    stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
-    dropHint: '可将文件或目录拖放到这里，也可以用上面的按钮添加。',
-    remove: '移除',
-    saveDir: '保存目录',
-    savePlaceholder: '选择下载文件保存的位置',
-    choose: '选择',
-    remoteSubpath: '远端子目录',
-    localHTTP: '本地 HTTP',
-    waitingHTTP: '等待 -httplocal 端口建立',
-    useUDP: '使用 UDP 协议',
-    remoteFiles: '远端文件',
-    refresh: '刷新',
-    stopDownload: '停止下载',
-    downloadAll: '全部下载',
-    noList: '尚未读取目录',
-    files: '个文件',
-    folders: '个目录',
-    listHint: '本地 HTTP 建立后会自动读取远端 JSON 文件列表，也可以手动刷新。',
-    activity: '活动日志',
-    clear: '清空',
-    logHint: '传输开始后日志会显示在这里。',
-    file: '文件',
-    dir: '目录',
-    goncMissing: '未找到 gonc 可执行文件。请确认发布目录中包含 bundled/gonc/当前平台/gonc(.exe)，或已把 gonc 加入 PATH。',
-    senderLockedDrop: '发送任务运行中，不能修改分享列表。',
+    brand: 'Gonc \u4f20\u8f93',
+    subtitle: '\u70b9\u5bf9\u70b9\u6587\u4ef6\u4f20\u8f93',
+    send: '\u53d1\u9001',
+    receive: '\u63a5\u6536',
+    running: '\u8fd0\u884c\u4e2d',
+    idle: '\u7a7a\u95f2',
+    sender: '\u53d1\u9001\u65b9',
+    receiver: '\u63a5\u6536\u65b9',
+    sendTitle: '\u901a\u8fc7 gonc P2P \u5206\u4eab\u6587\u4ef6',
+    receiveTitle: '\u6d4f\u89c8\u5bf9\u7aef\u6587\u4ef6\u5e76\u6309\u9700\u4e0b\u8f7d',
+    stop: '\u505c\u6b62',
+    start: '\u5f00\u59cb',
+    p2pStatus: 'P2P \u72b6\u6001',
+    peer: '\u5bf9\u7aef',
+    network: '\u7f51\u7edc',
+    speed: '\u901f\u5ea6',
+    passphrase: '\u53e3\u4ee4',
+    passPlaceholder: '\u4e24\u7aef\u4f7f\u7528\u76f8\u540c\u53e3\u4ee4',
+    generate: '\u751f\u6210',
+    copy: '\u590d\u5236',
+    copied: '\u53e3\u4ee4\u5df2\u590d\u5236',
+    sharedList: '\u8981\u53d1\u9001\u7684\u6587\u4ef6\u548c\u76ee\u5f55',
+    addFiles: '\u6dfb\u52a0\u6587\u4ef6',
+    addFolder: '\u6dfb\u52a0\u76ee\u5f55',
+    stopBeforeEdit: '\u8bf7\u5148\u505c\u6b62\u53d1\u9001\u4efb\u52a1\uff0c\u518d\u4fee\u6539\u5206\u4eab\u5217\u8868\u3002',
+    dropHint: '\u53ef\u5c06\u6587\u4ef6\u6216\u76ee\u5f55\u62d6\u653e\u5230\u8fd9\u91cc\uff0c\u4e5f\u53ef\u4ee5\u7528\u4e0a\u9762\u7684\u6309\u94ae\u6dfb\u52a0\u3002',
+    remove: '\u79fb\u9664',
+    saveDir: '\u4fdd\u5b58\u76ee\u5f55',
+    savePlaceholder: '\u9009\u62e9\u4e0b\u8f7d\u6587\u4ef6\u4fdd\u5b58\u7684\u4f4d\u7f6e',
+    choose: '\u9009\u62e9',
+    currentDir: '\u5f53\u524d\u76ee\u5f55',
+    parent: '\u4e0a\u7ea7\u76ee\u5f55',
+    localHTTP: '\u672c\u5730 HTTP',
+    waitingHTTP: '\u7b49\u5f85 -httplocal \u7aef\u53e3\u5efa\u7acb',
+    useUDP: '\u4f7f\u7528 UDP \u534f\u8bae',
+    remoteFiles: '\u8fdc\u7aef\u6587\u4ef6',
+    refresh: '\u5237\u65b0',
+    stopDownload: '\u505c\u6b62\u4e0b\u8f7d',
+    downloadSelected: '\u4e0b\u8f7d\u9009\u4e2d',
+    noSelection: '\u8bf7\u5148\u52fe\u9009\u8981\u4e0b\u8f7d\u7684\u6587\u4ef6\u6216\u76ee\u5f55\u3002',
+    noList: '\u5c1a\u672a\u8bfb\u53d6\u76ee\u5f55',
+    files: '\u4e2a\u6587\u4ef6',
+    folders: '\u4e2a\u76ee\u5f55',
+    selected: '\u5df2\u9009',
+    listHint: '\u672c\u5730 HTTP \u5efa\u7acb\u540e\u4f1a\u81ea\u52a8\u8bfb\u53d6\u5f53\u524d\u76ee\u5f55\uff1b\u53ef\u70b9\u51fb\u76ee\u5f55\u8fdb\u5165\uff0c\u5e76\u52fe\u9009\u9700\u8981\u4e0b\u8f7d\u7684\u9879\u3002',
+    activity: '\u6d3b\u52a8\u65e5\u5fd7',
+    clear: '\u6e05\u7a7a',
+    logHint: '\u4f20\u8f93\u5f00\u59cb\u540e\u65e5\u5fd7\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002',
+    file: '\u6587\u4ef6',
+    dir: '\u76ee\u5f55',
+    goncMissing: '\u672a\u627e\u5230 gonc \u53ef\u6267\u884c\u6587\u4ef6\u3002\u8bf7\u786e\u8ba4\u53d1\u5e03\u76ee\u5f55\u4e2d\u5305\u542b bundled/gonc/\u5f53\u524d\u5e73\u53f0/gonc(.exe)\uff0c\u6216\u5df2\u628a gonc \u52a0\u5165 PATH\u3002',
+    senderLockedDrop: '\u53d1\u9001\u4efb\u52a1\u8fd0\u884c\u4e2d\uff0c\u4e0d\u80fd\u4fee\u6539\u5206\u4eab\u5217\u8868\u3002',
   },
   en: {
     brand: 'Gonc Transfer',
@@ -135,7 +137,7 @@ const text = {
     sender: 'Sender',
     receiver: 'Receiver',
     sendTitle: 'Share files through gonc P2P',
-    receiveTitle: 'Connect and download through local HTTP',
+    receiveTitle: 'Browse peer files and download selected items',
     stop: 'Stop',
     start: 'Start',
     p2pStatus: 'P2P status',
@@ -156,18 +158,21 @@ const text = {
     saveDir: 'Save directory',
     savePlaceholder: 'Choose where downloaded files will be saved',
     choose: 'Choose',
-    remoteSubpath: 'Remote subpath',
+    currentDir: 'Current directory',
+    parent: 'Parent directory',
     localHTTP: 'Local HTTP',
     waitingHTTP: 'Waiting for -httplocal endpoint',
     useUDP: 'Use UDP protocol',
     remoteFiles: 'Remote Files',
     refresh: 'Refresh',
     stopDownload: 'Stop Download',
-    downloadAll: 'Download All',
+    downloadSelected: 'Download Selected',
+    noSelection: 'Select files or folders to download first.',
     noList: 'No list loaded',
     files: 'files',
     folders: 'folders',
-    listHint: 'After the local HTTP endpoint appears, the remote JSON file list is loaded automatically. You can refresh manually too.',
+    selected: 'selected',
+    listHint: 'After the local HTTP endpoint appears, this directory is loaded automatically. Click folders to browse and tick items to download.',
     activity: 'Activity',
     clear: 'Clear',
     logHint: 'Logs will appear here after a transfer starts.',
@@ -190,29 +195,23 @@ function App() {
   const [password, setPassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
   const [saveDir, setSaveDir] = useState('');
-  const [downloadSubPath, setDownloadSubPath] = useState('/');
+  const [currentRemotePath, setCurrentRemotePath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
-  const [status, setStatus] = useState<AppStatus>({running: false, localHTTPUrl: '', downloading: false});
+  const [status, setStatus] = useState<AppStatus>({running: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
   const [p2pReport, setP2PReport] = useState<P2PReport | null>(null);
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [traffic, setTraffic] = useState<LogEvent | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const passwordTimer = useRef<number | null>(null);
 
-  const canStart = useMemo(() => {
-    if (status.running || password.trim().length === 0) {
-      return false;
-    }
-    return mode === 'receive' || sharePaths.length > 0;
-  }, [mode, password, sharePaths.length, status.running]);
-
-  const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && !status.downloading);
-  const activeSpeed = status.downloading
-    ? (downloadProgress?.bytesPerSecond || 0)
-    : (mode === 'send' ? (traffic?.outBps || 0) : (traffic?.inBps || 0));
+  const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
+  const activeSpeed = Math.max(downloadProgress?.bytesPerSecond || 0, traffic?.inBps || 0, traffic?.outBps || 0);
+  const canStart = !status.running && password.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
+  const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
 
   useEffect(() => {
     refreshStatus();
@@ -225,7 +224,7 @@ function App() {
       if (event.localUrl) {
         setStatus((current) => ({...current, localHTTPUrl: event.localUrl || current.localHTTPUrl}));
         if (mode === 'receive') {
-          window.setTimeout(() => loadRemoteFiles(true), 700);
+          window.setTimeout(() => loadRemoteFiles('/', true), 700);
         }
       }
       if (event.type === 'status' || event.type === 'local_http') {
@@ -235,9 +234,7 @@ function App() {
         refreshStatus();
       }
     });
-    EventsOn('p2p:report', (report: P2PReport) => {
-      setP2PReport(report);
-    });
+    EventsOn('p2p:report', (report: P2PReport) => setP2PReport(report));
     EventsOn('download:event', (event: DownloadEvent) => {
       if (event.type === 'progress') {
         setDownloadProgress(event);
@@ -273,7 +270,11 @@ function App() {
         running: next.running,
         localHTTPUrl: next.localHTTPUrl,
         downloading: next.downloading,
+        defaultSaveDir: next.defaultSaveDir,
       });
+      if (!saveDir && next.defaultSaveDir) {
+        setSaveDir(next.defaultSaveDir);
+      }
     } catch (err) {
       setError(localizeError(String(err)));
     }
@@ -281,8 +282,7 @@ function App() {
 
   async function addFiles() {
     setError('');
-    const selected = await SelectFiles();
-    appendSharePaths(selected || []);
+    appendSharePaths(await SelectFiles() || []);
   }
 
   async function addFolder() {
@@ -326,8 +326,10 @@ function App() {
     setLogs([]);
     setP2PReport(null);
     setRemoteList(null);
+    setSelectedPaths(new Set());
     setDownloadProgress(null);
     setTraffic(null);
+    setCurrentRemotePath('/');
     try {
       await StartTransfer({
         mode,
@@ -335,7 +337,7 @@ function App() {
         sharePaths,
         saveDir,
         goncPath: '',
-        downloadSubPath,
+        downloadSubPath: currentRemotePath,
         useUDP
       });
       await refreshStatus();
@@ -357,12 +359,15 @@ function App() {
     }
   }
 
-  async function loadRemoteFiles(silent = false) {
+  async function loadRemoteFiles(path = currentRemotePath, silent = false) {
     if (!silent) {
       setError('');
     }
     try {
-      const list = await RemoteFiles(downloadSubPath || '/');
+      const normalized = normalizeRemotePath(path);
+      const list = await RemoteFiles(normalized);
+      setCurrentRemotePath(normalized);
+      setSelectedPaths(new Set());
       setRemoteList(list);
     } catch (err) {
       if (!silent) {
@@ -373,8 +378,12 @@ function App() {
 
   async function startDownload() {
     setError('');
+    if (selectedPaths.size === 0) {
+      setError(t.noSelection);
+      return;
+    }
     try {
-      await StartHTTPDownload(saveDir, downloadSubPath || '/');
+      await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths));
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
@@ -410,6 +419,18 @@ function App() {
     setSharePaths((current) => current.filter((item) => item !== path));
   }
 
+  function toggleSelected(path: string) {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }
+
   function localizeError(message: string) {
     if (message.includes('gonc executable was not found') || message.includes('selected gonc executable')) {
       return t.goncMissing;
@@ -430,12 +451,8 @@ function App() {
           </div>
 
           <div className="mode-switch" role="tablist" aria-label="Transfer mode">
-            <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>
-              {t.send}
-            </button>
-            <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>
-              {t.receive}
-            </button>
+            <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>{t.send}</button>
+            <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>{t.receive}</button>
           </div>
 
           <div className="status-block">
@@ -509,24 +526,18 @@ function App() {
                 <div className="field wide">
                   <label>{t.saveDir}</label>
                   <div className="inline">
-                    <input value={saveDir} readOnly placeholder={t.savePlaceholder} />
+                    <input value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
                     <button className="secondary" onClick={chooseSaveDir}>{t.choose}</button>
                   </div>
                 </div>
                 <div className="field">
-                  <label>{t.remoteSubpath}</label>
-                  <input
-                    value={downloadSubPath}
-                    onChange={(event) => setDownloadSubPath(event.target.value)}
-                    placeholder="/"
-                  />
+                  <label>{t.currentDir}</label>
+                  <input value={currentRemotePath} readOnly />
                 </div>
                 <div className="field">
                   <label>{t.localHTTP}</label>
                   {status.localHTTPUrl ? (
-                    <button className="link-button" onClick={() => BrowserOpenURL(status.localHTTPUrl)}>
-                      {status.localHTTPUrl}
-                    </button>
+                    <button className="link-button" onClick={() => BrowserOpenURL(status.localHTTPUrl)}>{status.localHTTPUrl}</button>
                   ) : (
                     <div className="placeholder-link">{t.waitingHTTP}</div>
                   )}
@@ -535,11 +546,7 @@ function App() {
             )}
 
             <label className="check">
-              <input
-                type="checkbox"
-                checked={useUDP}
-                onChange={(event) => setUseUDP(event.target.checked)}
-              />
+              <input type="checkbox" checked={useUDP} onChange={(event) => setUseUDP(event.target.checked)} />
               <span>{t.useUDP}</span>
             </label>
           </section>
@@ -553,14 +560,14 @@ function App() {
                   {status.downloading ? (
                     <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
                   ) : (
-                    <button className="primary" disabled={!canDownload} onClick={startDownload}>{t.downloadAll}</button>
+                    <button className="primary" disabled={!canDownload} onClick={startDownload}>{t.downloadSelected}</button>
                   )}
                 </div>
               </div>
               <div className="remote-summary">
-                <span>{remoteList ? `${remoteList.fileCount} ${t.files}` : t.noList}</span>
-                <span>{remoteList ? `${remoteList.dirCount} ${t.folders}` : '-'}</span>
-                <span>{remoteList ? formatBytes(remoteList.totalSize) : '-'}</span>
+                <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
+                <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
+                <span>{selectedPaths.size} {t.selected}</span>
               </div>
               {downloadProgress && (
                 <div className="progress">
@@ -576,13 +583,33 @@ function App() {
               <div className="remote-list">
                 {!remoteList ? (
                   <p className="muted">{t.listHint}</p>
-                ) : remoteList.files.slice(0, 120).map((file) => (
-                  <div className="remote-row" key={file.path}>
-                    <span>{file.is_dir ? t.dir : t.file}</span>
-                    <strong>{file.path}</strong>
-                    <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
-                  </div>
-                ))}
+                ) : (
+                  <>
+                    {currentRemotePath !== '/' && (
+                      <div className="remote-row nav-row">
+                        <span>{t.dir}</span>
+                        <button className="folder-link" onClick={() => loadRemoteFiles(parentPath(currentRemotePath))}>{t.parent}</button>
+                        <em />
+                      </div>
+                    )}
+                    {visibleEntries.map((file) => (
+                      <div className="remote-row" key={file.path}>
+                        <input
+                          type="checkbox"
+                          checked={selectedPaths.has(file.path)}
+                          onChange={() => toggleSelected(file.path)}
+                        />
+                        <span>{file.is_dir ? t.dir : t.file}</span>
+                        {file.is_dir ? (
+                          <button className="folder-link" onClick={() => loadRemoteFiles(file.path)}>{file.name}</button>
+                        ) : (
+                          <strong>{file.name}</strong>
+                        )}
+                        <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             </section>
           )}
@@ -616,6 +643,70 @@ function Metric({label, value}: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function shallowEntries(files: RemoteFile[], currentPath: string): VisibleEntry[] {
+  const current = normalizeRemotePath(currentPath);
+  const byPath = new Map<string, VisibleEntry>();
+  for (const file of files) {
+    const filePath = normalizeRemotePath(file.path);
+    if (filePath === current) {
+      continue;
+    }
+    const rel = relativeRemotePath(filePath, current);
+    if (!rel) {
+      continue;
+    }
+    const first = rel.split('/')[0];
+    if (!first) {
+      continue;
+    }
+    if (rel.includes('/')) {
+      const dirPath = joinRemotePath(current, first);
+      if (!byPath.has(dirPath)) {
+        byPath.set(dirPath, {name: first, is_dir: true, mod_time: '', size: 0, path: dirPath, synthetic: true});
+      }
+      continue;
+    }
+    byPath.set(filePath, file);
+  }
+  return Array.from(byPath.values()).sort((a, b) => {
+    if (a.is_dir !== b.is_dir) {
+      return a.is_dir ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function normalizeRemotePath(value: string) {
+  const normalized = `/${value || '/'}`.replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (normalized.length > 1) {
+    return normalized.replace(/\/$/, '');
+  }
+  return '/';
+}
+
+function relativeRemotePath(filePath: string, currentPath: string) {
+  if (currentPath === '/') {
+    return filePath.replace(/^\//, '');
+  }
+  if (!filePath.startsWith(`${currentPath}/`)) {
+    return '';
+  }
+  return filePath.slice(currentPath.length + 1);
+}
+
+function joinRemotePath(base: string, name: string) {
+  return normalizeRemotePath(`${base}/${name}`);
+}
+
+function parentPath(value: string) {
+  const normalized = normalizeRemotePath(value);
+  if (normalized === '/') {
+    return '/';
+  }
+  const index = normalized.lastIndexOf('/');
+  return index <= 0 ? '/' : normalized.slice(0, index);
 }
 
 function formatBytes(value: number) {

@@ -49,6 +49,7 @@ export namespace main {
 	    goncPath: string;
 	    localHTTPUrl: string;
 	    downloading: boolean;
+	    defaultSaveDir: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppStatus(source);
@@ -60,6 +61,7 @@ export namespace main {
 	        this.goncPath = source["goncPath"];
 	        this.localHTTPUrl = source["localHTTPUrl"];
 	        this.downloading = source["downloading"];
+	        this.defaultSaveDir = source["defaultSaveDir"];
 	    }
 	}
 	export class RemoteListResponse {

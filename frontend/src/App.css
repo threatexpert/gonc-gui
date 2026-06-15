@@ -6,15 +6,15 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   min-height: 100vh;
 }
 
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 28px;
-  padding: 28px;
+  gap: 20px;
+  padding: 20px;
   background: #172033;
   color: #f7fafc;
 }
@@ -109,8 +109,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 28px;
-  gap: 18px;
+  padding: 20px;
+  gap: 14px;
 }
 
 .topbar {
@@ -129,7 +129,7 @@ button:disabled {
 
 .topbar h2 {
   margin-top: 4px;
-  font-size: 26px;
+  font-size: 22px;
 }
 
 .actions,
@@ -170,14 +170,14 @@ button:disabled {
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 12px;
   align-items: start;
 }
 
 .status-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .metric {
@@ -186,7 +186,7 @@ button:disabled {
   min-width: 0;
   border: 1px solid #d9e2ef;
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px;
   background: #ffffff;
 }
 
@@ -199,7 +199,7 @@ button:disabled {
 .metric strong {
   overflow: hidden;
   color: #152033;
-  font-size: 16px;
+  font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -360,7 +360,7 @@ progress {
 .remote-list {
   display: grid;
   gap: 6px;
-  max-height: 190px;
+  max-height: 210px;
   overflow: auto;
   border: 1px solid #d9e2ef;
   border-radius: 8px;
@@ -370,11 +370,21 @@ progress {
 
 .remote-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 48px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 28px;
   font-size: 13px;
+}
+
+.remote-row.nav-row {
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+}
+
+.remote-row input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
 }
 
 .remote-row span {
@@ -387,6 +397,18 @@ progress {
   overflow: hidden;
   color: #26384f;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-link {
+  min-height: 28px;
+  overflow: hidden;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: #2266cc;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

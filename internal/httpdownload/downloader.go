@@ -30,11 +30,12 @@ type FileInfo struct {
 }
 
 type Config struct {
-	ServerURL   string
-	SubPath     string
-	SaveDir     string
-	Concurrency int
-	Resume      bool
+	ServerURL    string
+	SubPath      string
+	SaveDir      string
+	IncludePaths []string
+	Concurrency  int
+	Resume       bool
 }
 
 type Event struct {
@@ -61,6 +62,7 @@ type progress struct {
 	doneBytes      atomic.Int64
 	intervalBytes  atomic.Int64
 	lastSpeedNanos atomic.Int64
+	lastEmitNanos  atomic.Int64
 }
 
 type Downloader struct {
@@ -145,6 +147,7 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	if err != nil {
 		return err
 	}
+	files = filterFiles(files, d.cfg.IncludePaths)
 	d.files = files
 	for _, file := range files {
 		d.progress.totalFiles.Add(1)
@@ -153,7 +156,7 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 		}
 	}
 	d.progress.lastSpeedNanos.Store(time.Now().UnixNano())
-	emitProgress(sink, d.progress, "")
+	emitProgress(sink, d.progress, "", true)
 
 	if err := os.MkdirAll(d.root, 0755); err != nil {
 		return err
@@ -175,7 +178,7 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 					continue
 				}
 				d.progress.doneFiles.Add(1)
-				emitProgress(sink, d.progress, file.Path)
+				emitProgress(sink, d.progress, file.Path, false)
 			}
 		}()
 	}
@@ -191,7 +194,7 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	}
 	close(queue)
 	wg.Wait()
-	emitProgress(sink, d.progress, "")
+	emitProgress(sink, d.progress, "", true)
 	emit(sink, "status", "info", "download complete")
 	return nil
 }
@@ -330,12 +333,51 @@ func (w *progressWriter) Write(data []byte) (int, error) {
 	if n > 0 {
 		w.progress.doneBytes.Add(int64(n))
 		w.progress.intervalBytes.Add(int64(n))
-		if time.Since(w.lastEmit) > 500*time.Millisecond {
+		if time.Since(w.lastEmit) > time.Second {
 			w.lastEmit = time.Now()
-			emitProgress(w.sink, w.progress, w.file)
+			emitProgress(w.sink, w.progress, w.file, false)
 		}
 	}
 	return n, err
+}
+
+func filterFiles(files []FileInfo, includePaths []string) []FileInfo {
+	if len(includePaths) == 0 {
+		return files
+	}
+	include := make([]string, 0, len(includePaths))
+	for _, item := range includePaths {
+		normalized := normalizeRemotePath(item)
+		if normalized != "" {
+			include = append(include, normalized)
+		}
+	}
+	if len(include) == 0 {
+		return files
+	}
+
+	var filtered []FileInfo
+	for _, file := range files {
+		filePath := normalizeRemotePath(file.Path)
+		for _, selected := range include {
+			if filePath == selected || strings.HasPrefix(filePath, strings.TrimRight(selected, "/")+"/") {
+				filtered = append(filtered, file)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func normalizeRemotePath(remotePath string) string {
+	cleaned := path.Clean(remotePath)
+	if cleaned == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return cleaned
 }
 
 func responseReader(resp *http.Response) (io.Reader, func(), error) {
@@ -400,11 +442,23 @@ func emit(sink Sink, typ, level, message string) {
 	})
 }
 
-func emitProgress(sink Sink, p *progress, file string) {
+func emitProgress(sink Sink, p *progress, file string, force bool) {
 	if sink == nil {
 		return
 	}
 	now := time.Now()
+	nowNano := now.UnixNano()
+	if !force {
+		lastEmit := p.lastEmitNanos.Load()
+		if lastEmit > 0 && nowNano-lastEmit < int64(time.Second) {
+			return
+		}
+		if !p.lastEmitNanos.CompareAndSwap(lastEmit, nowNano) {
+			return
+		}
+	} else {
+		p.lastEmitNanos.Store(nowNano)
+	}
 	last := time.Unix(0, p.lastSpeedNanos.Swap(now.UnixNano()))
 	seconds := now.Sub(last).Seconds()
 	speed := int64(0)

@@ -22,8 +22,8 @@ export function SelectFolder(arg1) {
   return window['go']['main']['App']['SelectFolder'](arg1);
 }
 
-export function StartHTTPDownload(arg1, arg2) {
-  return window['go']['main']['App']['StartHTTPDownload'](arg1, arg2);
+export function StartHTTPDownload(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartHTTPDownload'](arg1, arg2, arg3);
 }
 
 export function StartTransfer(arg1) {

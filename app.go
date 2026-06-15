@@ -45,10 +45,11 @@ type TransferRequest struct {
 }
 
 type AppStatus struct {
-	Running      bool   `json:"running"`
-	GoncPath     string `json:"goncPath"`
-	LocalHTTPURL string `json:"localHTTPUrl"`
-	Downloading  bool   `json:"downloading"`
+	Running        bool   `json:"running"`
+	GoncPath       string `json:"goncPath"`
+	LocalHTTPURL   string `json:"localHTTPUrl"`
+	Downloading    bool   `json:"downloading"`
+	DefaultSaveDir string `json:"defaultSaveDir"`
 }
 
 type P2PStatusReport struct {
@@ -109,10 +110,11 @@ func (a *App) Status() AppStatus {
 	downloading := a.downloadCancel != nil
 	a.mu.Unlock()
 	return AppStatus{
-		Running:      a.runner.IsRunning(),
-		GoncPath:     path,
-		LocalHTTPURL: localURL,
-		Downloading:  downloading,
+		Running:        a.runner.IsRunning(),
+		GoncPath:       path,
+		LocalHTTPURL:   localURL,
+		Downloading:    downloading,
+		DefaultSaveDir: defaultSaveDir(),
 	}
 }
 
@@ -238,9 +240,9 @@ func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
 	return resp, nil
 }
 
-func (a *App) StartHTTPDownload(saveDir, subPath string) error {
+func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string) error {
 	if saveDir == "" {
-		return errors.New("select a save directory")
+		saveDir = defaultSaveDir()
 	}
 	localURL := a.getLocalHTTPURL()
 	if localURL == "" {
@@ -259,11 +261,12 @@ func (a *App) StartHTTPDownload(saveDir, subPath string) error {
 	a.mu.Unlock()
 
 	d, err := httpdownload.New(httpdownload.Config{
-		ServerURL:   localURL,
-		SubPath:     subPath,
-		SaveDir:     saveDir,
-		Concurrency: 4,
-		Resume:      true,
+		ServerURL:    localURL,
+		SubPath:      subPath,
+		SaveDir:      saveDir,
+		IncludePaths: includePaths,
+		Concurrency:  4,
+		Resume:       true,
 	})
 	if err != nil {
 		a.clearDownload(downloadID)
@@ -391,6 +394,18 @@ func findGonc(preferred string) (string, error) {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func defaultSaveDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, "Downloads", "GoncTransfer")
+	}
+	wd, err := os.Getwd()
+	if err == nil && wd != "" {
+		return filepath.Join(wd, "GoncTransfer")
+	}
+	return "GoncTransfer"
 }
 
 const passwordCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
