@@ -385,7 +385,7 @@ func findGonc(preferred string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", errors.New("gonc executable was not found; build gonetcat first or set a custom gonc path")
+	return "", errors.New("gonc executable was not found; make sure bundled/gonc/current-platform/gonc(.exe) exists or put gonc in PATH")
 }
 
 func fileExists(path string) bool {

@@ -2,7 +2,6 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import './App.css';
 import {
   GeneratePassword,
-  LocateGonc,
   RemoteFiles,
   SelectFiles,
   SelectFolder,
@@ -15,6 +14,7 @@ import {
 import {BrowserOpenURL, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive';
+type Lang = 'zh' | 'en';
 
 type LogEvent = {
   type: string;
@@ -69,27 +69,130 @@ type RemoteList = {
 
 type AppStatus = {
   running: boolean;
-  goncPath: string;
   localHTTPUrl: string;
   downloading: boolean;
 };
 
-const defaultStatus: AppStatus = {
-  running: false,
-  goncPath: '',
-  localHTTPUrl: '',
-  downloading: false
+const text = {
+  zh: {
+    brand: 'Gonc 传输',
+    subtitle: '点对点文件传输',
+    send: '发送',
+    receive: '接收',
+    running: '运行中',
+    idle: '空闲',
+    sender: '发送方',
+    receiver: '接收方',
+    sendTitle: '通过 gonc P2P 分享文件',
+    receiveTitle: '连接并通过本地 HTTP 下载',
+    stop: '停止',
+    start: '开始',
+    p2pStatus: 'P2P 状态',
+    peer: '对端',
+    network: '网络',
+    speed: '速度',
+    passphrase: '口令',
+    passPlaceholder: '两端使用相同口令',
+    generate: '生成',
+    copy: '复制',
+    copied: '口令已复制',
+    sharedList: '要发送的文件和目录',
+    addFiles: '添加文件',
+    addFolder: '添加目录',
+    stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
+    dropHint: '可将文件或目录拖放到这里，也可以用上面的按钮添加。',
+    remove: '移除',
+    saveDir: '保存目录',
+    savePlaceholder: '选择下载文件保存的位置',
+    choose: '选择',
+    remoteSubpath: '远端子目录',
+    localHTTP: '本地 HTTP',
+    waitingHTTP: '等待 -httplocal 端口建立',
+    useUDP: '使用 UDP 协议',
+    remoteFiles: '远端文件',
+    refresh: '刷新',
+    stopDownload: '停止下载',
+    downloadAll: '全部下载',
+    noList: '尚未读取目录',
+    files: '个文件',
+    folders: '个目录',
+    listHint: '本地 HTTP 建立后会自动读取远端 JSON 文件列表，也可以手动刷新。',
+    activity: '活动日志',
+    clear: '清空',
+    logHint: '传输开始后日志会显示在这里。',
+    file: '文件',
+    dir: '目录',
+    goncMissing: '未找到 gonc 可执行文件。请确认发布目录中包含 bundled/gonc/当前平台/gonc(.exe)，或已把 gonc 加入 PATH。',
+    senderLockedDrop: '发送任务运行中，不能修改分享列表。',
+  },
+  en: {
+    brand: 'Gonc Transfer',
+    subtitle: 'P2P file transfer',
+    send: 'Send',
+    receive: 'Receive',
+    running: 'Running',
+    idle: 'Idle',
+    sender: 'Sender',
+    receiver: 'Receiver',
+    sendTitle: 'Share files through gonc P2P',
+    receiveTitle: 'Connect and download through local HTTP',
+    stop: 'Stop',
+    start: 'Start',
+    p2pStatus: 'P2P status',
+    peer: 'Peer',
+    network: 'Network',
+    speed: 'Speed',
+    passphrase: 'Passphrase',
+    passPlaceholder: 'Same passphrase on both sides',
+    generate: 'Generate',
+    copy: 'Copy',
+    copied: 'Passphrase copied',
+    sharedList: 'Files and folders to send',
+    addFiles: 'Add Files',
+    addFolder: 'Add Folder',
+    stopBeforeEdit: 'Stop the sender before changing the shared list.',
+    dropHint: 'Drag and drop files or folders into this list, or add them with the buttons above.',
+    remove: 'Remove',
+    saveDir: 'Save directory',
+    savePlaceholder: 'Choose where downloaded files will be saved',
+    choose: 'Choose',
+    remoteSubpath: 'Remote subpath',
+    localHTTP: 'Local HTTP',
+    waitingHTTP: 'Waiting for -httplocal endpoint',
+    useUDP: 'Use UDP protocol',
+    remoteFiles: 'Remote Files',
+    refresh: 'Refresh',
+    stopDownload: 'Stop Download',
+    downloadAll: 'Download All',
+    noList: 'No list loaded',
+    files: 'files',
+    folders: 'folders',
+    listHint: 'After the local HTTP endpoint appears, the remote JSON file list is loaded automatically. You can refresh manually too.',
+    activity: 'Activity',
+    clear: 'Clear',
+    logHint: 'Logs will appear here after a transfer starts.',
+    file: 'FILE',
+    dir: 'DIR',
+    goncMissing: 'gonc executable was not found. Make sure bundled/gonc/current-platform/gonc(.exe) exists, or put gonc in PATH.',
+    senderLockedDrop: 'The sender is running. Stop it before changing the shared list.',
+  }
 };
 
+function detectLang(): Lang {
+  const lang = navigator.language.toLowerCase();
+  return lang === 'zh-cn' || lang.startsWith('zh-hans') ? 'zh' : 'en';
+}
+
 function App() {
+  const [lang] = useState<Lang>(detectLang);
+  const t = text[lang];
   const [mode, setMode] = useState<Mode>('send');
   const [password, setPassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
   const [saveDir, setSaveDir] = useState('');
   const [downloadSubPath, setDownloadSubPath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
-  const [goncPath, setGoncPath] = useState('');
-  const [status, setStatus] = useState<AppStatus>(defaultStatus);
+  const [status, setStatus] = useState<AppStatus>({running: false, localHTTPUrl: '', downloading: false});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
   const [p2pReport, setP2PReport] = useState<P2PReport | null>(null);
@@ -103,10 +206,7 @@ function App() {
     if (status.running || password.trim().length === 0) {
       return false;
     }
-    if (mode === 'send') {
-      return sharePaths.length > 0;
-    }
-    return true;
+    return mode === 'receive' || sharePaths.length > 0;
   }, [mode, password, sharePaths.length, status.running]);
 
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && !status.downloading);
@@ -152,7 +252,7 @@ function App() {
       if (mode === 'send' && !status.running) {
         appendSharePaths(paths);
       } else if (mode === 'send' && status.running) {
-        setError('Stop the current sender before changing the shared file list.');
+        setError(t.senderLockedDrop);
       }
     }, true);
     return () => {
@@ -164,17 +264,18 @@ function App() {
         window.clearTimeout(passwordTimer.current);
       }
     };
-  }, [mode, status.running]);
+  }, [mode, status.running, t.senderLockedDrop]);
 
   async function refreshStatus() {
     try {
       const next = await Status();
-      setStatus(next);
-      if (!goncPath && next.goncPath) {
-        setGoncPath(next.goncPath);
-      }
+      setStatus({
+        running: next.running,
+        localHTTPUrl: next.localHTTPUrl,
+        downloading: next.downloading,
+      });
     } catch (err) {
-      setError(String(err));
+      setError(localizeError(String(err)));
     }
   }
 
@@ -186,13 +287,13 @@ function App() {
 
   async function addFolder() {
     setError('');
-    const selected = await SelectFolder('Select folder to send');
+    const selected = await SelectFolder(t.addFolder);
     appendSharePaths(selected ? [selected] : []);
   }
 
   async function chooseSaveDir() {
     setError('');
-    const selected = await SelectFolder('Select save directory');
+    const selected = await SelectFolder(t.saveDir);
     if (selected) {
       setSaveDir(selected);
     }
@@ -208,7 +309,7 @@ function App() {
     if (password) {
       await navigator.clipboard.writeText(password);
       revealPasswordTemporarily();
-      appendLog('status', 'info', 'passphrase copied');
+      appendLog('status', 'info', t.copied);
     }
   }
 
@@ -218,18 +319,6 @@ function App() {
       window.clearTimeout(passwordTimer.current);
     }
     passwordTimer.current = window.setTimeout(() => setPasswordVisible(false), 5000);
-  }
-
-  async function checkGoncPath() {
-    setError('');
-    try {
-      const located = await LocateGonc(goncPath);
-      setGoncPath(located);
-      setStatus((current) => ({...current, goncPath: located}));
-      appendLog('status', 'info', `gonc found: ${located}`);
-    } catch (err) {
-      setError(String(err));
-    }
   }
 
   async function start() {
@@ -245,13 +334,13 @@ function App() {
         password,
         sharePaths,
         saveDir,
-        goncPath,
+        goncPath: '',
         downloadSubPath,
         useUDP
       });
       await refreshStatus();
     } catch (err) {
-      setError(String(err));
+      setError(localizeError(String(err)));
     }
   }
 
@@ -264,7 +353,7 @@ function App() {
       setTraffic(null);
       await refreshStatus();
     } catch (err) {
-      setError(String(err));
+      setError(localizeError(String(err)));
     }
   }
 
@@ -277,7 +366,7 @@ function App() {
       setRemoteList(list);
     } catch (err) {
       if (!silent) {
-        setError(String(err));
+        setError(localizeError(String(err)));
       }
     }
   }
@@ -288,7 +377,7 @@ function App() {
       await StartHTTPDownload(saveDir, downloadSubPath || '/');
       await refreshStatus();
     } catch (err) {
-      setError(String(err));
+      setError(localizeError(String(err)));
     }
   }
 
@@ -298,7 +387,7 @@ function App() {
       await StopHTTPDownload();
       await refreshStatus();
     } catch (err) {
-      setError(String(err));
+      setError(localizeError(String(err)));
     }
   }
 
@@ -321,6 +410,13 @@ function App() {
     setSharePaths((current) => current.filter((item) => item !== path));
   }
 
+  function localizeError(message: string) {
+    if (message.includes('gonc executable was not found') || message.includes('selected gonc executable')) {
+      return t.goncMissing;
+    }
+    return message;
+  }
+
   return (
     <main className="shell">
       <section className="workspace">
@@ -328,38 +424,37 @@ function App() {
           <div className="brand">
             <div className="brand-mark">G</div>
             <div>
-              <h1>Gonc Transfer</h1>
-              <p>P2P file transfer</p>
+              <h1>{t.brand}</h1>
+              <p>{t.subtitle}</p>
             </div>
           </div>
 
           <div className="mode-switch" role="tablist" aria-label="Transfer mode">
             <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>
-              Send
+              {t.send}
             </button>
             <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>
-              Receive
+              {t.receive}
             </button>
           </div>
 
           <div className="status-block">
             <span className={status.running ? 'dot running' : 'dot'} />
-            <span>{status.running ? 'Running' : 'Idle'}</span>
+            <span>{status.running ? t.running : t.idle}</span>
           </div>
         </aside>
 
         <section className="main-pane">
           <header className="topbar">
             <div>
-              <p className="eyebrow">{mode === 'send' ? 'Sender' : 'Receiver'}</p>
-              <h2>{mode === 'send' ? 'Share files through gonc P2P' : 'Connect and download through local HTTP'}</h2>
+              <p className="eyebrow">{mode === 'send' ? t.sender : t.receiver}</p>
+              <h2>{mode === 'send' ? t.sendTitle : t.receiveTitle}</h2>
             </div>
             <div className="actions">
-              <button className="secondary" onClick={checkGoncPath}>Check gonc</button>
               {status.running ? (
-                <button className="danger" onClick={stop}>Stop</button>
+                <button className="danger" onClick={stop}>{t.stop}</button>
               ) : (
-                <button className="primary" disabled={!canStart} onClick={start}>Start</button>
+                <button className="primary" disabled={!canStart} onClick={start}>{t.start}</button>
               )}
             </div>
           </header>
@@ -367,52 +462,43 @@ function App() {
           {error && <div className="alert">{error}</div>}
 
           <section className="status-grid">
-            <Metric label="P2P status" value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
-            <Metric label="Peer" value={p2pReport?.peer || '-'} />
-            <Metric label="Network" value={p2pReport?.network || '-'} />
-            <Metric label="Speed" value={formatRate(activeSpeed)} />
+            <Metric label={t.p2pStatus} value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
+            <Metric label={t.peer} value={p2pReport?.peer || '-'} />
+            <Metric label={t.network} value={p2pReport?.network || '-'} />
+            <Metric label={t.speed} value={formatRate(activeSpeed)} />
           </section>
 
           <section className="form-grid">
             <div className="field wide">
-              <label>Passphrase</label>
+              <label>{t.passphrase}</label>
               <div className="inline">
                 <input
                   type={passwordVisible ? 'text' : 'password'}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  placeholder="Same passphrase on both sides"
+                  placeholder={t.passPlaceholder}
                 />
-                <button className="secondary" onClick={generatePassword}>Generate</button>
-                <button className="secondary" disabled={!password} onClick={copyPassword}>Copy</button>
+                <button className="secondary" onClick={generatePassword}>{t.generate}</button>
+                <button className="secondary" disabled={!password} onClick={copyPassword}>{t.copy}</button>
               </div>
-            </div>
-
-            <div className="field wide">
-              <label>gonc executable</label>
-              <input
-                value={goncPath}
-                onChange={(event) => setGoncPath(event.target.value)}
-                placeholder={status.goncPath || 'Auto detect from bundled files, sibling gonetcat/bin, or PATH'}
-              />
             </div>
 
             {mode === 'send' ? (
               <div className="field wide">
-                <label>Files and folders to send</label>
+                <label>{t.sharedList}</label>
                 <div className="button-row">
-                  <button className="secondary" disabled={status.running} onClick={addFiles}>Add Files</button>
-                  <button className="secondary" disabled={status.running} onClick={addFolder}>Add Folder</button>
+                  <button className="secondary" disabled={status.running} onClick={addFiles}>{t.addFiles}</button>
+                  <button className="secondary" disabled={status.running} onClick={addFolder}>{t.addFolder}</button>
                 </div>
-                {status.running && <p className="muted">Stop the sender before changing the shared list.</p>}
+                {status.running && <p className="muted">{t.stopBeforeEdit}</p>}
                 <div className="drop-zone">
                   <div className="path-list">
                     {sharePaths.length === 0 ? (
-                      <p className="muted">Drag and drop files or folders into this list, or add them with the buttons above.</p>
+                      <p className="muted">{t.dropHint}</p>
                     ) : sharePaths.map((path) => (
                       <div className="path-row" key={path}>
                         <span>{path}</span>
-                        <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`Remove ${path}`}>Remove</button>
+                        <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
                       </div>
                     ))}
                   </div>
@@ -421,14 +507,14 @@ function App() {
             ) : (
               <>
                 <div className="field wide">
-                  <label>Save directory</label>
+                  <label>{t.saveDir}</label>
                   <div className="inline">
-                    <input value={saveDir} readOnly placeholder="Choose where downloaded files will be saved" />
-                    <button className="secondary" onClick={chooseSaveDir}>Choose</button>
+                    <input value={saveDir} readOnly placeholder={t.savePlaceholder} />
+                    <button className="secondary" onClick={chooseSaveDir}>{t.choose}</button>
                   </div>
                 </div>
                 <div className="field">
-                  <label>Remote subpath</label>
+                  <label>{t.remoteSubpath}</label>
                   <input
                     value={downloadSubPath}
                     onChange={(event) => setDownloadSubPath(event.target.value)}
@@ -436,13 +522,13 @@ function App() {
                   />
                 </div>
                 <div className="field">
-                  <label>Local HTTP</label>
+                  <label>{t.localHTTP}</label>
                   {status.localHTTPUrl ? (
                     <button className="link-button" onClick={() => BrowserOpenURL(status.localHTTPUrl)}>
                       {status.localHTTPUrl}
                     </button>
                   ) : (
-                    <div className="placeholder-link">Waiting for -httplocal endpoint</div>
+                    <div className="placeholder-link">{t.waitingHTTP}</div>
                   )}
                 </div>
               </>
@@ -454,33 +540,33 @@ function App() {
                 checked={useUDP}
                 onChange={(event) => setUseUDP(event.target.checked)}
               />
-              <span>Use UDP protocol</span>
+              <span>{t.useUDP}</span>
             </label>
           </section>
 
           {mode === 'receive' && (
             <section className="remote-pane">
               <div className="log-header">
-                <h3>Remote Files</h3>
+                <h3>{t.remoteFiles}</h3>
                 <div className="button-row">
-                  <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>Refresh</button>
+                  <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
                   {status.downloading ? (
-                    <button className="danger" onClick={stopDownload}>Stop Download</button>
+                    <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
                   ) : (
-                    <button className="primary" disabled={!canDownload} onClick={startDownload}>Download All</button>
+                    <button className="primary" disabled={!canDownload} onClick={startDownload}>{t.downloadAll}</button>
                   )}
                 </div>
               </div>
               <div className="remote-summary">
-                <span>{remoteList ? `${remoteList.fileCount} files` : 'No list loaded'}</span>
-                <span>{remoteList ? `${remoteList.dirCount} folders` : '-'}</span>
+                <span>{remoteList ? `${remoteList.fileCount} ${t.files}` : t.noList}</span>
+                <span>{remoteList ? `${remoteList.dirCount} ${t.folders}` : '-'}</span>
                 <span>{remoteList ? formatBytes(remoteList.totalSize) : '-'}</span>
               </div>
               {downloadProgress && (
                 <div className="progress">
                   <div>
                     {formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}
-                    {' '}· {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} files
+                    {' '}· {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
                     {' '}· {formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
                     {' '}· {formatRate(downloadProgress.bytesPerSecond || 0)}
                   </div>
@@ -489,10 +575,10 @@ function App() {
               )}
               <div className="remote-list">
                 {!remoteList ? (
-                  <p className="muted">After the local HTTP endpoint appears, refresh to read the remote JSON file list.</p>
+                  <p className="muted">{t.listHint}</p>
                 ) : remoteList.files.slice(0, 120).map((file) => (
                   <div className="remote-row" key={file.path}>
-                    <span>{file.is_dir ? 'DIR' : 'FILE'}</span>
+                    <span>{file.is_dir ? t.dir : t.file}</span>
                     <strong>{file.path}</strong>
                     <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
                   </div>
@@ -503,12 +589,12 @@ function App() {
 
           <section className="log-pane">
             <div className="log-header">
-              <h3>Activity</h3>
-              <button className="ghost" onClick={() => setLogs([])}>Clear</button>
+              <h3>{t.activity}</h3>
+              <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
             </div>
             <div className="logs">
               {logs.length === 0 ? (
-                <p className="muted">Logs will appear here after a transfer starts.</p>
+                <p className="muted">{t.logHint}</p>
               ) : logs.map((log, index) => (
                 <div className={`log-line ${log.level}`} key={`${log.time}-${index}`}>
                   <time>{new Date(log.time).toLocaleTimeString()}</time>
