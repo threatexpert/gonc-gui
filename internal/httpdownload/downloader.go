@@ -75,6 +75,15 @@ type Downloader struct {
 	counted   map[string]int64
 }
 
+type httpStatusError struct {
+	status string
+	path   string
+}
+
+func (e httpStatusError) Error() string {
+	return fmt.Sprintf("server returned %s for %s", e.status, e.path)
+}
+
 func New(cfg Config) (*Downloader, error) {
 	if cfg.ServerURL == "" {
 		return nil, errors.New("local HTTP URL is not ready")
@@ -197,7 +206,7 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 				}
 				if err := d.downloadWithRetry(ctx, client, file, sink); err != nil {
 					setWorkerErr(err)
-					return
+					continue
 				}
 				d.progress.doneFiles.Add(1)
 				emitProgress(sink, d.progress, file.Path, false)
@@ -267,6 +276,11 @@ func (d *Downloader) downloadWithRetry(ctx context.Context, client *http.Client,
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		var statusErr httpStatusError
+		if errors.As(err, &statusErr) {
+			emit(sink, "log", "error", fmt.Sprintf("download failed for %s: %v", file.Path, err))
+			return err
 		}
 		attempt++
 		emit(sink, "log", "warn", fmt.Sprintf("download interrupted for %s, retrying: %v", file.Path, err))
@@ -346,7 +360,7 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		fileMode = os.O_CREATE | os.O_WRONLY
 		d.setFileProgress(file.Path, 0)
 	} else {
-		return fmt.Errorf("server returned %s for %s", resp.Status, file.Path)
+		return httpStatusError{status: resp.Status, path: file.Path}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {

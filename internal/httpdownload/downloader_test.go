@@ -85,6 +85,49 @@ func TestDownloaderRetriesAndResumesInterruptedFile(t *testing.T) {
 	}
 }
 
+func TestDownloaderDoesNotRetryHTTPStatusError(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			_, _ = fmt.Fprintf(w, `{"name":"bad.bin","is_dir":false,"mod_time":"%s","size":10,"path":"/bad.bin"}`+"\n", time.Now().Format(time.RFC3339))
+			return
+		}
+
+		hits.Add(1)
+		http.Error(w, "cannot read file", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     t.TempDir(),
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var retryLogs atomic.Int32
+	err = downloader.Start(context.Background(), func(event Event) {
+		if event.Type == "log" && strings.Contains(event.Message, "retrying") {
+			retryLogs.Add(1)
+		}
+	})
+	if err == nil {
+		t.Fatal("Start returned nil, want HTTP status error")
+	}
+	if !strings.Contains(err.Error(), "server returned 500 Internal Server Error for /bad.bin") {
+		t.Fatalf("error = %q, want HTTP 500 status error", err.Error())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("download attempts = %d, want 1", hits.Load())
+	}
+	if retryLogs.Load() != 0 {
+		t.Fatalf("retry logs = %d, want 0", retryLogs.Load())
+	}
+}
+
 func TestListSynthesizesSingleFileFromAttachment(t *testing.T) {
 	content := []byte("single file content")
 	modTime := time.Date(2026, 6, 14, 14, 17, 48, 0, time.UTC)
