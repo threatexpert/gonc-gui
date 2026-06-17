@@ -38,6 +38,6 @@ export function StopHTTPDownload() {
   return window['go']['main']['App']['StopHTTPDownload']();
 }
 
-export function StopTransfer() {
-  return window['go']['main']['App']['StopTransfer']();
+export function StopTransfer(arg1) {
+  return window['go']['main']['App']['StopTransfer'](arg1);
 }

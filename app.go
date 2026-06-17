@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,12 +27,14 @@ import (
 type App struct {
 	ctx context.Context
 
-	mu             sync.Mutex
-	runner         *goncrunner.Runner
-	reportServer   *http.Server
-	localHTTPURL   string
-	downloadCancel context.CancelFunc
-	downloadID     int64
+	mu                  sync.Mutex
+	sendRunner          *goncrunner.Runner
+	receiveRunner       *goncrunner.Runner
+	reportServer        *http.Server
+	reportURL           string
+	receiveLocalHTTPURL string
+	downloadCancel      context.CancelFunc
+	downloadID          int64
 }
 
 type TransferRequest struct {
@@ -46,6 +49,8 @@ type TransferRequest struct {
 
 type AppStatus struct {
 	Running        bool   `json:"running"`
+	SendRunning    bool   `json:"sendRunning"`
+	ReceiveRunning bool   `json:"receiveRunning"`
 	GoncPath       string `json:"goncPath"`
 	LocalHTTPURL   string `json:"localHTTPUrl"`
 	Downloading    bool   `json:"downloading"`
@@ -72,7 +77,8 @@ type RemoteListResponse struct {
 
 func NewApp() *App {
 	return &App{
-		runner: goncrunner.New(),
+		sendRunner:    goncrunner.New(),
+		receiveRunner: goncrunner.New(),
 	}
 }
 
@@ -105,12 +111,16 @@ func (a *App) GeneratePassword() (string, error) {
 
 func (a *App) Status() AppStatus {
 	path, _ := a.LocateGonc("")
+	sendRunning := a.sendRunner.IsRunning()
+	receiveRunning := a.receiveRunner.IsRunning()
 	a.mu.Lock()
-	localURL := a.localHTTPURL
+	localURL := a.receiveLocalHTTPURL
 	downloading := a.downloadCancel != nil
 	a.mu.Unlock()
 	return AppStatus{
-		Running:        a.runner.IsRunning(),
+		Running:        sendRunning || receiveRunning,
+		SendRunning:    sendRunning,
+		ReceiveRunning: receiveRunning,
 		GoncPath:       path,
 		LocalHTTPURL:   localURL,
 		Downloading:    downloading,
@@ -132,21 +142,25 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		return err
 	}
 
-	reportURL, reportServer, err := a.startReportServer()
+	reportURL, err := a.ensureReportServer(goncrunner.Mode(req.Mode))
 	if err != nil {
 		return err
 	}
 
-	a.mu.Lock()
-	a.localHTTPURL = ""
-	if a.reportServer != nil {
-		_ = a.reportServer.Close()
+	mode := goncrunner.Mode(req.Mode)
+	if mode == goncrunner.ModeReceive {
+		a.mu.Lock()
+		a.receiveLocalHTTPURL = ""
+		a.mu.Unlock()
 	}
-	a.reportServer = reportServer
-	a.mu.Unlock()
 
-	err = a.runner.Start(a.ctx, goncPath, goncrunner.Request{
-		Mode:            goncrunner.Mode(req.Mode),
+	runner, err := a.runnerForMode(mode)
+	if err != nil {
+		return err
+	}
+
+	err = runner.Start(a.ctx, goncPath, goncrunner.Request{
+		Mode:            mode,
 		Password:        req.Password,
 		SharePaths:      req.SharePaths,
 		SaveDir:         req.SaveDir,
@@ -154,39 +168,33 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		UseUDP:          req.UseUDP,
 		ReportURL:       reportURL,
 	}, func(event goncrunner.Event) {
-		if event.Type == "local_http" && event.LocalURL != "" {
+		event.Mode = string(mode)
+		if mode == goncrunner.ModeReceive && event.Type == "local_http" && event.LocalURL != "" {
 			a.mu.Lock()
-			a.localHTTPURL = event.LocalURL
+			a.receiveLocalHTTPURL = event.LocalURL
 			a.mu.Unlock()
 		}
 		wailsruntime.EventsEmit(a.ctx, "gonc:event", event)
 	})
-	if err != nil {
-		_ = reportServer.Close()
-		a.mu.Lock()
-		if a.reportServer == reportServer {
-			a.reportServer = nil
-		}
-		a.mu.Unlock()
-	}
 	return err
 }
 
-func (a *App) StopTransfer() error {
-	return a.stopTransfer(true)
+func (a *App) StopTransfer(mode string) error {
+	return a.stopTransfer(goncrunner.Mode(mode), true)
 }
 
-func (a *App) stopTransfer(requireRunning bool) error {
-	a.StopHTTPDownload()
-	a.mu.Lock()
-	reportServer := a.reportServer
-	a.reportServer = nil
-	a.localHTTPURL = ""
-	a.mu.Unlock()
-	if reportServer != nil {
-		_ = reportServer.Close()
+func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
+	runner, err := a.runnerForMode(mode)
+	if err != nil {
+		return err
 	}
-	stopped, err := a.runner.StopWait(5 * time.Second)
+	if mode == goncrunner.ModeReceive {
+		a.StopHTTPDownload()
+		a.mu.Lock()
+		a.receiveLocalHTTPURL = ""
+		a.mu.Unlock()
+	}
+	stopped, err := runner.StopWait(5 * time.Second)
 	if err != nil {
 		if requireRunning {
 			return err
@@ -199,10 +207,28 @@ func (a *App) stopTransfer(requireRunning bool) error {
 	return nil
 }
 
+func (a *App) stopAllTransfers(requireRunning bool) error {
+	var firstErr error
+	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive} {
+		if err := a.stopTransfer(mode, requireRunning); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	a.mu.Lock()
+	reportServer := a.reportServer
+	a.reportServer = nil
+	a.reportURL = ""
+	a.mu.Unlock()
+	if reportServer != nil {
+		_ = reportServer.Close()
+	}
+	return firstErr
+}
+
 func (a *App) cleanup(ctx context.Context) error {
 	done := make(chan error, 1)
 	go func() {
-		done <- a.stopTransfer(false)
+		done <- a.stopAllTransfers(false)
 	}()
 	select {
 	case err := <-done:
@@ -304,7 +330,7 @@ func (a *App) StopHTTPDownload() error {
 func (a *App) getLocalHTTPURL() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.localHTTPURL
+	return a.receiveLocalHTTPURL
 }
 
 func (a *App) clearDownload(downloadID int64) {
@@ -315,10 +341,29 @@ func (a *App) clearDownload(downloadID int64) {
 	a.mu.Unlock()
 }
 
-func (a *App) startReportServer() (string, *http.Server, error) {
+func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
+	switch mode {
+	case goncrunner.ModeSend:
+		return a.sendRunner, nil
+	case goncrunner.ModeReceive:
+		return a.receiveRunner, nil
+	default:
+		return nil, errors.New("unknown mode: " + string(mode))
+	}
+}
+
+func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
+	a.mu.Lock()
+	if a.reportServer != nil && a.reportURL != "" {
+		reportURL := a.reportURL
+		a.mu.Unlock()
+		return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
+	}
+	a.mu.Unlock()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	mux := http.NewServeMux()
@@ -334,14 +379,30 @@ func (a *App) startReportServer() (string, *http.Server, error) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if reportMode := r.URL.Query().Get("mode"); reportMode != "" {
+			report.Mode = reportMode
+		}
 		wailsruntime.EventsEmit(a.ctx, "p2p:report", report)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	reportURL := "http://" + ln.Addr().String() + "/p2p-report"
+	a.mu.Lock()
+	if a.reportServer != nil && a.reportURL != "" {
+		_ = server.Close()
+		_ = ln.Close()
+		reportURL = a.reportURL
+		a.mu.Unlock()
+		return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
+	}
+	a.reportServer = server
+	a.reportURL = reportURL
+	a.mu.Unlock()
+
 	go func() {
 		_ = server.Serve(ln)
 	}()
-	return "http://" + ln.Addr().String() + "/p2p-report", server, nil
+	return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
 }
 
 func findGonc(preferred string) (string, error) {

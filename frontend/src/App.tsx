@@ -21,6 +21,7 @@ type LogEvent = {
   level: string;
   message: string;
   time: string;
+  mode?: string;
   localUrl?: string;
   inBps?: number;
   outBps?: number;
@@ -43,6 +44,11 @@ type DownloadEvent = {
   time: string;
   totalFiles?: number;
   doneFiles?: number;
+  totalDirs?: number;
+  doneDirs?: number;
+  skippedFiles?: number;
+  resumedFiles?: number;
+  failedFiles?: number;
   totalBytes?: number;
   doneBytes?: number;
   bytesPerSecond?: number;
@@ -66,6 +72,8 @@ type RemoteList = {
 
 type AppStatus = {
   running: boolean;
+  sendRunning: boolean;
+  receiveRunning: boolean;
   localHTTPUrl: string;
   downloading: boolean;
   defaultSaveDir: string;
@@ -75,7 +83,7 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.0.1';
+const appVersion = 'v1.0.2';
 
 const text = {
   zh: {
@@ -112,8 +120,11 @@ const text = {
     network: '网络',
     speed: '速度',
     passphrase: '口令',
+    senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
-    generate: '生成',
+    senderPasswordHint: '口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
+    receiverPasswordHint: '口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
+    generate: '更换',
     copy: '复制',
     paste: '粘贴',
     copied: '口令已复制',
@@ -138,6 +149,10 @@ const text = {
     files: '个文件',
     folders: '个目录',
     selected: '已选',
+    completed: '完成',
+    skipped: '跳过',
+    resumed: '续传',
+    failed: '失败',
     listHint: '连接建立后会自动读取对方分享的文件目录；可点击目录进入，并勾选需要下载的项。',
     activity: '活动日志',
     diagnostics: '状态和日志',
@@ -182,8 +197,11 @@ const text = {
     network: 'Network',
     speed: 'Speed',
     passphrase: 'Passphrase',
+    senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
-    generate: 'Generate',
+    senderPasswordHint: 'Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
+    receiverPasswordHint: 'The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
+    generate: 'Replace',
     copy: 'Copy',
     paste: 'Paste',
     copied: 'Passphrase copied',
@@ -208,6 +226,10 @@ const text = {
     files: 'files',
     folders: 'folders',
     selected: 'selected',
+    completed: 'Done',
+    skipped: 'Skipped',
+    resumed: 'Resumed',
+    failed: 'Failed',
     listHint: 'After the connection is ready, shared files from the peer are loaded automatically. Click folders to browse and tick items to download.',
     activity: 'Activity',
     diagnostics: 'Status and Logs',
@@ -229,43 +251,49 @@ function App() {
   const [lang] = useState<Lang>(detectLang);
   const t = text[lang];
   const [mode, setMode] = useState<Mode>('send');
-  const [password, setPassword] = useState('');
+  const [sendPassword, setSendPassword] = useState('');
+  const [receivePassword, setReceivePassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
   const [saveDir, setSaveDir] = useState('');
   const [currentRemotePath, setCurrentRemotePath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
-  const [status, setStatus] = useState<AppStatus>({running: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
+  const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
-  const [p2pReport, setP2PReport] = useState<P2PReport | null>(null);
-  const [p2pReports, setP2PReports] = useState<Record<string, P2PReport>>({});
+  const [receiveP2PReport, setReceiveP2PReport] = useState<P2PReport | null>(null);
+  const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
-  const [traffic, setTraffic] = useState<LogEvent | null>(null);
+  const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
+  const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
+  const activePassword = mode === 'send' ? sendPassword : receivePassword;
 
   const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
   const activeSpeed = Math.max(
     freshSpeed(downloadProgress?.time, downloadProgress?.bytesPerSecond, nowTick),
-    freshSpeed(traffic?.time, traffic?.inBps, nowTick),
-    freshSpeed(traffic?.time, traffic?.outBps, nowTick)
+    freshSpeed(receiveTraffic?.time, receiveTraffic?.inBps, nowTick),
+    freshSpeed(receiveTraffic?.time, receiveTraffic?.outBps, nowTick)
   );
-  const canStart = !status.running && password.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
+  const sendRunning = status.sendRunning;
+  const receiveRunning = status.receiveRunning;
+  const currentRunning = mode === 'send' ? sendRunning : receiveRunning;
+  const canStart = !currentRunning && activePassword.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
   const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !status.downloading);
   const primaryLabel = mode === 'send' ? t.startShare : t.startReceive;
-  const p2pSessions = useMemo(() => Object.values(p2pReports), [p2pReports]);
+  const p2pSessions = useMemo(() => Object.values(sendP2PReports), [sendP2PReports]);
   const connectedCount = p2pSessions.filter((report) => report.topic && report.status === 'connected').length;
   const connectingCount = p2pSessions.filter((report) => report.topic && report.status === 'connecting').length;
   const transferSpeed = mode === 'send'
-    ? freshSpeed(traffic?.time, traffic?.outBps, nowTick)
+    ? freshSpeed(sendTraffic?.time, sendTraffic?.outBps, nowTick)
     : activeSpeed;
-  const sendStatusLabel = connectingCount > 0 ? t.newConnection : (status.running ? t.waitingConnection : t.idle);
-  const receiveStatus = receiveConnectionStatus(p2pReport, status.running, Boolean(status.localHTTPUrl), t);
-  const statusTone = mode === 'receive' ? receiveStatus.tone : (status.running ? 'running' : 'idle');
+  const sendStatusLabel = connectingCount > 0 ? t.newConnection : (sendRunning ? t.waitingConnection : t.idle);
+  const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
+  const statusTone = mode === 'receive' ? receiveStatus.tone : (sendRunning ? 'running' : 'idle');
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -273,14 +301,32 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    GeneratePassword()
+      .then((value) => {
+        if (!cancelled) {
+          setSendPassword((current) => current || value);
+        }
+      })
+      .catch((err) => setError(localizeError(String(err))));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     refreshStatus();
     EventsOn('gonc:event', (event: LogEvent) => {
       if (event.type === 'traffic') {
-        setTraffic(event);
+        if (event.mode === 'send') {
+          setSendTraffic(event);
+        } else if (event.mode === 'receive') {
+          setReceiveTraffic(event);
+        }
         return;
       }
       setLogs((current) => [...current.slice(-399), event]);
-      if (event.localUrl) {
+      if (event.mode === 'receive' && event.localUrl) {
         setStatus((current) => ({...current, localHTTPUrl: event.localUrl || current.localHTTPUrl}));
         if (mode === 'receive') {
           window.setTimeout(() => loadRemoteFiles('/', true), 700);
@@ -288,14 +334,19 @@ function App() {
       }
       if (event.type === 'status' || event.type === 'local_http') {
         if (event.message.includes('stopped') || event.message.includes('finished')) {
-          setP2PReport((current) => current ? {...current, status: event.message.includes('stopped') ? 'stopped' : 'finished'} : null);
+          if (event.mode === 'receive') {
+            setReceiveP2PReport((current) => current ? {...current, status: event.message.includes('stopped') ? 'stopped' : 'finished'} : null);
+          }
         }
         refreshStatus();
       }
     });
     EventsOn('p2p:report', (report: P2PReport) => {
-      setP2PReport(report);
-      setP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
+      if (report.mode === 'send') {
+        setSendP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
+      } else if (report.mode === 'receive') {
+        setReceiveP2PReport(report);
+      }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
       if (event.type === 'progress') {
@@ -308,9 +359,9 @@ function App() {
       }
     });
     OnFileDrop((_x, _y, paths) => {
-      if (mode === 'send' && !status.running) {
+      if (mode === 'send' && !sendRunning) {
         appendSharePaths(paths);
-      } else if (mode === 'send' && status.running) {
+      } else if (mode === 'send' && sendRunning) {
         setError(t.senderLockedDrop);
       }
     }, true);
@@ -323,13 +374,15 @@ function App() {
         window.clearTimeout(passwordTimer.current);
       }
     };
-  }, [mode, status.running, t.senderLockedDrop]);
+  }, [mode, sendRunning, t.senderLockedDrop]);
 
   async function refreshStatus() {
     try {
       const next = await Status();
       setStatus({
         running: next.running,
+        sendRunning: next.sendRunning,
+        receiveRunning: next.receiveRunning,
         localHTTPUrl: next.localHTTPUrl,
         downloading: next.downloading,
         defaultSaveDir: next.defaultSaveDir,
@@ -363,13 +416,13 @@ function App() {
 
   async function generatePassword() {
     setError('');
-    setPassword(await GeneratePassword());
+    setSendPassword(await GeneratePassword());
     revealPasswordTemporarily();
   }
 
   async function copyPassword() {
-    if (password) {
-      await navigator.clipboard.writeText(password);
+    if (sendPassword) {
+      await navigator.clipboard.writeText(sendPassword);
       revealPasswordTemporarily();
       appendLog('status', 'info', t.copied);
     }
@@ -379,12 +432,12 @@ function App() {
     setError('');
     try {
       const value = await ClipboardGetText();
-      setPassword(value.trim());
+      setReceivePassword(value.trim());
       revealPasswordTemporarily();
     } catch (err) {
       try {
         const value = await navigator.clipboard.readText();
-        setPassword(value.trim());
+        setReceivePassword(value.trim());
         revealPasswordTemporarily();
       } catch {
         setError(localizeError(String(err)));
@@ -402,18 +455,21 @@ function App() {
 
   async function start() {
     setError('');
-    setLogs([]);
-    setP2PReport(null);
-    setP2PReports({});
-    setRemoteList(null);
-    setSelectedPaths(new Set());
-    setDownloadProgress(null);
-    setTraffic(null);
-    setCurrentRemotePath('/');
+    if (mode === 'send') {
+      setSendP2PReports({});
+      setSendTraffic(null);
+    } else {
+      setReceiveP2PReport(null);
+      setRemoteList(null);
+      setSelectedPaths(new Set());
+      setDownloadProgress(null);
+      setReceiveTraffic(null);
+      setCurrentRemotePath('/');
+    }
     try {
       await StartTransfer({
         mode,
-        password,
+        password: activePassword,
         sharePaths,
         saveDir,
         goncPath: '',
@@ -429,11 +485,14 @@ function App() {
   async function stop() {
     setError('');
     try {
-      await StopHTTPDownload();
-      await StopTransfer();
-      setP2PReport((current) => current ? {...current, status: 'stopped'} : null);
-      setP2PReports({});
-      setTraffic(null);
+      await StopTransfer(mode);
+      if (mode === 'send') {
+        setSendP2PReports({});
+        setSendTraffic(null);
+      } else {
+        setReceiveP2PReport((current) => current ? {...current, status: 'stopped'} : null);
+        setReceiveTraffic(null);
+      }
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
@@ -571,8 +630,8 @@ function App() {
                     <span>{sharePaths.length} {t.files}</span>
                   </div>
                   <div className="file-actions">
-                    <button className="primary-light" disabled={status.running} onClick={addFiles}>{t.addFiles}</button>
-                    <button className="secondary" disabled={status.running} onClick={addFolder}>{t.addFolder}</button>
+                    <button className="primary-light" disabled={sendRunning} onClick={addFiles}>{t.addFiles}</button>
+                    <button className="secondary" disabled={sendRunning} onClick={addFolder}>{t.addFolder}</button>
                   </div>
                   <div className="drop-zone">
                     <div className="path-list">
@@ -581,7 +640,7 @@ function App() {
                       ) : sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
-                          <button disabled={status.running} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
+                          <button disabled={sendRunning} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
                         </div>
                       ))}
                     </div>
@@ -601,23 +660,32 @@ function App() {
             )}
 
             <div className="field">
-              <label>{t.passphrase}</label>
+              <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
               <div className="inline password-line">
                 <input
                   type={passwordVisible ? 'text' : 'password'}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  value={activePassword}
+                  onChange={(event) => mode === 'send' ? setSendPassword(event.target.value) : setReceivePassword(event.target.value)}
                   placeholder={t.passPlaceholder}
                 />
                 {mode === 'send' ? (
                   <>
                     <button className="secondary" onClick={generatePassword}>{t.generate}</button>
-                    <button className="secondary" disabled={!password} onClick={copyPassword}>{t.copy}</button>
+                    <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
                   </>
                 ) : (
                   <button className="secondary" onClick={pastePassword}>{t.paste}</button>
                 )}
               </div>
+              {mode === 'send' ? (
+                <div className="field-hint">
+                  <p>{t.senderPasswordHint}</p>
+                </div>
+              ) : (
+                <div className="field-hint">
+                  <p>{t.receiverPasswordHint}</p>
+                </div>
+              )}
             </div>
 
             <label className="check">
@@ -626,7 +694,7 @@ function App() {
             </label>
 
             <div className="primary-actions">
-              {status.running ? (
+              {currentRunning ? (
                 <button className="danger big-action" onClick={stop}>{t.stop}</button>
               ) : (
                 <button className="primary big-action" disabled={!canStart} onClick={start}>{primaryLabel}</button>
@@ -664,7 +732,11 @@ function App() {
                 <div className="progress">
                   <div>
                     {formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}
-                    {' - '}{downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
+                    {' - '}{t.completed} {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
+                    {(downloadProgress.skippedFiles || 0) > 0 && ` - ${t.skipped} ${downloadProgress.skippedFiles}`}
+                    {(downloadProgress.resumedFiles || 0) > 0 && ` - ${t.resumed} ${downloadProgress.resumedFiles}`}
+                    {(downloadProgress.failedFiles || 0) > 0 && ` - ${t.failed} ${downloadProgress.failedFiles}`}
+                    {(downloadProgress.totalDirs || 0) > 0 && ` - ${t.dir} ${downloadProgress.doneDirs || 0}/${downloadProgress.totalDirs}`}
                     {' - '}{formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
                     {' - '}{formatRate(freshSpeed(downloadProgress.time, downloadProgress.bytesPerSecond, nowTick))}
                   </div>
@@ -708,9 +780,9 @@ function App() {
           <details className="diagnostics">
             <summary>{t.diagnostics}</summary>
             <section className="status-grid">
-              <Metric label={t.p2pStatus} value={p2pReport?.status || (status.running ? 'starting' : 'idle')} />
-              <Metric label={t.peer} value={p2pReport?.peer || '-'} />
-              <Metric label={t.network} value={p2pReport?.network || '-'} />
+              <Metric label={t.p2pStatus} value={(mode === 'receive' ? receiveP2PReport?.status : latestReport(p2pSessions)?.status) || (currentRunning ? 'starting' : 'idle')} />
+              <Metric label={t.peer} value={(mode === 'receive' ? receiveP2PReport?.peer : latestReport(p2pSessions)?.peer) || '-'} />
+              <Metric label={t.network} value={(mode === 'receive' ? receiveP2PReport?.network : latestReport(p2pSessions)?.network) || '-'} />
               <Metric label={t.speed} value={formatRate(activeSpeed)} />
             </section>
             <section className="log-pane">
@@ -747,6 +819,15 @@ function Metric({label, value}: { label: string; value: string }) {
 
 function p2pSessionKey(report: P2PReport) {
   return report.topic || report.peer || `${report.pid || 'p2p'}-${report.timestamp || Date.now()}-${report.status}`;
+}
+
+function latestReport(reports: P2PReport[]) {
+  return reports.reduce<P2PReport | null>((latest, report) => {
+    if (!latest || report.timestamp > latest.timestamp) {
+      return report;
+    }
+    return latest;
+  }, null);
 }
 
 function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh) {

@@ -20,4 +20,4 @@ export function Status():Promise<main.AppStatus>;
 
 export function StopHTTPDownload():Promise<void>;
 
-export function StopTransfer():Promise<void>;
+export function StopTransfer(arg1:string):Promise<void>;

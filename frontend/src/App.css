@@ -257,6 +257,21 @@ input:focus {
   min-width: 0;
 }
 
+.field-hint {
+  margin-top: 8px;
+  color: #5c6f87;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.field-hint p {
+  margin: 0;
+}
+
+.field-hint p + p {
+  margin-top: 2px;
+}
+
 .primary {
   background: #2870d8;
   color: #ffffff;

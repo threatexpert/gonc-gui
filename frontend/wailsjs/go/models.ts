@@ -46,6 +46,8 @@ export namespace main {
 	
 	export class AppStatus {
 	    running: boolean;
+	    sendRunning: boolean;
+	    receiveRunning: boolean;
 	    goncPath: string;
 	    localHTTPUrl: string;
 	    downloading: boolean;
@@ -58,6 +60,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
+	        this.sendRunning = source["sendRunning"];
+	        this.receiveRunning = source["receiveRunning"];
 	        this.goncPath = source["goncPath"];
 	        this.localHTTPUrl = source["localHTTPUrl"];
 	        this.downloading = source["downloading"];

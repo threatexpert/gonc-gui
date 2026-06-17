@@ -128,6 +128,135 @@ func TestDownloaderDoesNotRetryHTTPStatusError(t *testing.T) {
 	}
 }
 
+func TestDownloaderProgressReportsSkippedAndFailedFiles(t *testing.T) {
+	skipContent := []byte("already here")
+	freshContent := []byte("new content")
+	var skipHits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			now := time.Now().Format(time.RFC3339)
+			_, _ = fmt.Fprintf(w, `{"name":"root","is_dir":true,"mod_time":"%s","size":0,"path":"/root"}`+"\n", now)
+			_, _ = fmt.Fprintf(w, `{"name":"skip.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/skip.bin"}`+"\n", now, len(skipContent))
+			_, _ = fmt.Fprintf(w, `{"name":"fresh.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/fresh.bin"}`+"\n", now, len(freshContent))
+			_, _ = fmt.Fprintf(w, `{"name":"bad.bin","is_dir":false,"mod_time":"%s","size":10,"path":"/bad.bin"}`+"\n", now)
+			return
+		}
+
+		switch r.URL.Path {
+		case "/skip.bin":
+			skipHits.Add(1)
+			_, _ = w.Write(skipContent)
+		case "/fresh.bin":
+			_, _ = w.Write(freshContent)
+		case "/bad.bin":
+			http.Error(w, "cannot read file", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "skip.bin"), skipContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lastProgress Event
+	err = downloader.Start(context.Background(), func(event Event) {
+		if event.Type == "progress" {
+			lastProgress = event
+		}
+	})
+	if err == nil {
+		t.Fatal("Start returned nil, want HTTP status error")
+	}
+	if skipHits.Load() != 0 {
+		t.Fatalf("skip.bin requests = %d, want 0", skipHits.Load())
+	}
+	if lastProgress.TotalFiles != 3 {
+		t.Fatalf("total files = %d, want 3", lastProgress.TotalFiles)
+	}
+	if lastProgress.TotalDirs != 1 || lastProgress.DoneDirs != 1 {
+		t.Fatalf("dir progress = %d/%d, want 1/1", lastProgress.DoneDirs, lastProgress.TotalDirs)
+	}
+	if lastProgress.DoneFiles != 2 {
+		t.Fatalf("done files = %d, want 2", lastProgress.DoneFiles)
+	}
+	if lastProgress.SkippedFiles != 1 {
+		t.Fatalf("skipped files = %d, want 1", lastProgress.SkippedFiles)
+	}
+	if lastProgress.FailedFiles != 1 {
+		t.Fatalf("failed files = %d, want 1", lastProgress.FailedFiles)
+	}
+	if lastProgress.DoneBytes != int64(len(skipContent)+len(freshContent)) {
+		t.Fatalf("done bytes = %d, want %d", lastProgress.DoneBytes, len(skipContent)+len(freshContent))
+	}
+}
+
+func TestDownloaderDoesNotCreateSingleRootDirectoryPlaceholder(t *testing.T) {
+	content := []byte("inside single shared root")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			now := time.Now().Format(time.RFC3339)
+			_, _ = fmt.Fprintf(w, `{"name":"tools","is_dir":true,"mod_time":"%s","size":0,"path":"/"}`+"\n", now)
+			_, _ = fmt.Fprintf(w, `{"name":"a.txt","is_dir":false,"mod_time":"%s","size":%d,"path":"/a.txt"}`+"\n", now, len(content))
+			return
+		}
+		if r.URL.Path == "/a.txt" {
+			_, _ = w.Write(content)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lastProgress Event
+	if err := downloader.Start(context.Background(), func(event Event) {
+		if event.Type == "progress" {
+			lastProgress = event
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "tools")); !os.IsNotExist(err) {
+		t.Fatalf("single root placeholder directory exists or stat failed unexpectedly: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("downloaded content = %q, want %q", data, content)
+	}
+	if lastProgress.TotalDirs != 0 {
+		t.Fatalf("total dirs = %d, want 0 for root placeholder", lastProgress.TotalDirs)
+	}
+	if lastProgress.TotalFiles != 1 || lastProgress.DoneFiles != 1 {
+		t.Fatalf("file progress = %d/%d, want 1/1", lastProgress.DoneFiles, lastProgress.TotalFiles)
+	}
+}
+
 func TestListSynthesizesSingleFileFromAttachment(t *testing.T) {
 	content := []byte("single file content")
 	modTime := time.Date(2026, 6, 14, 14, 17, 48, 0, time.UTC)

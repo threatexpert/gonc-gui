@@ -46,6 +46,11 @@ type Event struct {
 	Time             string `json:"time"`
 	TotalFiles       int64  `json:"totalFiles,omitempty"`
 	DoneFiles        int64  `json:"doneFiles,omitempty"`
+	TotalDirs        int64  `json:"totalDirs,omitempty"`
+	DoneDirs         int64  `json:"doneDirs,omitempty"`
+	SkippedFiles     int64  `json:"skippedFiles,omitempty"`
+	ResumedFiles     int64  `json:"resumedFiles,omitempty"`
+	FailedFiles      int64  `json:"failedFiles,omitempty"`
 	TotalBytes       int64  `json:"totalBytes,omitempty"`
 	DoneBytes        int64  `json:"doneBytes,omitempty"`
 	BytesPerSecond   int64  `json:"bytesPerSecond,omitempty"`
@@ -59,6 +64,11 @@ type Sink func(Event)
 type progress struct {
 	totalFiles     atomic.Int64
 	doneFiles      atomic.Int64
+	totalDirs      atomic.Int64
+	doneDirs       atomic.Int64
+	skippedFiles   atomic.Int64
+	resumedFiles   atomic.Int64
+	failedFiles    atomic.Int64
 	totalBytes     atomic.Int64
 	doneBytes      atomic.Int64
 	intervalBytes  atomic.Int64
@@ -166,10 +176,13 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 		return err
 	}
 	files = filterFiles(files, d.cfg.IncludePaths)
+	files = dropRootDirectoryEntries(files)
 	d.files = files
 	for _, file := range files {
-		d.progress.totalFiles.Add(1)
-		if !file.IsDir {
+		if file.IsDir {
+			d.progress.totalDirs.Add(1)
+		} else {
+			d.progress.totalFiles.Add(1)
 			d.progress.totalBytes.Add(file.Size)
 		}
 	}
@@ -205,10 +218,18 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 					return
 				}
 				if err := d.downloadWithRetry(ctx, client, file, sink); err != nil {
+					if !file.IsDir {
+						d.progress.failedFiles.Add(1)
+					}
 					setWorkerErr(err)
+					emitProgress(sink, d.progress, file.Path, true)
 					continue
 				}
-				d.progress.doneFiles.Add(1)
+				if file.IsDir {
+					d.progress.doneDirs.Add(1)
+				} else {
+					d.progress.doneFiles.Add(1)
+				}
 				emitProgress(sink, d.progress, file.Path, false)
 			}
 		}()
@@ -231,10 +252,11 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	workerErrMu.Lock()
 	err = workerErr
 	workerErrMu.Unlock()
+	emitProgress(sink, d.progress, "", true)
 	if err != nil {
+		emit(sink, "status", "error", fmt.Sprintf("download finished with %d failed files", d.progress.failedFiles.Load()))
 		return err
 	}
-	emitProgress(sink, d.progress, "", true)
 	emit(sink, "status", "info", "download complete")
 	return nil
 }
@@ -327,8 +349,10 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	fileMode := os.O_CREATE | os.O_WRONLY
 	if d.cfg.Resume && localExists && localSize >= file.Size {
 		d.setFileProgress(file.Path, file.Size)
+		d.progress.skippedFiles.Add(1)
 		return nil
 	}
+	resuming := d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size
 	if d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size {
 		fileMode |= os.O_APPEND
 	}
@@ -404,6 +428,9 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		_ = os.Chtimes(localPath, time.Now(), file.ModTime)
 	}
 	d.setFileProgress(file.Path, file.Size)
+	if resuming {
+		d.progress.resumedFiles.Add(1)
+	}
 	return nil
 }
 
@@ -544,6 +571,17 @@ func filterFiles(files []FileInfo, includePaths []string) []FileInfo {
 	return filtered
 }
 
+func dropRootDirectoryEntries(files []FileInfo) []FileInfo {
+	filtered := files[:0]
+	for _, file := range files {
+		if file.IsDir && normalizeRemotePath(file.Path) == "/" {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	return filtered
+}
+
 func normalizeRemotePath(remotePath string) string {
 	cleaned := path.Clean(remotePath)
 	if cleaned == "." {
@@ -647,6 +685,11 @@ func emitProgress(sink Sink, p *progress, file string, force bool) {
 		Time:           now.Format(time.RFC3339),
 		TotalFiles:     p.totalFiles.Load(),
 		DoneFiles:      p.doneFiles.Load(),
+		TotalDirs:      p.totalDirs.Load(),
+		DoneDirs:       p.doneDirs.Load(),
+		SkippedFiles:   p.skippedFiles.Load(),
+		ResumedFiles:   p.resumedFiles.Load(),
+		FailedFiles:    p.failedFiles.Load(),
 		TotalBytes:     p.totalBytes.Load(),
 		DoneBytes:      p.doneBytes.Load(),
 		BytesPerSecond: speed,

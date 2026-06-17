@@ -35,6 +35,7 @@ type Event struct {
 	Level    string  `json:"level"`
 	Message  string  `json:"message"`
 	Time     string  `json:"time"`
+	Mode     string  `json:"mode,omitempty"`
 	LocalURL string  `json:"localUrl,omitempty"`
 	InBytes  int64   `json:"inBytes,omitempty"`
 	OutBytes int64   `json:"outBytes,omitempty"`
