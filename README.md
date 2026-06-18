@@ -1,10 +1,10 @@
 # gonc-gui
 
-Desktop GUI wrapper for `gonc` P2P file transfer.
+Desktop and Android UI for `gonc` point-to-point secure transfer.
 
-This project is intentionally separate from `gonetcat`. It does not import
-`gonetcat` packages. It starts the `gonc` executable as a child process and
-streams logs back to the UI.
+The desktop app is a Wails wrapper around the `gonc` executable. The Android app
+uses a gomobile-generated `mobilegonc.aar` built from the sibling `gonetcat`
+checkout.
 
 ## Layout
 
@@ -16,14 +16,14 @@ gonc-gui/
   android/                  Android preview app shell
   bundled/gonc/             optional per-platform gonc executables
   scripts/                  helper scripts
+  update-mobilegonc-aar.bat rebuild Android mobilegonc.aar from ../gonetcat
 ```
 
-## Development
+## Desktop Development
 
 Install dependencies:
 
 ```powershell
-cd D:\threatexpert.cn\open\gonc-gui
 npm install --prefix frontend
 ```
 
@@ -56,6 +56,51 @@ For local Windows development, build `gonetcat` first, then run:
 ```powershell
 .\scripts\sync-gonc.ps1 -GonetcatDir ..\gonetcat
 ```
+
+## Android Development
+
+The Android project lives in `android/`.
+
+Build debug APK:
+
+```powershell
+cd android
+.\gradlew.bat assembleDebug
+```
+
+Or double-click:
+
+```text
+android\build-debug-apk.bat
+```
+
+Build release APK:
+
+```text
+android\build-release-apk.bat
+```
+
+The unsigned release output is usually:
+
+```text
+android\app\build\outputs\apk\release\app-release-unsigned.apk
+```
+
+After changing the Go mobile bridge in `..\gonetcat\mobilegonc`, rebuild the AAR
+from the repository root:
+
+```text
+update-mobilegonc-aar.bat
+```
+
+The script uses relative paths:
+
+- Go source: `..\gonetcat\mobilegonc`
+- AAR output: `android\app\libs\mobilegonc.aar`
+- Strip helper: `android\scripts\strip-mobilegonc-aar.ps1`
+
+`ANDROID_HOME` and `ANDROID_SDK_ROOT` are only defaulted by the script when they
+are not already set.
 
 ## First supported flow
 
