@@ -1,4 +1,5 @@
 ﻿import {useEffect, useMemo, useRef, useState} from 'react';
+import QRCode from 'qrcode';
 import './App.css';
 import {
   GeneratePassword,
@@ -15,6 +16,7 @@ import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '
 
 type Mode = 'send' | 'receive';
 type Lang = 'zh' | 'en';
+type DownloadMode = 'resume' | 'overwrite';
 
 type LogEvent = {
   type: string;
@@ -83,14 +85,14 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.0.2';
+const appVersion = 'v1.0.3';
 
 const text = {
   zh: {
-    brand: 'Gonc 传输',
-    subtitle: '点对点文件传输',
-    send: '发送',
-    receive: '接收',
+    brand: 'Gonc',
+    subtitle: '点对点安全传输工具',
+    send: '发送文件',
+    receive: '接收文件',
     running: '运行中',
     idle: '空闲',
     sender: '发送方',
@@ -100,7 +102,7 @@ const text = {
     stop: '停止',
     start: '开始',
     startShare: '开始分享',
-    startReceive: '开始接收',
+    startReceive: '连接对方',
     receiveAll: '接收全部',
     connectedReceivers: '已连接',
     connectingReceivers: '正在建立',
@@ -126,8 +128,11 @@ const text = {
     receiverPasswordHint: '口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     generate: '更换',
     copy: '复制',
+    copyLogs: '复制日志',
+    qr: '二维码',
     paste: '粘贴',
     copied: '口令已复制',
+    logsCopied: '日志已复制',
     sharedList: '文件',
     addFiles: '添加文件',
     addFolder: '添加目录',
@@ -140,10 +145,13 @@ const text = {
     currentDir: '当前目录',
     parent: '上级目录',
     useUDP: '使用 UDP 协议',
-    remoteFiles: '远端文件',
+    remoteFiles: '对方分享的文件',
     refresh: '刷新',
     stopDownload: '停止下载',
     downloadSelected: '下载选中',
+    downloadMode: '下载方式',
+    resumeDownload: '续传',
+    overwriteDownload: '覆盖',
     noSelection: '请先勾选要下载的文件或目录。',
     noList: '尚未读取目录',
     files: '个文件',
@@ -157,17 +165,19 @@ const text = {
     activity: '活动日志',
     diagnostics: '状态和日志',
     clear: '清空',
+    close: '关闭',
     logHint: '传输开始后日志会显示在这里。',
     file: '文件',
     dir: '目录',
     goncMissing: '未找到 gonc 可执行文件。请确认发布目录中包含 bundled/gonc/当前平台/gonc(.exe)，或已把 gonc 加入 PATH。',
     senderLockedDrop: '发送任务运行中，不能修改分享列表。',
+    weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
   },
   en: {
-    brand: 'Gonc Transfer',
-    subtitle: 'P2P file transfer',
-    send: 'Send',
-    receive: 'Receive',
+    brand: 'Gonc',
+    subtitle: 'Secure peer-to-peer transfer tool',
+    send: 'Send Files',
+    receive: 'Receive Files',
     running: 'Running',
     idle: 'Idle',
     sender: 'Sender',
@@ -177,7 +187,7 @@ const text = {
     stop: 'Stop',
     start: 'Start',
     startShare: 'Start Sharing',
-    startReceive: 'Start Receiving',
+    startReceive: 'Connect',
     receiveAll: 'Receive All',
     connectedReceivers: 'Connected',
     connectingReceivers: 'Establishing',
@@ -201,10 +211,13 @@ const text = {
     passPlaceholder: 'Same passphrase on both sides',
     senderPasswordHint: 'Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     receiverPasswordHint: 'The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
-    generate: 'Replace',
+    generate: 'Change',
     copy: 'Copy',
+    copyLogs: 'Copy Logs',
+    qr: 'QR',
     paste: 'Paste',
     copied: 'Passphrase copied',
+    logsCopied: 'Activity copied',
     sharedList: 'Files',
     addFiles: 'Add Files',
     addFolder: 'Add Folder',
@@ -217,10 +230,13 @@ const text = {
     currentDir: 'Current directory',
     parent: 'Parent directory',
     useUDP: 'Use UDP protocol',
-    remoteFiles: 'Remote Files',
+    remoteFiles: 'Peer Shared Files',
     refresh: 'Refresh',
     stopDownload: 'Stop Download',
     downloadSelected: 'Download Selected',
+    downloadMode: 'Download Mode',
+    resumeDownload: 'Resume',
+    overwriteDownload: 'Overwrite',
     noSelection: 'Select files or folders to download first.',
     noList: 'No list loaded',
     files: 'files',
@@ -234,11 +250,13 @@ const text = {
     activity: 'Activity',
     diagnostics: 'Status and Logs',
     clear: 'Clear',
+    close: 'Close',
     logHint: 'Logs will appear here after a transfer starts.',
     file: 'FILE',
     dir: 'DIR',
     goncMissing: 'gonc executable was not found. Make sure bundled/gonc/current-platform/gonc(.exe) exists, or put gonc in PATH.',
     senderLockedDrop: 'The sender is running. Stop it before changing the shared list.',
+    weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
   }
 };
 
@@ -265,9 +283,12 @@ function App() {
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
+  const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
   const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState('');
+  const [qrPassword, setQrPassword] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : receivePassword;
@@ -420,12 +441,29 @@ function App() {
     revealPasswordTemporarily();
   }
 
+  async function generateReceivePassword() {
+    setError('');
+    setReceivePassword(await GeneratePassword());
+    revealPasswordTemporarily();
+  }
+
   async function copyPassword() {
-    if (sendPassword) {
-      await navigator.clipboard.writeText(sendPassword);
+    if (activePassword) {
+      await navigator.clipboard.writeText(activePassword);
       revealPasswordTemporarily();
       appendLog('status', 'info', t.copied);
     }
+  }
+
+  async function copyLogs() {
+    if (logs.length === 0) {
+      return;
+    }
+    const content = logs
+      .map((log) => `[${new Date(log.time).toLocaleTimeString()}] ${log.level.toUpperCase()} ${log.message}`)
+      .join('\n');
+    await navigator.clipboard.writeText(content);
+    appendLog('status', 'info', t.logsCopied);
   }
 
   async function pastePassword() {
@@ -453,8 +491,36 @@ function App() {
     passwordTimer.current = window.setTimeout(() => setPasswordVisible(false), 5000);
   }
 
+  async function showPasswordQr() {
+    const password = activePassword.trim();
+    if (!password) {
+      return;
+    }
+    setError('');
+    try {
+      setQrPassword(password);
+      setQrDataUrl(await QRCode.toDataURL(password, {
+        width: 280,
+        margin: 2,
+        color: {
+          dark: '#101826',
+          light: '#ffffff',
+        },
+      }));
+      revealPasswordTemporarily();
+    } catch (err) {
+      setError(localizeError(String(err)));
+    }
+  }
+
+  function closePasswordQr() {
+    setQrDataUrl('');
+    setQrPassword('');
+  }
+
   async function start() {
     setError('');
+    const passphrase = activePassword.trim();
     if (mode === 'send') {
       setSendP2PReports({});
       setSendTraffic(null);
@@ -469,7 +535,7 @@ function App() {
     try {
       await StartTransfer({
         mode,
-        password: activePassword,
+        password: passphrase,
         sharePaths,
         saveDir,
         goncPath: '',
@@ -523,7 +589,7 @@ function App() {
       return;
     }
     try {
-      await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths));
+      await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths), downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
@@ -533,7 +599,7 @@ function App() {
   async function startDownloadAll() {
     setError('');
     try {
-      await StartHTTPDownload(saveDir, currentRemotePath, []);
+      await StartHTTPDownload(saveDir, currentRemotePath, [], downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
@@ -584,6 +650,9 @@ function App() {
   function localizeError(message: string) {
     if (message.includes('gonc executable was not found') || message.includes('selected gonc executable')) {
       return t.goncMissing;
+    }
+    if (message.includes('password is too weak')) {
+      return t.weakPassword;
     }
     return message;
   }
@@ -667,14 +736,20 @@ function App() {
                   value={activePassword}
                   onChange={(event) => mode === 'send' ? setSendPassword(event.target.value) : setReceivePassword(event.target.value)}
                   placeholder={t.passPlaceholder}
+                  disabled={currentRunning}
                 />
                 {mode === 'send' ? (
                   <>
-                    <button className="secondary" onClick={generatePassword}>{t.generate}</button>
                     <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
+                    {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
+                    <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : (
-                  <button className="secondary" onClick={pastePassword}>{t.paste}</button>
+                  <>
+                    {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
+                    {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
+                    <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
+                  </>
                 )}
               </div>
               {mode === 'send' ? (
@@ -712,6 +787,10 @@ function App() {
                     {receiveStatus.label}
                   </span>
                   <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
+                  <div className="compact-switch" aria-label={t.downloadMode}>
+                    <button className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
+                    <button className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
+                  </div>
                   {status.downloading ? (
                     <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
                   ) : (
@@ -788,7 +867,10 @@ function App() {
             <section className="log-pane">
             <div className="log-header">
               <h3>{t.activity}</h3>
-              <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
+              <div className="button-row">
+                <button className="ghost" disabled={logs.length === 0} onClick={copyLogs}>{t.copyLogs}</button>
+                <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
+              </div>
             </div>
             <div className="logs">
               {logs.length === 0 ? (
@@ -804,6 +886,16 @@ function App() {
           </details>
         </section>
       </section>
+      {qrDataUrl && (
+        <div className="qr-backdrop" role="presentation" onClick={closePasswordQr}>
+          <section className="qr-dialog" role="dialog" aria-modal="true" aria-label={t.qr} onClick={(event) => event.stopPropagation()}>
+            <h2>{t.qr}</h2>
+            <img src={qrDataUrl} alt={t.qr} />
+            <div className="qr-password">{qrPassword}</div>
+            <button className="primary" onClick={closePasswordQr}>{t.close}</button>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

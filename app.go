@@ -136,6 +136,10 @@ func (a *App) StartTransfer(req TransferRequest) error {
 	if a.ctx == nil {
 		return errors.New("application is not ready")
 	}
+	req.Password = strings.TrimSpace(req.Password)
+	if isWeakPassword(req.Password) {
+		return errors.New("password is too weak; use at least 8 characters with letters and digits")
+	}
 
 	goncPath, err := findGonc(req.GoncPath)
 	if err != nil {
@@ -266,7 +270,7 @@ func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
 	return resp, nil
 }
 
-func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string) error {
+func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, resume bool) error {
 	if saveDir == "" {
 		saveDir = defaultSaveDir()
 	}
@@ -292,7 +296,7 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string) 
 		SaveDir:      saveDir,
 		IncludePaths: includePaths,
 		Concurrency:  4,
-		Resume:       true,
+		Resume:       resume,
 	})
 	if err != nil {
 		a.clearDownload(downloadID)

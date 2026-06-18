@@ -12,7 +12,7 @@ export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder(arg1:string):Promise<string>;
 
-export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
+export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>,arg4:boolean):Promise<void>;
 
 export function StartTransfer(arg1:main.TransferRequest):Promise<void>;
 

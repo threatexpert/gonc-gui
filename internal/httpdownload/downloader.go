@@ -347,6 +347,9 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	}
 
 	fileMode := os.O_CREATE | os.O_WRONLY
+	if !d.cfg.Resume {
+		fileMode |= os.O_TRUNC
+	}
 	if d.cfg.Resume && localExists && localSize >= file.Size {
 		d.setFileProgress(file.Path, file.Size)
 		d.progress.skippedFiles.Add(1)
@@ -382,6 +385,9 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		d.setFileProgress(file.Path, localSize)
 	} else if resp.StatusCode == http.StatusOK {
 		fileMode = os.O_CREATE | os.O_WRONLY
+		if !d.cfg.Resume {
+			fileMode |= os.O_TRUNC
+		}
 		d.setFileProgress(file.Path, 0)
 	} else {
 		return httpStatusError{status: resp.Status, path: file.Path}

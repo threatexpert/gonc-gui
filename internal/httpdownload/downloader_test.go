@@ -257,6 +257,62 @@ func TestDownloaderDoesNotCreateSingleRootDirectoryPlaceholder(t *testing.T) {
 	}
 }
 
+func TestDownloaderOverwriteModeRedownloadsExistingFile(t *testing.T) {
+	content := []byte("new")
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			_, _ = fmt.Fprintf(w, `{"name":"file.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/file.bin"}`+"\n", time.Now().Format(time.RFC3339), len(content))
+			return
+		}
+		if r.URL.Path == "/file.bin" {
+			hits.Add(1)
+			_, _ = w.Write(content)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	localPath := filepath.Join(root, "file.bin")
+	if err := os.WriteFile(localPath, []byte("old-longer-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lastProgress Event
+	if err := downloader.Start(context.Background(), func(event Event) {
+		if event.Type == "progress" {
+			lastProgress = event
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if hits.Load() != 1 {
+		t.Fatalf("download requests = %d, want 1", hits.Load())
+	}
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("file content = %q, want %q", data, content)
+	}
+	if lastProgress.SkippedFiles != 0 || lastProgress.ResumedFiles != 0 {
+		t.Fatalf("skip/resume = %d/%d, want 0/0", lastProgress.SkippedFiles, lastProgress.ResumedFiles)
+	}
+}
+
 func TestListSynthesizesSingleFileFromAttachment(t *testing.T) {
 	content := []byte("single file content")
 	modTime := time.Date(2026, 6, 14, 14, 17, 48, 0, time.UTC)

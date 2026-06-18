@@ -189,7 +189,7 @@ func buildArgs(req Request) ([]string, error) {
 }
 
 var localHTTPPattern = regexp.MustCompile(`http://127\.0\.0\.1:\d+`)
-var trafficPattern = regexp.MustCompile(`IN:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+OUT:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+(\d{2}:\d{2}:\d{2})`)
+var trafficPattern = regexp.MustCompile(`IN:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+OUT:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s(?:\s+\|\s+\d+)?\s+\|\s+(\d{2}:\d{2}:\d{2})`)
 
 func scan(reader io.Reader, stream string, sink Sink) {
 	if sink == nil {

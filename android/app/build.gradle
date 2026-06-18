@@ -1,0 +1,34 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "cn.threatexpert.gonc"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "cn.threatexpert.gonc"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0-preview"
+
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ["**/libgojni.so"]
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: "libs", include: ["*.aar"])
+    implementation "androidx.core:core:1.13.1"
+    implementation "com.google.zxing:core:3.5.3"
+    implementation "com.journeyapps:zxing-android-embedded:4.3.0"
+    testImplementation "junit:junit:4.13.2"
+}

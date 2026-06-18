@@ -13,6 +13,7 @@ gonc-gui/
   app.go                    Wails backend methods exposed to the frontend
   internal/goncrunner/      child process runner for gonc
   frontend/                 React UI
+  android/                  Android preview app shell
   bundled/gonc/             optional per-platform gonc executables
   scripts/                  helper scripts
 ```

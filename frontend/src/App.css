@@ -176,6 +176,30 @@ button:disabled {
   color: #ffffff;
 }
 
+.compact-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  gap: 3px;
+  min-height: 38px;
+  border: 1px solid #d8e2ee;
+  border-radius: 6px;
+  padding: 3px;
+  background: #ffffff;
+}
+
+.compact-switch button {
+  min-height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  color: #52657d;
+  font-size: 13px;
+}
+
+.compact-switch button.active {
+  background: #172033;
+  color: #ffffff;
+}
+
 .main-pane {
   display: grid;
   gap: 12px;
@@ -589,6 +613,7 @@ progress {
   font-family: Consolas, "SFMono-Regular", monospace;
   font-size: 12px;
   text-align: left;
+  user-select: text;
 }
 
 .log-line {
@@ -596,6 +621,7 @@ progress {
   grid-template-columns: 74px minmax(0, 1fr);
   gap: 10px;
   line-height: 1.55;
+  user-select: text;
 }
 
 .log-line time {
@@ -613,6 +639,55 @@ progress {
 .muted {
   margin: 0;
   color: #64748b;
+}
+
+.qr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(16, 24, 38, 0.45);
+}
+
+.qr-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(340px, 100%);
+  border: 1px solid #d8e2ee;
+  border-radius: 8px;
+  padding: 18px;
+  background: #ffffff;
+  box-shadow: 0 20px 50px rgba(23, 32, 51, 0.22);
+}
+
+.qr-dialog h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 16px;
+}
+
+.qr-dialog img {
+  width: min(280px, 100%);
+  justify-self: center;
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.qr-password {
+  border: 1px solid #d8e2ee;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #f8fbff;
+  color: #172033;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  text-align: center;
+  user-select: text;
 }
 
 @media (max-width: 720px) {
@@ -640,5 +715,9 @@ progress {
 
   .status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .password-line button {
+    width: 100%;
   }
 }

@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=v1.0.2"
+if "%VERSION%"=="" set "VERSION=v1.0.3"
 
 set "PLATFORM=windows-amd64"
 set "APP_NAME=gonc-gui"
