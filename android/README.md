@@ -46,6 +46,7 @@ android/
     ShareItem.java
     Passwords.java
   scripts/strip-mobilegonc-aar.ps1
+  update-mobilegonc-aar.bat
   build-debug-apk.bat
   build-release-apk.bat
 ```
@@ -76,16 +77,31 @@ Release build:
 build-release-apk.bat
 ```
 
-Without signing configuration, the release output is:
+Release builds require signing. Create a private keystore outside git, then copy
+`keystore.properties.example` to `keystore.properties` and fill in the real
+values:
 
 ```text
-app\build\outputs\apk\release\app-release-unsigned.apk
+storeFile=../gonc-release.jks
+storePassword=your-store-password
+keyAlias=gonc
+keyPassword=your-key-password
 ```
+
+`keystore.properties`, `*.jks`, and `*.keystore` are ignored by git.
+
+Signed release output:
+
+```text
+app\build\outputs\apk\release\app-release.apk
+```
+
+Unsigned release APKs are intentionally blocked.
 
 ## Update mobilegonc.aar
 
-After changing `..\gonetcat\mobilegonc` or related Go packages, run from the
-repository root:
+After changing `..\gonetcat\mobilegonc` or related Go packages, run from this
+directory:
 
 ```text
 update-mobilegonc-aar.bat
@@ -93,10 +109,10 @@ update-mobilegonc-aar.bat
 
 The script:
 
-1. Changes directory to `..\gonetcat`.
+1. Changes directory to `..\..\gonetcat`.
 2. Runs `gomobile bind` for `github.com/threatexpert/gonc/v2/mobilegonc`.
-3. Writes `..\gonc-gui\android\app\libs\mobilegonc.aar`.
-4. Runs `android\scripts\strip-mobilegonc-aar.ps1`.
+3. Writes `app\libs\mobilegonc.aar`.
+4. Runs `scripts\strip-mobilegonc-aar.ps1`.
 
 It only sets `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `D:\Android\sdk` when those
 environment variables are empty. Override them in your shell if your SDK is

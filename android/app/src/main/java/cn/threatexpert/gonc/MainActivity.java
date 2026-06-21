@@ -1,6 +1,7 @@
 package cn.threatexpert.gonc;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.Manifest;
 import android.content.ClipData;
@@ -161,6 +162,31 @@ public final class MainActivity extends Activity {
         setIntent(intent);
         handleIncomingIntent(intent);
         render();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (isAnySessionRunning()) {
+            showRunningTaskBackDialog();
+            return;
+        }
+        resetTransientStateForFreshLaunch();
+        finish();
+    }
+
+    private void showRunningTaskBackDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.running_task_back_title)
+                .setMessage(R.string.running_task_back_message)
+                .setPositiveButton(R.string.run_in_background, (dialog, which) -> {
+                    moveTaskToBack(true);
+                    Toast.makeText(this, R.string.toast_transfer_kept_running, Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton(R.string.end_tasks, (dialog, which) -> {
+                    endAllTasksAndExit();
+                })
+                .setNeutralButton(R.string.cancel, null)
+                .show();
     }
 
     @Override
@@ -336,9 +362,10 @@ public final class MainActivity extends Activity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, 0, 0, dp(12));
 
-        TextView mark = text("G", 22, Color.WHITE, Typeface.BOLD);
-        mark.setGravity(Gravity.CENTER);
-        mark.setBackground(rounded(Color.rgb(27, 143, 106), dp(8), 0, 0));
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.mipmap.ic_launcher);
+        mark.setAdjustViewBounds(true);
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
         header.addView(mark, new LinearLayout.LayoutParams(dp(46), dp(46)));
 
         LinearLayout titles = column();
@@ -1826,6 +1853,84 @@ public final class MainActivity extends Activity {
         updateKeepScreenOn();
         appendLog("warn", (forSendMode ? "Send" : "Receive") + " stop requested");
         render();
+    }
+
+    private void endAllTasksAndExit() {
+        sendRunId++;
+        receiveRunId++;
+
+        GoncBridge.Session send = sendSession;
+        GoncBridge.Session receive = receiveSession;
+        HttpReceiver.Session listSession = remoteListSession;
+        HttpReceiver.Session download = receiveDownload;
+
+        sendSession = null;
+        receiveSession = null;
+        remoteListSession = null;
+        receiveDownload = null;
+
+        if (send != null) {
+            send.stop();
+        }
+        if (receive != null) {
+            receive.stop();
+        }
+        if (listSession != null) {
+            listSession.stop();
+        }
+        if (download != null) {
+            download.stop();
+        }
+
+        resetTransientStateForFreshLaunch();
+        updateKeepScreenOn();
+        finish();
+    }
+
+    private void resetTransientStateForFreshLaunch() {
+        shareItems.clear();
+        logs.clear();
+
+        sendMode = true;
+        sendUseUdp = false;
+        receiveUseUdp = false;
+        activityExpanded = false;
+        sendPassword = Passwords.generate();
+        receivePassword = "";
+        sendPasswordVisible = false;
+        receivePasswordVisible = false;
+        sendPasswordVisibilityToken++;
+        receivePasswordVisibilityToken++;
+
+        saveTreeUri = null;
+        saveLocationLabel = getString(R.string.default_save_location);
+        receiveEndpoint = "";
+        remoteListStatus = "Idle";
+        remoteCurrentPath = "";
+        remoteCurrentPathMissing = false;
+        remoteFiles.clear();
+        selectedRemotePaths.clear();
+        remoteFileCount = 0;
+        remoteDirCount = 0;
+        remoteTotalBytes = 0;
+
+        resumeDownloads = true;
+        downloadStatus = "Idle";
+        downloadDoneFiles = 0;
+        downloadTotalFiles = 0;
+        downloadDoneBytes = 0;
+        downloadTotalBytes = 0;
+        downloadNetworkBytes = 0;
+        downloadBytesPerSecond = 0;
+        downloadSkippedFiles = 0;
+        downloadResumedFiles = 0;
+        downloadStartedAtMs = 0;
+        downloadFinishedAtMs = 0;
+
+        sendStatus = "Idle";
+        receiveStatus = "Idle";
+        sendMetrics.reset();
+        receiveMetrics.reset();
     }
 
     private void loadRemoteFiles(String endpoint, long runId) {

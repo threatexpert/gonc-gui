@@ -2,6 +2,27 @@ plugins {
     id "com.android.application"
 }
 
+def releaseKeystorePropertiesFile = rootProject.file("keystore.properties")
+def releaseKeystoreProperties = new Properties()
+if (releaseKeystorePropertiesFile.exists()) {
+    releaseKeystorePropertiesFile.withInputStream { releaseKeystoreProperties.load(it) }
+}
+
+def requiredReleaseSigningKeys = ["storeFile", "storePassword", "keyAlias", "keyPassword"]
+def releaseSigningConfigured = releaseKeystorePropertiesFile.exists()
+        && requiredReleaseSigningKeys.every { releaseKeystoreProperties[it]?.trim() }
+        && rootProject.file(releaseKeystoreProperties["storeFile"] ?: "").exists()
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseRequested = graph.allTasks.any { it.name.toLowerCase().contains("release") }
+    if (releaseRequested && !releaseSigningConfigured) {
+        throw new GradleException(
+                "Release signing is not configured. Create android/keystore.properties from " +
+                        "android/keystore.properties.example and point storeFile to your release keystore. " +
+                        "Unsigned release APKs are intentionally blocked.")
+    }
+}
+
 android {
     namespace "cn.threatexpert.gonc"
     compileSdk 35
@@ -11,10 +32,36 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 1
-        versionName "0.1.0-preview"
+        versionName "0.1.0"
+        manifestPlaceholders = [appLabel: "Gonc"]
 
         ndk {
             abiFilters "arm64-v8a"
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile rootProject.file(releaseKeystoreProperties["storeFile"])
+                storePassword releaseKeystoreProperties["storePassword"]
+                keyAlias releaseKeystoreProperties["keyAlias"]
+                keyPassword releaseKeystoreProperties["keyPassword"]
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            manifestPlaceholders = [appLabel: "Gonc Debug"]
+        }
+        release {
+            manifestPlaceholders = [appLabel: "Gonc"]
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 

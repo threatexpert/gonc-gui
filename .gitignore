@@ -8,3 +8,6 @@ bundled/gonc/**/gonc.exe
 *.log
 .env.local
 .codex-remote-attachments/
+android/keystore.properties
+android/*.jks
+android/*.keystore

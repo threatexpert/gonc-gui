@@ -118,6 +118,11 @@
     <string name="toast_select_file_first">Select at least one file first</string>
     <string name="toast_passphrase_required">Passphrase is required</string>
     <string name="toast_passphrase_weak">Passphrase is too weak. Use at least 8 characters with both letters and numbers.</string>
+    <string name="toast_transfer_kept_running">Transfer remains running in the background</string>
+    <string name="running_task_back_title">Leave Gonc?</string>
+    <string name="running_task_back_message">A sharing or receiving task is still running. You can keep it running in the background, or end it and clear this session.</string>
+    <string name="run_in_background">Run in background</string>
+    <string name="end_tasks">End tasks</string>
     <string name="toast_choose_save_location">Choose a save location first</string>
     <string name="toast_select_download_files">Select files to download first</string>
     <string name="toast_no_remote_files">No remote files to download</string>
@@ -138,6 +143,7 @@
     <string name="passphrase_qr_copy_hint">Long press the QR code or passphrase to copy</string>
     <string name="source_title">Open source project</string>
     <string name="source_description">Gonc is developed as an open source project. You can inspect the source code, report issues, and follow updates on GitHub.</string>
+    <string name="cancel">Cancel</string>
     <string name="close">Close</string>
     <string name="scan_prompt">Scan Gonc passphrase QR</string>
     <string name="pick_qr_from_album">Choose from album</string>

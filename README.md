@@ -16,7 +16,7 @@ gonc-gui/
   android/                  Android preview app shell
   bundled/gonc/             optional per-platform gonc executables
   scripts/                  helper scripts
-  update-mobilegonc-aar.bat rebuild Android mobilegonc.aar from ../gonetcat
+  android/update-mobilegonc-aar.bat rebuild Android mobilegonc.aar from ../gonetcat
 ```
 
 ## Desktop Development
@@ -80,17 +80,18 @@ Build release APK:
 android\build-release-apk.bat
 ```
 
-The unsigned release output is usually:
+Release builds require `android\keystore.properties`; unsigned release APKs are
+blocked. The signed output is:
 
 ```text
-android\app\build\outputs\apk\release\app-release-unsigned.apk
+android\app\build\outputs\apk\release\app-release.apk
 ```
 
 After changing the Go mobile bridge in `..\gonetcat\mobilegonc`, rebuild the AAR
 from the repository root:
 
 ```text
-update-mobilegonc-aar.bat
+android\update-mobilegonc-aar.bat
 ```
 
 The script uses relative paths:
