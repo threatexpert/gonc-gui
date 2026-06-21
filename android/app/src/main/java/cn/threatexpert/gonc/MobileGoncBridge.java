@@ -87,6 +87,7 @@ final class MobileGoncBridge implements GoncBridge {
         private volatile boolean stopped;
         private mobilegonc.Session goSession;
         private AndroidFileSource source;
+        private List<ShareItem> pendingShareItems;
 
         @Override
         public synchronized void stop() {
@@ -99,6 +100,16 @@ final class MobileGoncBridge implements GoncBridge {
             }
         }
 
+        @Override
+        public synchronized void updateShareItems(List<ShareItem> items) {
+            List<ShareItem> snapshot = new ArrayList<>(items);
+            if (source != null) {
+                source.updateItems(snapshot);
+            } else {
+                pendingShareItems = snapshot;
+            }
+        }
+
         synchronized void attach(mobilegonc.Session goSession) {
             this.goSession = goSession;
             if (stopped && goSession != null) {
@@ -108,6 +119,10 @@ final class MobileGoncBridge implements GoncBridge {
 
         synchronized void attachSource(AndroidFileSource source) {
             this.source = source;
+            if (pendingShareItems != null && source != null) {
+                source.updateItems(pendingShareItems);
+                pendingShareItems = null;
+            }
             if (stopped && source != null) {
                 source.closeAll();
             }

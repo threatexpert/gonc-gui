@@ -25,6 +25,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -34,6 +35,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -56,6 +58,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_OPEN_SAVE_TREE = 1003;
     private static final int REQUEST_CAMERA_PERMISSION = 1004;
     private static final int REQUEST_OPEN_SEND_TREE = 1005;
+    private static final int REQUEST_STORAGE_PERMISSION = 1006;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<ShareItem> shareItems = new ArrayList<>();
@@ -63,10 +66,12 @@ public final class MainActivity extends Activity {
     private final GoncBridge bridge = new MobileGoncBridge();
     private final TransferMetrics sendMetrics = new TransferMetrics();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
+    private final Object downloadProgressLock = new Object();
 
     private LinearLayout root;
     private boolean sendMode = true;
-    private boolean useUdp;
+    private boolean sendUseUdp;
+    private boolean receiveUseUdp;
     private boolean activityExpanded;
     private boolean scanningForSendMode;
     private boolean sendPasswordVisible;
@@ -80,6 +85,7 @@ public final class MainActivity extends Activity {
     private String receiveEndpoint = "";
     private String remoteListStatus = "Idle";
     private String remoteCurrentPath = "";
+    private boolean remoteCurrentPathMissing;
     private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
     private final Set<String> selectedRemotePaths = new HashSet<>();
     private int remoteFileCount;
@@ -91,9 +97,12 @@ public final class MainActivity extends Activity {
     private int downloadTotalFiles;
     private long downloadDoneBytes;
     private long downloadTotalBytes;
+    private long downloadNetworkBytes;
     private double downloadBytesPerSecond;
     private int downloadSkippedFiles;
     private int downloadResumedFiles;
+    private long downloadStartedAtMs;
+    private long downloadFinishedAtMs;
     private String sendStatus = "Idle";
     private String receiveStatus = "Idle";
     private GoncBridge.Session sendSession;
@@ -102,11 +111,44 @@ public final class MainActivity extends Activity {
     private HttpReceiver.Session receiveDownload;
     private long sendRunId;
     private long receiveRunId;
+    private long pauseAutoRenderUntilMs;
+    private long lastDownloadProgressRenderMs;
+    private boolean downloadProgressRenderPending;
+    private boolean downloadProgressApplyPending;
+    private DownloadProgressSnapshot pendingDownloadProgress;
+    private TextView downloadStatusView;
+    private TextView downloadDetailView;
+    private ProgressBar downloadProgressBar;
+    private TextView downloadSummaryView;
+    private View receiveConnectionDotView;
+    private TextView receiveConnectionLabelView;
+    private TextView activitySummaryTextView;
+    private TextView activityP2PStatusValueView;
+    private TextView activitySpeedValueView;
+    private TextView activityConnectionsValueView;
+    private TextView activityNetworkValueView;
+    private TextView activityRouteValueView;
+    private TextView activityPeerValueView;
+    private TextView activityEndpointValueView;
+    private TextView remoteFilesSummaryTextView;
+    private TextView remoteFilesTotalSummaryTextView;
+    private Button downloadSelectedButton;
+    private final Map<String, CheckBox> remoteFileCheckboxes = new LinkedHashMap<>();
+    private boolean updatingRemoteSelectionViews;
+
+    private static final int METRIC_REF_NONE = 0;
+    private static final int METRIC_REF_P2P_STATUS = 1;
+    private static final int METRIC_REF_SPEED = 2;
+    private static final int METRIC_REF_CONNECTIONS = 3;
+    private static final int METRIC_REF_NETWORK = 4;
+    private static final int METRIC_REF_PEER = 5;
+    private static final int METRIC_REF_ENDPOINT = 6;
+    private static final int METRIC_REF_ROUTE = 7;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        saveLocationLabel = getString(R.string.not_selected);
+        saveLocationLabel = getString(R.string.default_save_location);
         buildRoot();
         handleIncomingIntent(getIntent());
         render();
@@ -169,6 +211,10 @@ public final class MainActivity extends Activity {
             } else {
                 Toast.makeText(this, R.string.toast_camera_permission, Toast.LENGTH_SHORT).show();
             }
+        } else if (requestCode == REQUEST_STORAGE_PERMISSION) {
+            if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, R.string.toast_storage_permission, Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
@@ -215,9 +261,6 @@ public final class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(header());
         root.addView(modeSwitch());
-        if (isAnySessionRunning()) {
-            root.addView(keepScreenNotice());
-        }
         if (sendMode) {
             root.addView(sendPanel());
         } else {
@@ -227,6 +270,63 @@ public final class MainActivity extends Activity {
             }
         }
         root.addView(logPanel());
+    }
+
+    private void renderAfterBackgroundUpdate() {
+        if (System.currentTimeMillis() < pauseAutoRenderUntilMs) {
+            return;
+        }
+        if (isRemoteFilesPanelVisible()) {
+            updateBackgroundDynamicViews();
+            return;
+        }
+        render();
+    }
+
+    private boolean isRemoteFilesPanelVisible() {
+        return !sendMode && (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus));
+    }
+
+    private void updateBackgroundDynamicViews() {
+        if (receiveConnectionDotView != null) {
+            receiveConnectionDotView.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
+        }
+        if (receiveConnectionLabelView != null) {
+            receiveConnectionLabelView.setText(receiveConnectionLabel());
+        }
+        if (activitySummaryTextView != null) {
+            activitySummaryTextView.setText(activitySummary(currentMetrics()));
+        }
+        updateActivityMetricViews();
+    }
+
+    private void renderDownloadProgress() {
+        if (System.currentTimeMillis() < pauseAutoRenderUntilMs) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastDownloadProgressRenderMs;
+        if (elapsed >= 350) {
+            lastDownloadProgressRenderMs = now;
+            updateDownloadProgressViews();
+            return;
+        }
+        if (downloadProgressRenderPending) {
+            return;
+        }
+        downloadProgressRenderPending = true;
+        mainHandler.postDelayed(() -> {
+            downloadProgressRenderPending = false;
+            if (receiveDownload == null || System.currentTimeMillis() < pauseAutoRenderUntilMs) {
+                return;
+            }
+            lastDownloadProgressRenderMs = System.currentTimeMillis();
+            updateDownloadProgressViews();
+        }, Math.max(50, 350 - elapsed));
+    }
+
+    private void pauseAutoRender() {
+        pauseAutoRenderUntilMs = System.currentTimeMillis() + 15000;
     }
 
     private View header() {
@@ -244,6 +344,13 @@ public final class MainActivity extends Activity {
         titles.addView(text(getString(R.string.app_name), 19, ink(), Typeface.BOLD));
         titles.addView(text(getString(R.string.app_subtitle), 13, muted(), Typeface.NORMAL));
         header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        if (isAnySessionRunning()) {
+            View keepAwake = keepScreenIndicator();
+            LinearLayout.LayoutParams indicatorParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+            indicatorParams.setMargins(0, 0, dp(6), 0);
+            header.addView(keepAwake, indicatorParams);
+        }
 
         Button source = ghostButton(getString(R.string.source));
         source.setOnClickListener(v -> showSourceDialog());
@@ -273,30 +380,45 @@ public final class MainActivity extends Activity {
         return box;
     }
 
-    private View keepScreenNotice() {
-        TextView notice = text(getString(R.string.screen_stays_on), 13, Color.rgb(15, 111, 83), Typeface.BOLD);
-        notice.setGravity(Gravity.CENTER_VERTICAL);
-        notice.setPadding(dp(12), 0, dp(12), 0);
-        notice.setBackground(rounded(Color.rgb(223, 243, 236), dp(8), Color.rgb(143, 211, 189), 1));
-        notice.setLayoutParams(blockParams());
-        return notice;
+    private View keepScreenIndicator() {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_keep_screen_on);
+        icon.setPadding(dp(7), dp(7), dp(7), dp(7));
+        icon.setBackground(rounded(Color.rgb(223, 243, 236), dp(8), Color.rgb(143, 211, 189), 1));
+        icon.setContentDescription(getString(R.string.screen_stays_on));
+        icon.setOnClickListener(v -> Toast.makeText(this, R.string.screen_stays_on, Toast.LENGTH_SHORT).show());
+        return icon;
     }
 
     private View metricBox(String label, String value) {
+        return metricBox(label, value, METRIC_REF_NONE);
+    }
+
+    private View metricBox(String label, String value, int ref) {
         LinearLayout box = column();
         box.setPadding(dp(10), dp(8), dp(10), dp(8));
         box.setBackground(rounded(Color.rgb(251, 253, 255), dp(7), Color.rgb(226, 232, 240), 1));
         box.addView(text(label, 11, muted(), Typeface.BOLD));
         TextView content = text(value, 14, ink(), Typeface.BOLD);
-        content.setSingleLine(true);
+        bindMetricRef(ref, content);
+        content.setTextIsSelectable(true);
+        content.setOnLongClickListener(v -> {
+            pauseAutoRender();
+            String currentValue = content.getText() == null ? "" : content.getText().toString();
+            if (!currentValue.trim().isEmpty() && !"-".equals(currentValue.trim())) {
+                copyText(label, currentValue);
+                Toast.makeText(this, R.string.toast_value_copied, Toast.LENGTH_SHORT).show();
+            }
+            return false;
+        });
         box.addView(content);
         return box;
     }
 
     private View sendPanel() {
         LinearLayout card = card();
-        card.addView(sectionTitle(getString(R.string.send_files_title)));
 
+        card.addView(sectionBoundaryTitle(getString(R.string.share_files_config), false), blockParams(0));
         if (shareItems.isEmpty()) {
             TextView empty = text(getString(R.string.no_files_selected), 14, muted(), Typeface.NORMAL);
             empty.setGravity(Gravity.CENTER);
@@ -314,19 +436,14 @@ public final class MainActivity extends Activity {
         add.setOnClickListener(v -> openDocumentPicker());
         Button addFolder = secondaryButton(getString(R.string.add_folder));
         addFolder.setOnClickListener(v -> openSendFolderPicker());
-        Button clear = secondaryButton(getString(R.string.clear));
-        clear.setOnClickListener(v -> {
-            shareItems.clear();
-            appendLog("info", "Shared file list cleared");
-            render();
-        });
         actions.addView(add, new LinearLayout.LayoutParams(0, dp(42), 1));
         actions.addView(addFolder, new LinearLayout.LayoutParams(0, dp(42), 1));
-        actions.addView(clear, new LinearLayout.LayoutParams(0, dp(42), 1));
         card.addView(actions, blockParams());
 
-        card.addView(passwordField(getString(R.string.passphrase), true));
-        card.addView(protocolToggle());
+        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), true), blockParams(dp(14)));
+        card.addView(passwordField(true));
+        card.addView(sectionDivider(), dividerParams(dp(12)));
+        card.addView(protocolToggle(true));
 
         Button primary = sendSession == null ? primaryButton(getString(R.string.start_sharing)) : dangerButton(getString(R.string.stop_sharing));
         primary.setOnClickListener(v -> {
@@ -342,7 +459,11 @@ public final class MainActivity extends Activity {
 
     private View receivePanel() {
         LinearLayout card = card();
-        card.addView(sectionTitle(getString(R.string.receive_files_title)));
+        if (receiveSession != null) {
+            card.addView(receiveSessionBarView());
+            return card;
+        }
+        card.addView(sectionBoundaryTitle(getString(R.string.save_location_config), false), blockParams(0));
         LinearLayout save = row();
         TextView saveText = text(getString(R.string.save_to, saveLocationLabel), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
         saveText.setSingleLine(true);
@@ -353,8 +474,10 @@ public final class MainActivity extends Activity {
         chooseParams.setMargins(dp(8), 0, 0, 0);
         save.addView(choose, chooseParams);
         card.addView(save, blockParams());
-        card.addView(passwordField(getString(R.string.passphrase), false));
-        card.addView(protocolToggle());
+        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), true), blockParams(dp(14)));
+        card.addView(passwordField(false));
+        card.addView(sectionDivider(), dividerParams(dp(12)));
+        card.addView(protocolToggle(false));
 
         Button primary = receiveSession == null ? primaryButton(getString(R.string.connect)) : dangerButton(getString(R.string.disconnect));
         primary.setOnClickListener(v -> {
@@ -368,6 +491,37 @@ public final class MainActivity extends Activity {
         return card;
     }
 
+    private View receiveSessionBarView() {
+        LinearLayout row = row();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(8), dp(10), dp(8));
+        row.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
+
+        View dot = new View(this);
+        dot.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
+        receiveConnectionDotView = dot;
+        row.addView(dot, new LinearLayout.LayoutParams(dp(12), dp(12)));
+
+        TextView label = text(receiveConnectionLabel(), 14, ink(), Typeface.BOLD);
+        label.setSingleLine(false);
+        receiveConnectionLabelView = label;
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        labelParams.setMargins(dp(10), 0, dp(8), 0);
+        row.addView(label, labelParams);
+
+        Button passphrase = secondaryButton(getString(R.string.passphrase));
+        passphrase.setOnClickListener(v -> showPasswordQr(false));
+        row.addView(passphrase, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+
+        Button disconnect = dangerButton(getString(R.string.disconnect));
+        disconnect.setTextSize(14);
+        disconnect.setOnClickListener(v -> stopSession(false));
+        LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
+        disconnectParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(disconnect, disconnectParams);
+        return row;
+    }
+
     private View receiveProgressPanel() {
         LinearLayout card = card();
         card.addView(sectionTitle(getString(R.string.receive_status)));
@@ -379,76 +533,69 @@ public final class MainActivity extends Activity {
         LinearLayout box = column();
         TextView line = text(displayDownloadStatus(downloadStatus), 14, ink(), Typeface.BOLD);
         line.setSingleLine(false);
+        downloadStatusView = line;
         box.addView(line);
 
         long total = Math.max(downloadTotalBytes, 0);
         long done = Math.max(downloadDoneBytes, 0);
-        String detailText = getString(R.string.progress_detail, formatPercent(done, total), downloadDoneFiles, downloadTotalFiles, formatBytes(done), formatBytes(total));
-        if (downloadSkippedFiles > 0 || downloadResumedFiles > 0) {
-            detailText = getString(R.string.progress_detail_extra, detailText, downloadSkippedFiles, downloadResumedFiles);
-        }
-        TextView detail = text(detailText, 13, muted(), Typeface.BOLD);
+        TextView detail = text(downloadProgressDetail(done, total), 13, muted(), Typeface.BOLD);
         detail.setSingleLine(false);
+        downloadDetailView = detail;
         box.addView(detail, blockParams(dp(8)));
 
-        TextView speed = text(formatRate(currentDownloadSpeed()), 13, Color.rgb(15, 111, 83), Typeface.BOLD);
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(1000);
+        progress.setProgress(progressValue(done, total));
+        downloadProgressBar = progress;
+        box.addView(progress, blockParams(dp(6)));
+
+        TextView speed = text(downloadProgressSummary(done, total), 13, Color.rgb(15, 111, 83), Typeface.BOLD);
+        downloadSummaryView = speed;
         box.addView(speed, blockParams(dp(4)));
         return box;
     }
 
     private View remoteFilesPanel() {
         LinearLayout card = card();
+        remoteFileCheckboxes.clear();
         card.addView(sectionTitle(getString(R.string.remote_files)));
-        card.addView(receiveConnectionStatusView(), blockParams(0));
-        card.addView(downloadModeToggle(), blockParams(dp(8)));
-
-        LinearLayout actions = row();
-        if (receiveDownload != null) {
-            Button stop = dangerButton(getString(R.string.stop_download));
-            stop.setOnClickListener(v -> stopReceiveDownload());
-            actions.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1));
-        } else {
-            Button all = primaryButton(getString(R.string.receive_all));
-            all.setEnabled(canClickRemoteAction());
-            all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths()));
-            Button selected = primaryButton(getString(R.string.download_selected));
-            selected.setEnabled(canClickRemoteAction());
-            selected.setOnClickListener(v -> refreshAndStartDownload(new ArrayList<>(selectedRemotePaths)));
-            actions.addView(all, new LinearLayout.LayoutParams(0, dp(42), 1));
-            actions.addView(selected, actionParams(dp(42)));
-        }
-        card.addView(actions, blockParams(dp(8)));
-
-        if (!"Idle".equals(downloadStatus)) {
-            card.addView(receiveProgressContent(), blockParams(dp(8)));
-        }
-
-        card.addView(remoteFilesSummaryView(), blockParams(dp(10)));
 
         LinearLayout pathRow = row();
         pathRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView path = text(displayRemotePath(remoteCurrentPath), 13, ink(), Typeface.BOLD);
-        path.setSingleLine(true);
-        pathRow.addView(path, new LinearLayout.LayoutParams(0, dp(38), 1));
-        Button refresh = ghostButton(getString(R.string.refresh));
-        refresh.setEnabled(canClickRemoteAction());
+        pathRow.addView(remoteBreadcrumbView(), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button selectAll = quietTouchButton(getString(R.string.select_all));
+        setControlEnabled(selectAll, canClickRemoteAction() && !visibleRemoteFiles().isEmpty());
+        selectAll.setOnClickListener(v -> selectVisibleRemoteFiles());
+        pathRow.addView(selectAll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        Button invert = quietTouchButton(getString(R.string.invert_selection));
+        setControlEnabled(invert, canClickRemoteAction() && !visibleRemoteFiles().isEmpty());
+        invert.setOnClickListener(v -> invertVisibleRemoteFiles());
+        pathRow.addView(invert, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        Button refresh = quietTouchButton(getString(R.string.refresh));
+        setControlEnabled(refresh, canClickRemoteAction());
         refresh.setOnClickListener(v -> refreshRemoteFiles(remoteCurrentPath));
-        pathRow.addView(refresh, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        pathRow.addView(refresh, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
         card.addView(pathRow, blockParams(dp(8)));
-        card.addView(remoteListStatusView(), blockParams(dp(4)));
+        if (shouldShowRemoteListStatus()) {
+            card.addView(remoteListStatusView(), blockParams(dp(4)));
+        }
 
-        if (remoteFiles.isEmpty()) {
+        boolean currentRoot = normalizeRemotePath(remoteCurrentPath).isEmpty();
+        if (remoteFiles.isEmpty() && currentRoot && !remoteCurrentPathMissing) {
             card.addView(text(getString(R.string.remote_list_waiting), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
             return card;
         }
 
         List<HttpReceiver.RemoteFile> visible = visibleRemoteFiles();
         LinearLayout list = column();
+        remoteFileCheckboxes.clear();
         if (!remoteCurrentPath.isEmpty()) {
             list.addView(parentDirectoryRow());
         }
-        if (visible.isEmpty()) {
-            list.addView(text(getString(R.string.folder_empty), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
+        if (remoteCurrentPathMissing) {
+            list.addView(text(getString(R.string.folder_missing), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
+        } else if (visible.isEmpty()) {
+            list.addView(text(currentRoot ? getString(R.string.toast_no_remote_files) : getString(R.string.folder_empty), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
         } else {
             for (HttpReceiver.RemoteFile file : visible) {
                 list.addView(remoteFileRow(file));
@@ -458,10 +605,53 @@ public final class MainActivity extends Activity {
         listScroll.setFillViewport(false);
         listScroll.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
         listScroll.addView(list, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340));
+        int rowCount = visible.size() + (remoteCurrentPath.isEmpty() ? 0 : 1) + (visible.isEmpty() || remoteCurrentPathMissing ? 1 : 0);
+        int listHeight = Math.min(dp(340), Math.max(dp(96), rowCount * dp(58) + dp(16)));
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight);
         listParams.setMargins(0, dp(8), 0, 0);
         card.addView(listScroll, listParams);
+        card.addView(remoteFilesSummaryView(), blockParams(dp(10)));
+        if (shouldShowDownloadProgress()) {
+            card.addView(receiveProgressContent(), blockParams(dp(8)));
+        }
+        card.addView(remoteDownloadActionBar(), blockParams(dp(10)));
         return card;
+    }
+
+    private View remoteDownloadActionBar() {
+        LinearLayout box = column();
+        box.setPadding(dp(10), dp(10), dp(10), dp(10));
+        box.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
+        box.addView(downloadModeToggle());
+
+        LinearLayout actions = row();
+        if (receiveDownload != null) {
+            Button stop = warningButton(getString(R.string.stop_download));
+            stop.setOnClickListener(v -> stopReceiveDownload());
+            stop.setOnTouchListener((v, event) -> {
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                    stopReceiveDownload();
+                    return true;
+                }
+                return false;
+            });
+            actions.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1));
+        } else {
+            Button selected = outlineButton(getString(R.string.download_selected));
+            downloadSelectedButton = selected;
+            boolean canDownloadSelected = canStartRemoteDownload() && !selectedRemotePaths.isEmpty();
+            setControlEnabled(selected, canDownloadSelected);
+            selected.setOnClickListener(v -> refreshAndStartDownload(new ArrayList<>(selectedRemotePaths)));
+
+            Button all = primaryButton(getString(R.string.receive_all));
+            setControlEnabled(all, canStartRemoteDownload());
+            all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths()));
+
+            actions.addView(selected, new LinearLayout.LayoutParams(0, dp(42), 1));
+            actions.addView(all, actionParams(dp(42)));
+        }
+        box.addView(actions, blockParams(dp(10)));
+        return box;
     }
 
     private View parentDirectoryRow() {
@@ -470,14 +660,20 @@ public final class MainActivity extends Activity {
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
 
+        TextView icon = text("\u21b0", 20, Color.rgb(32, 101, 165), Typeface.BOLD);
+        icon.setGravity(Gravity.CENTER);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(34), dp(42)));
+
         LinearLayout labels = column();
         TextView name = text(getString(R.string.parent_directory), 13, Color.rgb(32, 101, 165), Typeface.BOLD);
         labels.addView(name);
         labels.addView(text(parentPath(remoteCurrentPath).isEmpty() ? "/" : displayRemotePath(parentPath(remoteCurrentPath)), 12, muted(), Typeface.NORMAL));
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(text("\u203a", 22, muted(), Typeface.BOLD), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         row.setLayoutParams(blockParams(dp(6)));
+        setControlEnabled(row, canClickRemoteAction());
         row.setOnClickListener(v -> {
-            if (receiveDownload == null) {
+            if (canClickRemoteAction()) {
                 browseRemotePath(parentPath(remoteCurrentPath));
             }
         });
@@ -493,15 +689,27 @@ public final class MainActivity extends Activity {
 
         CheckBox checkBox = new CheckBox(this);
         checkBox.setChecked(selectedRemotePaths.contains(normalizedPath));
+        remoteFileCheckboxes.put(normalizedPath, checkBox);
+        setControlEnabled(checkBox, canClickRemoteAction());
         checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (updatingRemoteSelectionViews) {
+                return;
+            }
+            if (!canClickRemoteAction()) {
+                return;
+            }
             if (isChecked) {
                 selectedRemotePaths.add(normalizedPath);
             } else {
                 selectedRemotePaths.remove(normalizedPath);
             }
-            render();
+            updateRemoteSelectionViews();
         });
         row.addView(checkBox, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        TextView icon = text(file.isDir ? "\uD83D\uDCC1" : "\uD83D\uDCC4", 20, file.isDir ? Color.rgb(32, 101, 165) : muted(), Typeface.NORMAL);
+        icon.setGravity(Gravity.CENTER);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(34), dp(42)));
 
         LinearLayout labels = column();
         TextView name = text(baseName(normalizedPath), 13, file.isDir ? Color.rgb(32, 101, 165) : ink(), Typeface.BOLD);
@@ -509,13 +717,53 @@ public final class MainActivity extends Activity {
         labels.addView(name);
         labels.addView(text(file.isDir ? getString(R.string.folder) : formatBytes(file.size), 12, muted(), Typeface.NORMAL));
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (file.isDir) {
+            row.addView(text("\u203a", 22, Color.rgb(32, 101, 165), Typeface.BOLD), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
         row.setLayoutParams(blockParams(dp(6)));
+        setControlEnabled(row, canClickRemoteAction());
         row.setOnClickListener(v -> {
-            if (file.isDir && receiveDownload == null) {
+            if (file.isDir && canClickRemoteAction()) {
                 browseRemotePath(normalizedPath);
             }
         });
         return row;
+    }
+
+    private View remoteBreadcrumbView() {
+        LinearLayout crumbs = row();
+        crumbs.setGravity(Gravity.CENTER_VERTICAL);
+        String current = normalizeRemotePath(remoteCurrentPath);
+        addBreadcrumbPart(crumbs, "/", "");
+        if (!current.isEmpty()) {
+            StringBuilder path = new StringBuilder();
+            for (String part : current.split("/")) {
+                if (part.isEmpty()) {
+                    continue;
+                }
+                crumbs.addView(text("\u203a", 16, muted(), Typeface.BOLD));
+                if (path.length() > 0) {
+                    path.append('/');
+                }
+                path.append(part);
+                addBreadcrumbPart(crumbs, part, path.toString());
+            }
+        }
+        return crumbs;
+    }
+
+    private void addBreadcrumbPart(LinearLayout row, String label, String path) {
+        TextView part = text(label, 13, Color.rgb(32, 101, 165), Typeface.BOLD);
+        part.setSingleLine(true);
+        part.setPadding(dp(6), dp(6), dp(6), dp(6));
+        part.setBackground(rounded(Color.TRANSPARENT, dp(6), 0, 0));
+        setControlEnabled(part, canClickRemoteAction());
+        part.setOnClickListener(v -> {
+            if (canClickRemoteAction()) {
+                browseRemotePath(path);
+            }
+        });
+        row.addView(part, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private View receiveConnectionStatusView() {
@@ -526,13 +774,13 @@ public final class MainActivity extends Activity {
 
         View dot = new View(this);
         dot.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
+        receiveConnectionDotView = dot;
         box.addView(dot, new LinearLayout.LayoutParams(dp(12), dp(12)));
 
         LinearLayout labels = column();
-        labels.addView(text(receiveConnectionLabel(), 14, ink(), Typeface.BOLD));
-        TextView detail = text(receiveConnectionDetail(), 12, muted(), Typeface.NORMAL);
-        detail.setSingleLine(true);
-        labels.addView(detail);
+        TextView label = text(receiveConnectionLabel(), 14, ink(), Typeface.BOLD);
+        receiveConnectionLabelView = label;
+        labels.addView(label);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         labelParams.setMargins(dp(10), 0, 0, 0);
         box.addView(labels, labelParams);
@@ -544,11 +792,15 @@ public final class MainActivity extends Activity {
             return getString(R.string.connection_disconnected);
         }
         String state = receiveConnectionState();
+        String route = receiveRouteLabel();
         if ("failed".equals(state)) {
-            return getString(R.string.connection_failed);
+            return getString(R.string.connection_failed_retry);
         }
         if ("connected".equals(state)) {
-            return getString(R.string.connection_connected);
+            return appendRoute(getString(R.string.connection_connected), route);
+        }
+        if ("negotiating".equals(state)) {
+            return appendRoute(getString(R.string.connection_negotiating), route);
         }
         if ("waiting".equals(state)) {
             return getString(R.string.connection_waiting_peer);
@@ -556,17 +808,34 @@ public final class MainActivity extends Activity {
         return getString(R.string.connection_connecting);
     }
 
-    private String receiveConnectionDetail() {
-        if (receiveSession == null) {
-            return "-";
+    private String appendRoute(String label, String route) {
+        return route.isEmpty() ? label : label + " \u00b7 " + route;
+    }
+
+    private String receiveRouteLabel() {
+        return routeLabel(receiveMetrics.routeMode);
+    }
+
+    private String routeLabel(String mode) {
+        if (mode == null) {
+            return "";
         }
-        String peer = emptyDash(receiveMetrics.peer);
-        String address = "-".equals(peer) ? emptyDash(receiveEndpoint) : peer;
-        if ("-".equals(address)) {
-            return getString(R.string.connection_address_pending);
+        String clean = mode.trim();
+        if (clean.isEmpty() || "-".equals(clean)) {
+            return "";
         }
-        String network = emptyDash(receiveMetrics.network);
-        return "-".equals(network) ? address : network + "  " + address;
+        if ("relay".equals(clean.toLowerCase(Locale.ROOT))) {
+            return getString(R.string.route_relay);
+        }
+        if ("p2p".equals(clean.toLowerCase(Locale.ROOT))) {
+            return getString(R.string.route_direct);
+        }
+        return "";
+    }
+
+    private String displayRouteMetric(TransferMetrics metrics) {
+        String route = routeLabel(metrics.routeMode);
+        return route.isEmpty() ? "-" : route;
     }
 
     private int receiveConnectionColor() {
@@ -598,23 +867,116 @@ public final class MainActivity extends Activity {
         if ("connected".equals(clean)) {
             return "connected";
         }
-        if ("ready".equals(clean) || "idle".equals(clean) || "disconnected".equals(clean)) {
+        if ("negotiating".equals(clean)) {
+            return "negotiating";
+        }
+        if ("wait".equals(clean)
+                || "waiting".equals(clean)
+                || "ready".equals(clean)
+                || "idle".equals(clean)
+                || "disconnected".equals(clean)) {
             return "waiting";
         }
         return "connecting";
     }
 
     private View remoteFilesSummaryView() {
-        String summary = getString(R.string.files_summary, remoteFileCount, remoteDirCount, formatBytes(remoteTotalBytes), selectedRemotePaths.size());
-        TextView view = text(summary, 13, muted(), Typeface.BOLD);
-        view.setSingleLine(false);
-        return view;
+        LinearLayout box = column();
+        TextView selected = text(selectionSummaryText(), 14, ink(), Typeface.BOLD);
+        selected.setSingleLine(false);
+        remoteFilesSummaryTextView = selected;
+        box.addView(selected);
+
+        TextView total = text(remoteTotalSummaryText(), 12, muted(), Typeface.NORMAL);
+        total.setSingleLine(false);
+        remoteFilesTotalSummaryTextView = total;
+        box.addView(total, blockParams(dp(3)));
+        return box;
+    }
+
+    private void updateRemoteSelectionViews() {
+        updatingRemoteSelectionViews = true;
+        try {
+            for (Map.Entry<String, CheckBox> entry : remoteFileCheckboxes.entrySet()) {
+                entry.getValue().setChecked(selectedRemotePaths.contains(entry.getKey()));
+            }
+        } finally {
+            updatingRemoteSelectionViews = false;
+        }
+        if (remoteFilesSummaryTextView != null) {
+            remoteFilesSummaryTextView.setText(selectionSummaryText());
+        }
+        if (remoteFilesTotalSummaryTextView != null) {
+            remoteFilesTotalSummaryTextView.setText(remoteTotalSummaryText());
+        }
+        if (downloadSelectedButton != null) {
+            setControlEnabled(downloadSelectedButton, canStartRemoteDownload() && !selectedRemotePaths.isEmpty());
+        }
+    }
+
+    private String selectionSummaryText() {
+        SelectionSummary selected = selectedRemoteSummary();
+        return getString(R.string.selection_summary, selectedRemotePaths.size(), formatBytes(selected.bytes));
+    }
+
+    private String remoteTotalSummaryText() {
+        return getString(R.string.remote_total_summary, remoteFileCount, remoteDirCount, formatBytes(remoteTotalBytes));
+    }
+
+    private SelectionSummary selectedRemoteSummary() {
+        SelectionSummary summary = new SelectionSummary();
+        for (HttpReceiver.RemoteFile file : selectedRemoteFiles()) {
+            if (!file.isDir) {
+                summary.files++;
+                summary.bytes += Math.max(0, file.size);
+            }
+        }
+        return summary;
+    }
+
+    private boolean canStartRemoteDownload() {
+        return canClickRemoteAction()
+                && "connected".equals(receiveConnectionState())
+                && !remoteCurrentPathMissing
+                && !currentDirectoryFiles().isEmpty();
+    }
+
+    private boolean shouldShowDownloadProgress() {
+        return receiveDownload != null
+                || "Receive complete".equals(downloadStatus)
+                || "Receive failed".equals(downloadStatus);
+    }
+
+    private boolean shouldShowRemoteListStatus() {
+        if (isRemoteListBusy()) {
+            return true;
+        }
+        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
+        return "Remote list failed".equals(status)
+                || "Remote refresh failed".equals(status)
+                || "Failed".equals(status)
+                || "Remote path missing".equals(status);
     }
 
     private View remoteListStatusView() {
+        LinearLayout row = row();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        if (isRemoteListBusy()) {
+            ProgressBar spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
+            spinner.setIndeterminate(true);
+            LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(22), dp(22));
+            spinnerParams.setMargins(0, 0, dp(8), 0);
+            row.addView(spinner, spinnerParams);
+        }
         TextView view = text(displayRemoteListStatus(), 12, remoteListStatusColor(), Typeface.BOLD);
         view.setSingleLine(false);
-        return view;
+        row.addView(view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return row;
+    }
+
+    private boolean isRemoteListBusy() {
+        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
+        return status.startsWith("Fetching ") || "Refreshing remote file list".equals(status);
     }
 
     private String displayRemoteListStatus() {
@@ -640,6 +1002,9 @@ public final class MainActivity extends Activity {
         if ("No remote files".equals(status)) {
             return getString(R.string.toast_no_remote_files);
         }
+        if ("Remote path missing".equals(status)) {
+            return getString(R.string.folder_missing);
+        }
         if ("Remote list failed".equals(status) || "Remote refresh failed".equals(status) || "Failed".equals(status)) {
             return getString(R.string.remote_list_failed_status);
         }
@@ -654,7 +1019,7 @@ public final class MainActivity extends Activity {
         if ("Remote list ready".equals(status) || "Remote list refreshed".equals(status)) {
             return Color.rgb(15, 111, 83);
         }
-        if ("Remote list failed".equals(status) || "Remote refresh failed".equals(status) || "Failed".equals(status)) {
+        if ("Remote list failed".equals(status) || "Remote refresh failed".equals(status) || "Failed".equals(status) || "Remote path missing".equals(status)) {
             return Color.rgb(201, 63, 63);
         }
         if ("Waiting for peer".equals(status) || status.startsWith("Fetching ") || "Refreshing remote file list".equals(status)) {
@@ -690,11 +1055,13 @@ public final class MainActivity extends Activity {
     }
 
     private View downloadModeToggle() {
-        LinearLayout box = row();
-        box.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout box = column();
+        LinearLayout line = row();
+        line.setGravity(Gravity.CENTER_VERTICAL);
         TextView label = text(getString(R.string.mode), 12, muted(), Typeface.BOLD);
-        box.addView(label, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
+        line.addView(label, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
         Button resume = segmentedButton(getString(R.string.resume), resumeDownloads);
+        setControlEnabled(resume, receiveDownload == null);
         resume.setOnClickListener(v -> {
             if (receiveDownload == null) {
                 resumeDownloads = true;
@@ -702,6 +1069,7 @@ public final class MainActivity extends Activity {
             }
         });
         Button overwrite = segmentedButton(getString(R.string.overwrite), !resumeDownloads);
+        setControlEnabled(overwrite, receiveDownload == null);
         overwrite.setOnClickListener(v -> {
             if (receiveDownload == null) {
                 resumeDownloads = false;
@@ -710,8 +1078,10 @@ public final class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(30), 1);
         params.setMargins(dp(8), 0, 0, 0);
-        box.addView(resume, params);
-        box.addView(overwrite, actionParams(dp(30)));
+        line.addView(resume, params);
+        line.addView(overwrite, actionParams(dp(30)));
+        box.addView(line);
+        box.addView(text(getString(R.string.resume_overwrite_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
         return box;
     }
 
@@ -729,6 +1099,9 @@ public final class MainActivity extends Activity {
     }
 
     private void browseRemotePath(String path) {
+        if (!canClickRemoteAction()) {
+            return;
+        }
         remoteCurrentPath = normalizeRemotePath(path);
         remoteListStatus = remoteFiles.isEmpty() ? "No remote files" : "Remote list ready";
         render();
@@ -761,6 +1134,25 @@ public final class MainActivity extends Activity {
             }
         }
         return false;
+    }
+
+    private void selectVisibleRemoteFiles() {
+        for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
+            selectedRemotePaths.add(normalizeRemotePath(file.path));
+        }
+        updateRemoteSelectionViews();
+    }
+
+    private void invertVisibleRemoteFiles() {
+        for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
+            String path = normalizeRemotePath(file.path);
+            if (selectedRemotePaths.contains(path)) {
+                selectedRemotePaths.remove(path);
+            } else {
+                selectedRemotePaths.add(path);
+            }
+        }
+        updateRemoteSelectionViews();
     }
 
     private List<HttpReceiver.RemoteFile> currentDirectoryFiles() {
@@ -854,10 +1246,10 @@ public final class MainActivity extends Activity {
         return ".".equals(clean) ? "" : clean;
     }
 
-    private View passwordField(String label, boolean sender) {
+    private View passwordField(boolean sender) {
         boolean locked = isPasswordLocked(sender);
         LinearLayout box = column();
-        box.addView(text(label, 13, Color.rgb(64, 81, 105), Typeface.BOLD));
+        box.addView(text(getString(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
 
         LinearLayout line = row();
         EditText input = new EditText(this);
@@ -865,6 +1257,8 @@ public final class MainActivity extends Activity {
         input.setText(passwordFor(sender));
         input.setTextColor(ink());
         input.setTextSize(15);
+        input.setHint(getString(R.string.passphrase_input_hint));
+        input.setHintTextColor(Color.rgb(148, 163, 184));
         input.setPadding(dp(12), 0, dp(12), 0);
         input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
         input.setEnabled(!locked);
@@ -894,21 +1288,15 @@ public final class MainActivity extends Activity {
 
         LinearLayout actions = row();
         if (sender) {
-            Button change = secondaryButton(getString(R.string.change));
-            change.setEnabled(!locked);
+            Button change = secondaryButton(getString(R.string.random_passphrase));
+            setControlEnabled(change, !locked);
             change.setOnClickListener(v -> {
-                if (isPasswordLocked(true)) {
-                    return;
-                }
-                setPassword(true, Passwords.generate());
-                revealPasswordTemporarily(true);
-                appendLog("info", "Passphrase changed");
-                render();
+                randomizePassword(true);
             });
             Button copy = secondaryButton(getString(R.string.copy));
             copy.setOnClickListener(v -> copyPassword(true));
             Button scan = secondaryButton(getString(R.string.scan));
-            scan.setEnabled(!locked);
+            setControlEnabled(scan, !locked);
             scan.setOnClickListener(v -> scanPassword(true));
             Button qr = secondaryButton(getString(R.string.qr));
             qr.setOnClickListener(v -> showPasswordQr(true));
@@ -917,15 +1305,19 @@ public final class MainActivity extends Activity {
             actions.addView(scan, actionParams());
             actions.addView(qr, actionParams());
         } else {
+            Button random = secondaryButton(getString(R.string.random_passphrase));
+            setControlEnabled(random, !locked);
+            random.setOnClickListener(v -> randomizePassword(false));
             Button paste = secondaryButton(getString(R.string.paste));
-            paste.setEnabled(!locked);
+            setControlEnabled(paste, !locked);
             paste.setOnClickListener(v -> pastePassword(false));
             Button scan = secondaryButton(getString(R.string.scan));
-            scan.setEnabled(!locked);
+            setControlEnabled(scan, !locked);
             scan.setOnClickListener(v -> scanPassword(false));
             Button qr = secondaryButton(getString(R.string.qr));
             qr.setOnClickListener(v -> showPasswordQr(false));
-            actions.addView(paste, new LinearLayout.LayoutParams(0, dp(40), 1));
+            actions.addView(random, new LinearLayout.LayoutParams(0, dp(40), 1));
+            actions.addView(paste, actionParams());
             actions.addView(scan, actionParams());
             actions.addView(qr, actionParams());
         }
@@ -1005,25 +1397,52 @@ public final class MainActivity extends Activity {
         bumpPasswordVisibilityToken(sender);
     }
 
-    private View protocolToggle() {
+    private void randomizePassword(boolean sender) {
+        if (isPasswordLocked(sender)) {
+            return;
+        }
+        setPassword(sender, Passwords.generate());
+        revealPasswordTemporarily(sender);
+        appendLog("info", "Passphrase randomized");
+        render();
+    }
+
+    private View protocolToggle(boolean sender) {
+        LinearLayout box = column();
         CheckBox checkBox = new CheckBox(this);
         checkBox.setText(getString(R.string.use_udp_protocol));
         checkBox.setTextColor(Color.rgb(64, 81, 105));
         checkBox.setTextSize(14);
         checkBox.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        checkBox.setChecked(useUdp);
-        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> useUdp = isChecked);
-        return checkBox;
+        checkBox.setChecked(sender ? sendUseUdp : receiveUseUdp);
+        setControlEnabled(checkBox, !isPasswordLocked(sender));
+        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (isPasswordLocked(sender)) {
+                return;
+            }
+            if (sender) {
+                sendUseUdp = isChecked;
+            } else {
+                receiveUseUdp = isChecked;
+            }
+        });
+        box.addView(checkBox);
+        TextView hint = text(getString(R.string.use_udp_protocol_hint), 12, muted(), Typeface.NORMAL);
+        hint.setPadding(dp(4), 0, 0, 0);
+        box.addView(hint);
+        return box;
     }
 
     private View fileRow(ShareItem item) {
-        LinearLayout row = column();
+        LinearLayout row = row();
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(9), dp(12), dp(9));
         row.setBackground(rounded(Color.rgb(251, 253, 255), dp(7), Color.rgb(226, 232, 240), 1));
 
+        LinearLayout labels = column();
         TextView name = text(item.displayName(), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
         name.setSingleLine(true);
-        row.addView(name);
+        labels.addView(name);
 
         String detail;
         if (item.isDirectory()) {
@@ -1032,7 +1451,17 @@ public final class MainActivity extends Activity {
             String size = item.size() >= 0 ? formatBytes(item.size()) : getString(R.string.unknown_size);
             detail = size + "  " + item.mimeType();
         }
-        row.addView(text(detail, 12, muted(), Typeface.NORMAL));
+        labels.addView(text(detail, 12, muted(), Typeface.NORMAL));
+        row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        Button remove = ghostButton(getString(R.string.remove));
+        remove.setOnClickListener(v -> {
+            shareItems.remove(item);
+            syncShareSource();
+            appendLog("info", "Removed shared item: " + item.displayName());
+            render();
+        });
+        row.addView(remove, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
         row.setLayoutParams(blockParams(dp(8)));
         return row;
     }
@@ -1060,10 +1489,14 @@ public final class MainActivity extends Activity {
         card.addView(title);
 
         if (!activityExpanded) {
+            clearActivityMetricRefs();
             String summary = activitySummary(currentMetrics());
-            card.addView(text(summary, 13, muted(), Typeface.BOLD), blockParams(dp(8)));
+            TextView summaryView = text(summary, 13, muted(), Typeface.BOLD);
+            activitySummaryTextView = summaryView;
+            card.addView(summaryView, blockParams(dp(8)));
             return card;
         }
+        activitySummaryTextView = null;
 
         card.addView(activityMetrics(), blockParams(dp(8)));
 
@@ -1088,31 +1521,103 @@ public final class MainActivity extends Activity {
 
     private View activityMetrics() {
         TransferMetrics metrics = currentMetrics();
+        clearActivityMetricRefs();
         LinearLayout box = column();
         LinearLayout row1 = row();
-        row1.addView(metricBox(getString(R.string.p2p_status), displayStatusLabel(displayStatus(metrics))), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        row1.addView(metricBox(getString(R.string.speed), formatRate(currentSpeed(metrics))), metricParams());
+        row1.addView(metricBox(getString(R.string.p2p_status), displayStatusLabel(displayStatus(metrics)), METRIC_REF_P2P_STATUS), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row1.addView(metricBox(getString(R.string.speed), formatRate(currentSpeed(metrics)), METRIC_REF_SPEED), metricParams());
         box.addView(row1);
 
         LinearLayout row2 = row();
         if (sendMode) {
-            row2.addView(metricBox(getString(R.string.connections), String.valueOf(metrics.connectedCount)), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            row2.addView(metricBox(getString(R.string.network), emptyDash(metrics.network)), metricParams());
+            row2.addView(metricBox(getString(R.string.connections), String.valueOf(metrics.connectedCount), METRIC_REF_CONNECTIONS), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row2.addView(metricBox(getString(R.string.network), emptyDash(metrics.network), METRIC_REF_NETWORK), metricParams());
         } else {
-            row2.addView(metricBox(getString(R.string.network), emptyDash(metrics.network)), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row2.addView(metricBox(getString(R.string.network), emptyDash(metrics.network), METRIC_REF_NETWORK), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row2.addView(metricBox(getString(R.string.connection_route), displayRouteMetric(metrics), METRIC_REF_ROUTE), metricParams());
         }
         box.addView(row2, blockParams(dp(8)));
-        box.addView(metricBox(getString(R.string.peer), emptyDash(metrics.peer)), blockParams(dp(8)));
+        box.addView(metricBox(getString(R.string.peer), emptyDash(metrics.peer), METRIC_REF_PEER), blockParams(dp(8)));
         if (!receiveEndpoint.trim().isEmpty()) {
-            box.addView(metricBox(getString(R.string.file_endpoint), receiveEndpoint), blockParams(dp(8)));
+            box.addView(metricBox(getString(R.string.file_endpoint), receiveEndpoint, METRIC_REF_ENDPOINT), blockParams(dp(8)));
         }
         return box;
+    }
+
+    private void bindMetricRef(int ref, TextView view) {
+        if (ref == METRIC_REF_P2P_STATUS) {
+            activityP2PStatusValueView = view;
+        } else if (ref == METRIC_REF_SPEED) {
+            activitySpeedValueView = view;
+        } else if (ref == METRIC_REF_CONNECTIONS) {
+            activityConnectionsValueView = view;
+        } else if (ref == METRIC_REF_NETWORK) {
+            activityNetworkValueView = view;
+        } else if (ref == METRIC_REF_ROUTE) {
+            activityRouteValueView = view;
+        } else if (ref == METRIC_REF_PEER) {
+            activityPeerValueView = view;
+        } else if (ref == METRIC_REF_ENDPOINT) {
+            activityEndpointValueView = view;
+        }
+    }
+
+    private void clearActivityMetricRefs() {
+        activityP2PStatusValueView = null;
+        activitySpeedValueView = null;
+        activityConnectionsValueView = null;
+        activityNetworkValueView = null;
+        activityRouteValueView = null;
+        activityPeerValueView = null;
+        activityEndpointValueView = null;
+    }
+
+    private void updateActivityMetricViews() {
+        TransferMetrics metrics = currentMetrics();
+        if (activityP2PStatusValueView != null) {
+            activityP2PStatusValueView.setText(displayStatusLabel(displayStatus(metrics)));
+        }
+        if (activitySpeedValueView != null) {
+            activitySpeedValueView.setText(formatRate(currentSpeed(metrics)));
+        }
+        if (activityConnectionsValueView != null) {
+            activityConnectionsValueView.setText(String.valueOf(metrics.connectedCount));
+        }
+        if (activityNetworkValueView != null) {
+            activityNetworkValueView.setText(emptyDash(metrics.network));
+        }
+        if (activityRouteValueView != null) {
+            activityRouteValueView.setText(displayRouteMetric(metrics));
+        }
+        if (activityPeerValueView != null) {
+            activityPeerValueView.setText(emptyDash(metrics.peer));
+        }
+        if (activityEndpointValueView != null) {
+            activityEndpointValueView.setText(receiveEndpoint);
+        }
     }
 
     private TextView sectionTitle(String title) {
         TextView view = text(title, 16, ink(), Typeface.BOLD);
         view.setPadding(0, 0, 0, dp(10));
         return view;
+    }
+
+    private View sectionBoundaryTitle(String title, boolean separated) {
+        LinearLayout box = column();
+        if (separated) {
+            box.addView(sectionDivider(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        }
+        TextView view = text(title, 13, Color.rgb(64, 81, 105), Typeface.BOLD);
+        view.setPadding(0, separated ? dp(12) : 0, 0, dp(2));
+        box.addView(view);
+        return box;
+    }
+
+    private View sectionDivider() {
+        View line = new View(this);
+        line.setBackgroundColor(Color.rgb(226, 232, 240));
+        return line;
     }
 
     private void openDocumentPicker() {
@@ -1150,20 +1655,16 @@ public final class MainActivity extends Activity {
         sendMetrics.reset();
         sendStatus = "Preparing";
         appendLog("info", "Start sharing requested");
-        render();
         long runId = ++sendRunId;
-        sendSession = bridge.startP2PShare(this, shareItems, passphrase, useUdp, callback(true, runId));
+        sendSession = bridge.startP2PShare(this, shareItems, passphrase, sendUseUdp, callback(true, runId));
         updateKeepScreenOn();
+        render();
     }
 
     private void startP2PReceive() {
         String passphrase = receivePassword.trim();
         if (passphrase.isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (saveTreeUri == null) {
-            Toast.makeText(this, R.string.toast_choose_save_location, Toast.LENGTH_SHORT).show();
             return;
         }
         hidePassword(false);
@@ -1174,11 +1675,15 @@ public final class MainActivity extends Activity {
         downloadTotalFiles = 0;
         downloadDoneBytes = 0;
         downloadTotalBytes = 0;
+        downloadNetworkBytes = 0;
         downloadBytesPerSecond = 0;
         downloadSkippedFiles = 0;
         downloadResumedFiles = 0;
+        downloadStartedAtMs = 0;
+        downloadFinishedAtMs = 0;
         receiveEndpoint = "";
         remoteCurrentPath = "";
+        remoteCurrentPathMissing = false;
         remoteFiles.clear();
         selectedRemotePaths.clear();
         remoteFileCount = 0;
@@ -1186,10 +1691,10 @@ public final class MainActivity extends Activity {
         remoteTotalBytes = 0;
         receiveStatus = "Preparing";
         appendLog("info", "Start receiving requested");
-        render();
         long runId = ++receiveRunId;
-        receiveSession = bridge.startP2PReceive(this, passphrase, useUdp, callback(false, runId));
+        receiveSession = bridge.startP2PReceive(this, passphrase, receiveUseUdp, callback(false, runId));
         updateKeepScreenOn();
+        render();
     }
 
     private GoncBridge.EventCallback callback(boolean forSendMode, long runId) {
@@ -1202,7 +1707,7 @@ public final class MainActivity extends Activity {
                     }
                     updateMetricsFromLog(forSendMode, message);
                     appendLog(level, message);
-                    render();
+                    renderAfterBackgroundUpdate();
                 });
             }
 
@@ -1213,7 +1718,7 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     updateMetricsFromReport(forSendMode, topic, status, network, mode, peer);
-                    render();
+                    renderAfterBackgroundUpdate();
                 });
             }
 
@@ -1332,6 +1837,7 @@ public final class MainActivity extends Activity {
         receiveEndpoint = endpoint;
         remoteListStatus = "Fetching " + displayRemotePath(targetPath);
         remoteCurrentPath = targetPath;
+        remoteCurrentPathMissing = false;
         if (replaceAll) {
             remoteFiles.clear();
             remoteFileCount = 0;
@@ -1343,12 +1849,13 @@ public final class MainActivity extends Activity {
         }
         remoteListSession = HttpReceiver.startList(endpoint, targetPath, new HttpReceiver.ListCallback() {
             @Override
-            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes) {
+            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
                 mainHandler.post(() -> {
                     if (!isCurrentRun(false, runId)) {
                         return;
                     }
                     remoteListSession = null;
+                    remoteCurrentPathMissing = missing && !targetPath.isEmpty();
                     if (replaceAll) {
                         remoteFiles.clear();
                         remoteFiles.addAll(files);
@@ -1358,11 +1865,12 @@ public final class MainActivity extends Activity {
                         mergeRemoteFiles(refreshedPaths, files);
                     }
                     recalculateRemoteFileSummary();
-                    remoteListStatus = files.isEmpty() ? "No remote files" : (replaceAll ? "Remote list ready" : "Remote list refreshed");
+                    remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : (replaceAll ? "Remote list ready" : "Remote list refreshed"));
                     updateKeepScreenOn();
-                    appendLog("info", "Remote list ready " + displayRemotePath(targetPath) + ": " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
-                    if (!replaceAll) {
-                        Toast.makeText(MainActivity.this, R.string.toast_remote_refresh_complete, Toast.LENGTH_SHORT).show();
+                    if (remoteCurrentPathMissing) {
+                        appendLog("warn", "Remote path missing " + displayRemotePath(targetPath));
+                    } else {
+                        appendLog("info", "Remote list ready " + displayRemotePath(targetPath) + ": " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
                     }
                     render();
                 });
@@ -1384,6 +1892,7 @@ public final class MainActivity extends Activity {
             }
         });
         updateKeepScreenOn();
+        render();
     }
 
     private void mergeRemoteFiles(List<String> refreshedPaths, List<HttpReceiver.RemoteFile> freshFiles) {
@@ -1445,13 +1954,11 @@ public final class MainActivity extends Activity {
             render();
             return;
         }
-        if (saveTreeUri == null) {
-            appendLog("warn", "Save location is not selected");
-            Toast.makeText(this, R.string.toast_choose_save_location, Toast.LENGTH_SHORT).show();
-            return;
-        }
         if (paths == null || paths.isEmpty()) {
             Toast.makeText(this, R.string.toast_select_download_files, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!ensureDefaultSavePermission()) {
             return;
         }
         if (currentDirectoryFiles().isEmpty() && paths.size() == 1 && normalizeRemotePath(paths.get(0)).equals(normalizeRemotePath(remoteCurrentPath))) {
@@ -1469,7 +1976,7 @@ public final class MainActivity extends Activity {
         downloadStatus = "Preparing download";
         remoteListSession = HttpReceiver.startList(receiveEndpoint, normalizedPaths, new HttpReceiver.ListCallback() {
             @Override
-            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes) {
+            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
                 mainHandler.post(() -> {
                     if (!isCurrentRun(false, receiveRunId)) {
                         return;
@@ -1477,7 +1984,8 @@ public final class MainActivity extends Activity {
                     remoteListSession = null;
                     mergeRemoteFiles(normalizedPaths, files);
                     recalculateRemoteFileSummary();
-                    remoteListStatus = files.isEmpty() ? "No remote files" : "Remote list refreshed";
+                    remoteCurrentPathMissing = missing && normalizedPaths.size() == 1 && normalizeRemotePath(remoteCurrentPath).equals(normalizedPaths.get(0)) && !remoteCurrentPath.isEmpty();
+                    remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : "Remote list refreshed");
                     updateKeepScreenOn();
                     if (files.isEmpty()) {
                         downloadStatus = "Idle";
@@ -1515,12 +2023,11 @@ public final class MainActivity extends Activity {
         if (endpoint == null || !endpoint.startsWith("http://")) {
             return;
         }
-        if (saveTreeUri == null) {
-            appendLog("warn", "Save location is not selected");
-            return;
-        }
         if (files == null || files.isEmpty()) {
             Toast.makeText(this, R.string.toast_select_download_files, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!ensureDefaultSavePermission()) {
             return;
         }
         if (receiveDownload != null) {
@@ -1532,35 +2039,25 @@ public final class MainActivity extends Activity {
         downloadTotalFiles = 0;
         downloadDoneBytes = 0;
         downloadTotalBytes = 0;
+        downloadNetworkBytes = 0;
         downloadBytesPerSecond = 0;
         downloadSkippedFiles = 0;
         downloadResumedFiles = 0;
+        downloadStartedAtMs = System.currentTimeMillis();
+        downloadFinishedAtMs = 0;
         receiveDownload = HttpReceiver.start(this, endpoint, saveTreeUri, files, resumeDownloads, new HttpReceiver.Callback() {
             @Override
-            public void onProgress(int doneFiles, int totalFiles, long doneBytes, long totalBytes, double bytesPerSecond, String current) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(false, runId)) {
-                        return;
-                    }
-                    if (receiveDownload == null) {
-                        return;
-                    }
-                    downloadDoneFiles = doneFiles;
-                    downloadTotalFiles = totalFiles;
-                    downloadDoneBytes = doneBytes;
-                    downloadTotalBytes = totalBytes;
-                    downloadBytesPerSecond = bytesPerSecond;
-                    receiveMetrics.inBps = bytesPerSecond;
-                    receiveMetrics.lastTrafficMs = System.currentTimeMillis();
-                    downloadStatus = current == null || current.trim().isEmpty() ? "Preparing download" : "Receiving " + current;
-                    render();
-                });
+            public void onProgress(int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
+                queueDownloadProgress(runId, doneFiles, totalFiles, doneBytes, totalBytes, networkBytes, bytesPerSecond, current);
             }
 
             @Override
-            public void onComplete(int totalFiles, long totalBytes, int skippedFiles, int resumedFiles) {
+            public void onComplete(int totalFiles, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles) {
                 mainHandler.post(() -> {
                     if (!isCurrentRun(false, runId)) {
+                        return;
+                    }
+                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
                         return;
                     }
                     receiveDownload = null;
@@ -1568,7 +2065,9 @@ public final class MainActivity extends Activity {
                     downloadTotalFiles = totalFiles;
                     downloadDoneBytes = totalBytes;
                     downloadTotalBytes = totalBytes;
+                    downloadNetworkBytes = networkBytes;
                     downloadBytesPerSecond = 0;
+                    downloadFinishedAtMs = System.currentTimeMillis();
                     downloadSkippedFiles = skippedFiles;
                     downloadResumedFiles = resumedFiles;
                     receiveMetrics.inBps = 0;
@@ -1587,6 +2086,9 @@ public final class MainActivity extends Activity {
                     if (!isCurrentRun(false, runId)) {
                         return;
                     }
+                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
+                        return;
+                    }
                     receiveDownload = null;
                     downloadStatus = "Receive failed";
                     downloadBytesPerSecond = 0;
@@ -1602,12 +2104,61 @@ public final class MainActivity extends Activity {
         updateKeepScreenOn();
     }
 
+    private void queueDownloadProgress(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
+        synchronized (downloadProgressLock) {
+            pendingDownloadProgress = new DownloadProgressSnapshot(runId, doneFiles, totalFiles, doneBytes, totalBytes, networkBytes, bytesPerSecond, current);
+            if (downloadProgressApplyPending) {
+                return;
+            }
+            downloadProgressApplyPending = true;
+        }
+        mainHandler.post(this::applyLatestDownloadProgress);
+    }
+
+    private void applyLatestDownloadProgress() {
+        DownloadProgressSnapshot progress;
+        synchronized (downloadProgressLock) {
+            progress = pendingDownloadProgress;
+            pendingDownloadProgress = null;
+            downloadProgressApplyPending = false;
+        }
+        if (progress == null || !isCurrentRun(false, progress.runId) || receiveDownload == null) {
+            return;
+        }
+        downloadDoneFiles = progress.doneFiles;
+        downloadTotalFiles = progress.totalFiles;
+        downloadDoneBytes = progress.doneBytes;
+        downloadTotalBytes = progress.totalBytes;
+        downloadNetworkBytes = progress.networkBytes;
+        downloadBytesPerSecond = progress.bytesPerSecond;
+        receiveMetrics.inBps = progress.bytesPerSecond;
+        receiveMetrics.lastTrafficMs = System.currentTimeMillis();
+        downloadStatus = progress.current == null || progress.current.trim().isEmpty() ? "Preparing download" : "Receiving " + progress.current;
+        renderDownloadProgress();
+    }
+
+    private boolean ensureDefaultSavePermission() {
+        if (saveTreeUri != null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return true;
+        }
+        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE_PERMISSION);
+        return false;
+    }
+
     private void stopReceiveDownload() {
         if (receiveDownload != null) {
             receiveDownload.stop();
             receiveDownload = null;
         }
+        synchronized (downloadProgressLock) {
+            pendingDownloadProgress = null;
+            downloadProgressApplyPending = false;
+        }
         downloadStatus = "Stopped";
+        downloadFinishedAtMs = System.currentTimeMillis();
         downloadBytesPerSecond = 0;
         receiveMetrics.inBps = 0;
         receiveMetrics.outBps = 0;
@@ -1688,7 +2239,16 @@ public final class MainActivity extends Activity {
             image.setImageBitmap(bitmap);
             image.setAdjustViewBounds(true);
             image.setBackgroundColor(Color.WHITE);
+            image.setLongClickable(true);
+            image.setOnLongClickListener(v -> {
+                copyPassphraseFromQrDialog(passphrase);
+                return true;
+            });
             box.addView(image, blockParams(dp(12)));
+
+            TextView hint = text(getString(R.string.passphrase_qr_copy_hint), 12, muted(), Typeface.NORMAL);
+            hint.setGravity(Gravity.CENTER);
+            box.addView(hint, blockParams(dp(4)));
 
             TextView value = text(passphrase, 14, ink(), Typeface.BOLD);
             value.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
@@ -1697,6 +2257,11 @@ public final class MainActivity extends Activity {
             value.setSingleLine(false);
             value.setPadding(dp(10), dp(8), dp(10), dp(8));
             value.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
+            value.setLongClickable(true);
+            value.setOnLongClickListener(v -> {
+                copyPassphraseFromQrDialog(passphrase);
+                return true;
+            });
             box.addView(value, blockParams(dp(8)));
 
             Button close = secondaryButton(getString(R.string.close));
@@ -1710,6 +2275,12 @@ public final class MainActivity extends Activity {
             appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
             render();
         }
+    }
+
+    private void copyPassphraseFromQrDialog(String passphrase) {
+        copyText("Gonc passphrase", passphrase);
+        appendLog("info", "Passphrase copied");
+        Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
     }
 
     private void showSourceDialog() {
@@ -1824,11 +2395,40 @@ public final class MainActivity extends Activity {
         if ("idle".equals(state)) {
             state = currentStatus();
         }
-        state = displayStatusLabel(state);
+        String speed = getString(R.string.activity_summary_speed, formatRate(currentSpeed(metrics)));
         if (!sendMode) {
-            return state + "  " + formatRate(currentSpeed(metrics));
+            return activityStateLabel(state, metrics) + " | " + speed;
         }
-        return state + "  " + metrics.connectedCount + " conn  " + formatRate(currentSpeed(metrics));
+        return activityStateLabel(state, metrics)
+                + " | "
+                + getString(R.string.activity_summary_connected, metrics.connectedCount)
+                + " | "
+                + speed;
+    }
+
+    private String activityStateLabel(String state, TransferMetrics metrics) {
+        if (state == null) {
+            return getString(R.string.activity_state_waiting_connection);
+        }
+        String clean = state.trim();
+        if ("wait".equals(clean)
+                || "waiting".equals(clean)
+                || "ready".equals(clean)
+                || "Ready".equals(clean)
+                || "starting".equals(clean)
+                || "Preparing".equals(clean)) {
+            return getString(R.string.activity_state_waiting_connection);
+        }
+        if ("connecting".equals(clean)) {
+            return getString(R.string.activity_state_new_connection);
+        }
+        if ("negotiating".equals(clean)) {
+            return getString(R.string.activity_state_negotiating);
+        }
+        if ("connected".equals(clean)) {
+            return getString(R.string.activity_state_connection_success);
+        }
+        return displayStatusLabel(clean);
     }
 
     private void setStatus(boolean forSendMode, String nextStatus) {
@@ -1872,9 +2472,7 @@ public final class MainActivity extends Activity {
 
     private void updateMetricsReady(boolean forSendMode, String endpoint) {
         TransferMetrics metrics = currentMetrics(forSendMode);
-        if (!metrics.p2pStatus.equals("connected")) {
-            metrics.p2pStatus = "ready";
-        }
+        metrics.p2pStatus = "connected";
     }
 
     private void updateMetricsFromReport(boolean forSendMode, String topic, String status, String network, String mode, String peer) {
@@ -1882,18 +2480,32 @@ public final class MainActivity extends Activity {
         if (status != null && !status.trim().isEmpty()) {
             metrics.p2pStatus = status.trim();
         }
+        if (isRouteMode(mode)) {
+            metrics.routeMode = mode.trim();
+        }
         if (network != null && !network.trim().isEmpty()) {
             metrics.network = network.trim();
         }
         if (peer != null && !peer.trim().isEmpty()) {
             metrics.peer = peer.trim();
         }
+        String normalized = normalizeMetricStatus(status);
         String key = topic != null && !topic.trim().isEmpty() ? topic.trim() : emptyDash(peer);
         if ("-".equals(key)) {
             key = mode != null && !mode.trim().isEmpty() ? mode.trim() : "default";
         }
-        metrics.sessions.put(key, normalizeMetricStatus(status));
+        if (!"wait".equals(normalized)) {
+            metrics.sessions.put(key, normalized);
+        }
         metrics.recountConnections();
+    }
+
+    private boolean isRouteMode(String mode) {
+        if (mode == null) {
+            return false;
+        }
+        String clean = mode.trim().toLowerCase(Locale.ROOT);
+        return "p2p".equals(clean) || "relay".equals(clean);
     }
 
     private String normalizeMetricStatus(String status) {
@@ -1915,17 +2527,22 @@ public final class MainActivity extends Activity {
         if (compact.contains("Trying P2P Connection") || compact.contains("Exchanging sync message")) {
             metrics.p2pStatus = "connecting";
         } else if (compact.contains("P2P(") && compact.contains("connection established")) {
-            metrics.p2pStatus = "connected";
+            metrics.p2pStatus = "negotiating";
             if (compact.contains("P2P(TCP)")) {
                 metrics.network = "TCP";
             } else if (compact.contains("P2P(UDP)")) {
                 metrics.network = "UDP";
             }
-            metrics.connectedCount = Math.max(metrics.connectedCount, 1);
         } else if (compact.contains("P2P failed") || compact.contains("hole punching failed")) {
             metrics.p2pStatus = "failed";
-        } else if (compact.contains("P2P stopped") || compact.contains("disconnected")) {
+        } else if (compact.contains("P2P stopped")) {
             metrics.markStopped();
+        } else if (compact.contains("disconnected")) {
+            if (metrics.connectedCount <= 1) {
+                metrics.markStopped();
+            } else {
+                metrics.p2pStatus = "disconnected";
+            }
         }
     }
 
@@ -1954,6 +2571,14 @@ public final class MainActivity extends Activity {
     }
 
     private String displayStatus(TransferMetrics metrics) {
+        String status = normalizeMetricStatus(metrics.p2pStatus);
+        if ("negotiating".equals(status)
+                || "connected".equals(status)
+                || "failed".equals(status)
+                || "error".equals(status)
+                || "disconnected".equals(status)) {
+            return status;
+        }
         if (metrics.connectingCount > 0 && metrics.connectedCount == 0) {
             return "connecting";
         }
@@ -1982,6 +2607,12 @@ public final class MainActivity extends Activity {
         }
         if ("connecting".equals(clean)) {
             return getString(R.string.status_connecting);
+        }
+        if ("negotiating".equals(clean)) {
+            return getString(R.string.status_negotiating);
+        }
+        if ("wait".equals(clean) || "waiting".equals(clean)) {
+            return getString(R.string.status_waiting_for_peer);
         }
         if ("connected".equals(clean)) {
             return getString(R.string.status_connected);
@@ -2067,6 +2698,7 @@ public final class MainActivity extends Activity {
         }
         shareItems.clear();
         shareItems.addAll(existing.values());
+        syncShareSource();
     }
 
     private void addTreeUri(Uri uri, Intent sourceIntent) {
@@ -2078,7 +2710,14 @@ public final class MainActivity extends Activity {
         existing.put(uri.toString(), loadTreeShareItem(uri));
         shareItems.clear();
         shareItems.addAll(existing.values());
+        syncShareSource();
         appendLog("info", "Shared folder added: " + shareItems.get(shareItems.size() - 1).displayName());
+    }
+
+    private void syncShareSource() {
+        if (sendSession != null) {
+            sendSession.updateShareItems(shareItems);
+        }
     }
 
     private ShareItem loadShareItem(Uri uri) {
@@ -2190,8 +2829,25 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private Button outlineButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(16);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        button.setTextColor(Color.rgb(40, 112, 216));
+        button.setBackground(rounded(Color.TRANSPARENT, dp(6), Color.rgb(40, 112, 216), 1));
+        return button;
+    }
+
     private Button dangerButton(String label) {
         Button button = button(label, Color.WHITE, Color.rgb(201, 63, 63));
+        button.setTextSize(16);
+        return button;
+    }
+
+    private Button warningButton(String label) {
+        Button button = button(label, Color.WHITE, Color.rgb(217, 119, 6));
         button.setTextSize(16);
         return button;
     }
@@ -2204,6 +2860,16 @@ public final class MainActivity extends Activity {
         return button(label, Color.rgb(40, 112, 216), Color.TRANSPARENT);
     }
 
+    private Button quietTouchButton(String label) {
+        Button button = ghostButton(label);
+        button.setMinWidth(dp(56));
+        button.setMinimumWidth(dp(56));
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
+        button.setPadding(dp(8), 0, dp(8), 0);
+        return button;
+    }
+
     private Button button(String label, int color, int background) {
         Button button = new Button(this);
         button.setText(label);
@@ -2213,6 +2879,11 @@ public final class MainActivity extends Activity {
         button.setTextColor(color);
         button.setBackground(rounded(background, dp(6), 0, 0));
         return button;
+    }
+
+    private void setControlEnabled(View view, boolean enabled) {
+        view.setEnabled(enabled);
+        view.setAlpha(enabled ? 1.0f : 0.45f);
     }
 
     private TextView text(String value, int sp, int color, int style) {
@@ -2252,6 +2923,15 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, topMargin, 0, 0);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams dividerParams(int topMargin) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(1)
         );
         params.setMargins(0, topMargin, 0, 0);
         return params;
@@ -2331,6 +3011,99 @@ public final class MainActivity extends Activity {
         return String.format(Locale.ROOT, "%.1f%%", value);
     }
 
+    private void updateDownloadProgressViews() {
+        long total = Math.max(downloadTotalBytes, 0);
+        long done = Math.max(downloadDoneBytes, 0);
+        if (downloadStatusView != null) {
+            downloadStatusView.setText(displayDownloadStatus(downloadStatus));
+        }
+        if (downloadDetailView != null) {
+            downloadDetailView.setText(downloadProgressDetail(done, total));
+        }
+        if (downloadProgressBar != null) {
+            downloadProgressBar.setProgress(progressValue(done, total));
+        }
+        if (downloadSummaryView != null) {
+            downloadSummaryView.setText(downloadProgressSummary(done, total));
+        }
+    }
+
+    private String downloadProgressDetail(long done, long total) {
+        String detailText = getString(R.string.progress_detail, formatPercent(done, total), downloadDoneFiles, downloadTotalFiles, formatBytes(done), formatBytes(total));
+        if (downloadSkippedFiles > 0 || downloadResumedFiles > 0) {
+            detailText = getString(R.string.progress_detail_extra, detailText, downloadSkippedFiles, downloadResumedFiles);
+        }
+        return detailText;
+    }
+
+    private String downloadProgressSummary(long done, long total) {
+        if ("Receive complete".equals(downloadStatus)) {
+            return getString(R.string.progress_completed_summary,
+                    formatDuration(downloadElapsedSeconds()),
+                    formatRate(downloadAverageBytesPerSecond()));
+        }
+        if ("Stopped".equals(downloadStatus)) {
+            return getString(R.string.progress_stopped_summary, formatDuration(downloadElapsedSeconds()));
+        }
+        double speedValue = currentDownloadSpeed();
+        String speedText = getString(R.string.progress_speed, formatRate(speedValue));
+        String remaining = formatRemaining(done, total, speedValue);
+        if (!remaining.isEmpty()) {
+            speedText = speedText + "  |  " + remaining;
+        }
+        return speedText;
+    }
+
+    private long downloadElapsedSeconds() {
+        if (downloadStartedAtMs <= 0) {
+            return 0;
+        }
+        long end = downloadFinishedAtMs > 0 ? downloadFinishedAtMs : System.currentTimeMillis();
+        return Math.max(0, (end - downloadStartedAtMs + 999) / 1000);
+    }
+
+    private double downloadAverageBytesPerSecond() {
+        long elapsedMs;
+        if (downloadStartedAtMs <= 0 || downloadFinishedAtMs <= downloadStartedAtMs) {
+            elapsedMs = Math.max(1, downloadElapsedSeconds() * 1000);
+        } else {
+            elapsedMs = downloadFinishedAtMs - downloadStartedAtMs;
+        }
+        return Math.max(0, downloadNetworkBytes * 1000.0 / elapsedMs);
+    }
+
+    private int progressValue(long done, long total) {
+        if (total <= 0) {
+            return 0;
+        }
+        return (int) Math.min(1000, Math.max(0, done * 1000.0 / total));
+    }
+
+    private String formatRemaining(long done, long total, double bytesPerSecond) {
+        if (total <= 0 || done >= total || receiveDownload == null) {
+            return "";
+        }
+        if (bytesPerSecond <= 1) {
+            return getString(R.string.progress_remaining_estimating);
+        }
+        long seconds = Math.max(1, (long) Math.ceil((total - done) / bytesPerSecond));
+        return getString(R.string.progress_remaining, formatDuration(seconds));
+    }
+
+    private String formatDuration(long seconds) {
+        long clean = Math.max(0, seconds);
+        long hours = clean / 3600;
+        long minutes = (clean % 3600) / 60;
+        long secs = clean % 60;
+        if (hours > 0) {
+            return String.format(Locale.ROOT, "%dh %02dm", hours, minutes);
+        }
+        if (minutes > 0) {
+            return String.format(Locale.ROOT, "%dm %02ds", minutes, secs);
+        }
+        return String.format(Locale.ROOT, "%ds", secs);
+    }
+
     private String emptyDash(String value) {
         return value == null || value.trim().isEmpty() ? "-" : value.trim();
     }
@@ -2347,6 +3120,7 @@ public final class MainActivity extends Activity {
         final Map<String, String> sessions = new LinkedHashMap<>();
         String p2pStatus = "idle";
         String network = "-";
+        String routeMode = "-";
         String peer = "-";
         int connectedCount;
         int connectingCount;
@@ -2358,6 +3132,7 @@ public final class MainActivity extends Activity {
             sessions.clear();
             p2pStatus = "starting";
             network = "-";
+            routeMode = "-";
             peer = "-";
             connectedCount = 0;
             connectingCount = 0;
@@ -2373,6 +3148,7 @@ public final class MainActivity extends Activity {
             inBps = 0;
             outBps = 0;
             lastTrafficMs = 0;
+            routeMode = "-";
             sessions.clear();
         }
 
@@ -2386,6 +3162,33 @@ public final class MainActivity extends Activity {
                     connectingCount++;
                 }
             }
+        }
+    }
+
+    private static final class SelectionSummary {
+        int files;
+        long bytes;
+    }
+
+    private static final class DownloadProgressSnapshot {
+        final long runId;
+        final int doneFiles;
+        final int totalFiles;
+        final long doneBytes;
+        final long totalBytes;
+        final long networkBytes;
+        final double bytesPerSecond;
+        final String current;
+
+        DownloadProgressSnapshot(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
+            this.runId = runId;
+            this.doneFiles = doneFiles;
+            this.totalFiles = totalFiles;
+            this.doneBytes = doneBytes;
+            this.totalBytes = totalBytes;
+            this.networkBytes = networkBytes;
+            this.bytesPerSecond = bytesPerSecond;
+            this.current = current;
         }
     }
 }

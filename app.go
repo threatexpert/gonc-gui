@@ -62,6 +62,7 @@ type P2PStatusReport struct {
 	Status    string `json:"status"`
 	Network   string `json:"network"`
 	Mode      string `json:"mode"`
+	Side      string `json:"side"`
 	Peer      string `json:"peer"`
 	Timestamp int64  `json:"timestamp"`
 	PID       int    `json:"pid"`
@@ -361,7 +362,7 @@ func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
 	if a.reportServer != nil && a.reportURL != "" {
 		reportURL := a.reportURL
 		a.mu.Unlock()
-		return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
+		return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
 	}
 	a.mu.Unlock()
 
@@ -383,8 +384,8 @@ func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if reportMode := r.URL.Query().Get("mode"); reportMode != "" {
-			report.Mode = reportMode
+		if reportSide := r.URL.Query().Get("side"); reportSide != "" {
+			report.Side = reportSide
 		}
 		wailsruntime.EventsEmit(a.ctx, "p2p:report", report)
 		w.WriteHeader(http.StatusNoContent)
@@ -397,7 +398,7 @@ func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
 		_ = ln.Close()
 		reportURL = a.reportURL
 		a.mu.Unlock()
-		return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
+		return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
 	}
 	a.reportServer = server
 	a.reportURL = reportURL
@@ -406,7 +407,7 @@ func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
 	go func() {
 		_ = server.Serve(ln)
 	}()
-	return reportURL + "?mode=" + url.QueryEscape(string(mode)), nil
+	return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
 }
 
 func findGonc(preferred string) (string, error) {

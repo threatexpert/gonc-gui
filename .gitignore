@@ -7,3 +7,4 @@ bundled/gonc/**/gonc.exe
 !bundled/gonc/**/.gitkeep
 *.log
 .env.local
+.codex-remote-attachments/

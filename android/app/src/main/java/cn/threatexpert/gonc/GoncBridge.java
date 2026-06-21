@@ -11,6 +11,8 @@ interface GoncBridge {
 
     interface Session {
         void stop();
+
+        void updateShareItems(List<ShareItem> items);
     }
 
     interface EventCallback {

@@ -59,6 +59,10 @@ final class PreviewGoncBridge implements GoncBridge {
             stopped = true;
         }
 
+        @Override
+        public void updateShareItems(List<ShareItem> items) {
+        }
+
         boolean isStopped() {
             return stopped;
         }

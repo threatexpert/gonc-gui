@@ -20,22 +20,32 @@ import java.util.concurrent.atomic.AtomicLong;
 
 final class AndroidFileSource implements mobilegonc.AndroidFileSource {
     private final ContentResolver resolver;
+    private final Object rootsLock = new Object();
     private final List<Node> roots = new ArrayList<>();
     private final Map<Long, InputStream> streams = new HashMap<>();
     private final AtomicLong nextHandle = new AtomicLong(1);
 
     AndroidFileSource(Context context, List<ShareItem> items) {
         this.resolver = context.getApplicationContext().getContentResolver();
+        updateItems(items);
+    }
+
+    void updateItems(List<ShareItem> items) {
+        List<Node> updated = new ArrayList<>();
         Map<String, Integer> seen = new LinkedHashMap<>();
         for (ShareItem item : items) {
             String name = uniqueName(safeName(item.displayName()), seen);
-            roots.add(new Node(name, item.uri(), item.isDirectory(), Math.max(-1, item.size()), item.mimeType(), item.lastModifiedMillis(), item.isTreeUri()));
+            updated.add(new Node(name, item.uri(), item.isDirectory(), Math.max(-1, item.size()), item.mimeType(), item.lastModifiedMillis(), item.isTreeUri()));
+        }
+        synchronized (rootsLock) {
+            roots.clear();
+            roots.addAll(updated);
         }
     }
 
     @Override
     public String description() {
-        return roots.size() + " Android item(s)";
+        return rootSnapshot().size() + " Android item(s)";
     }
 
     @Override
@@ -143,13 +153,13 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
             return new Node("/", null, true, 0, DocumentsContract.Document.MIME_TYPE_DIR, 0, false) {
                 @Override
                 List<Node> children() {
-                    return roots;
+                    return rootSnapshot();
                 }
             };
         }
         String[] parts = clean.substring(1).split("/");
         Node current = null;
-        for (Node root : roots) {
+        for (Node root : rootSnapshot()) {
             if (root.name.equals(parts[0])) {
                 current = root;
                 break;
@@ -175,6 +185,12 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
             }
         }
         return current;
+    }
+
+    private List<Node> rootSnapshot() {
+        synchronized (rootsLock) {
+            return new ArrayList<>(roots);
+        }
     }
 
     private String cleanPath(String value) {

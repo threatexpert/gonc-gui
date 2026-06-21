@@ -34,6 +34,7 @@ type P2PReport = {
   status: string;
   network: string;
   mode: string;
+  side?: Mode;
   peer: string;
   timestamp: number;
   pid: number;
@@ -120,6 +121,9 @@ const text = {
     p2pStatus: 'P2P 状态',
     peer: '对端',
     network: '网络',
+    connectionRoute: '连接方式',
+    directRoute: '直连',
+    relayRoute: '中继',
     speed: '速度',
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
@@ -205,6 +209,9 @@ const text = {
     p2pStatus: 'P2P status',
     peer: 'Peer',
     network: 'Network',
+    connectionRoute: 'Route',
+    directRoute: 'Direct',
+    relayRoute: 'Relay',
     speed: 'Speed',
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
@@ -363,9 +370,9 @@ function App() {
       }
     });
     EventsOn('p2p:report', (report: P2PReport) => {
-      if (report.mode === 'send') {
+      if (report.side === 'send') {
         setSendP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
-      } else if (report.mode === 'receive') {
+      } else if (report.side === 'receive') {
         setReceiveP2PReport(report);
       }
     });
@@ -677,6 +684,7 @@ function App() {
             <span>{sendStatusLabel}</span>
             <span className="status-divider" />
             <span>{t.connectedShort} {connectedCount}</span>
+            <span className="status-divider" />
             <span>{formatRate(transferSpeed)}</span>
           </div>
         )}
@@ -862,6 +870,7 @@ function App() {
               <Metric label={t.p2pStatus} value={(mode === 'receive' ? receiveP2PReport?.status : latestReport(p2pSessions)?.status) || (currentRunning ? 'starting' : 'idle')} />
               <Metric label={t.peer} value={(mode === 'receive' ? receiveP2PReport?.peer : latestReport(p2pSessions)?.peer) || '-'} />
               <Metric label={t.network} value={(mode === 'receive' ? receiveP2PReport?.network : latestReport(p2pSessions)?.network) || '-'} />
+              <Metric label={t.connectionRoute} value={routeLabel((mode === 'receive' ? receiveP2PReport?.mode : latestReport(p2pSessions)?.mode) || '', t)} />
               <Metric label={t.speed} value={formatRate(activeSpeed)} />
             </section>
             <section className="log-pane">
@@ -920,6 +929,17 @@ function latestReport(reports: P2PReport[]) {
     }
     return latest;
   }, null);
+}
+
+function routeLabel(modeValue: string, t: typeof text.zh) {
+  const clean = modeValue.trim().toLowerCase();
+  if (clean === 'p2p') {
+    return t.directRoute;
+  }
+  if (clean === 'relay') {
+    return t.relayRoute;
+  }
+  return '-';
 }
 
 function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh) {
