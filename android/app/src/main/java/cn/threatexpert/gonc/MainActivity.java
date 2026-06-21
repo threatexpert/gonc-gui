@@ -123,6 +123,7 @@ public final class MainActivity extends Activity {
     private View receiveConnectionDotView;
     private TextView receiveConnectionLabelView;
     private TextView activitySummaryTextView;
+    private LinearLayout activityLogContentView;
     private TextView activityP2PStatusValueView;
     private TextView activitySpeedValueView;
     private TextView activityConnectionsValueView;
@@ -298,6 +299,7 @@ public final class MainActivity extends Activity {
             activitySummaryTextView.setText(activitySummary(currentMetrics()));
         }
         updateActivityMetricViews();
+        updateActivityLogViews();
     }
 
     private void renderDownloadProgress() {
@@ -1490,6 +1492,7 @@ public final class MainActivity extends Activity {
 
         if (!activityExpanded) {
             clearActivityMetricRefs();
+            activityLogContentView = null;
             String summary = activitySummary(currentMetrics());
             TextView summaryView = text(summary, 13, muted(), Typeface.BOLD);
             activitySummaryTextView = summaryView;
@@ -1500,9 +1503,21 @@ public final class MainActivity extends Activity {
 
         card.addView(activityMetrics(), blockParams(dp(8)));
 
+        LinearLayout logContent = column();
+        activityLogContentView = logContent;
+        updateActivityLogViews();
+        card.addView(logContent, blockParams(dp(8)));
+        return card;
+    }
+
+    private void updateActivityLogViews() {
+        if (!activityExpanded || activityLogContentView == null) {
+            return;
+        }
+        activityLogContentView.removeAllViews();
         if (logs.isEmpty()) {
-            card.addView(text(getString(R.string.events_will_appear), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
-            return card;
+            activityLogContentView.addView(text(getString(R.string.events_will_appear), 13, muted(), Typeface.NORMAL));
+            return;
         }
 
         LinearLayout logBox = column();
@@ -1515,8 +1530,7 @@ public final class MainActivity extends Activity {
             line.setTextIsSelectable(true);
             logBox.addView(line);
         }
-        card.addView(logBox, blockParams(dp(8)));
-        return card;
+        activityLogContentView.addView(logBox);
     }
 
     private View activityMetrics() {
@@ -1651,6 +1665,10 @@ public final class MainActivity extends Activity {
             Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
             return;
         }
+        if (Passwords.isWeak(passphrase)) {
+            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
+            return;
+        }
         hidePassword(true);
         sendMetrics.reset();
         sendStatus = "Preparing";
@@ -1665,6 +1683,10 @@ public final class MainActivity extends Activity {
         String passphrase = receivePassword.trim();
         if (passphrase.isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (Passwords.isWeak(passphrase)) {
+            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
             return;
         }
         hidePassword(false);

@@ -4,13 +4,16 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.FileInputStream;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -22,7 +25,7 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
     private final ContentResolver resolver;
     private final Object rootsLock = new Object();
     private final List<Node> roots = new ArrayList<>();
-    private final Map<Long, InputStream> streams = new HashMap<>();
+    private final Map<Long, OpenHandle> streams = new HashMap<>();
     private final AtomicLong nextHandle = new AtomicLong(1);
 
     AndroidFileSource(Context context, List<ShareItem> items) {
@@ -82,13 +85,13 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
             if (node == null || node.directory) {
                 return 0;
             }
-            InputStream input = resolver.openInputStream(node.uri);
-            if (input == null) {
+            OpenHandle openHandle = OpenHandle.open(resolver, node.uri);
+            if (openHandle == null) {
                 return 0;
             }
             long handle = nextHandle.getAndIncrement();
             synchronized (streams) {
-                streams.put(handle, input);
+                streams.put(handle, openHandle);
             }
             return handle;
         } catch (Exception ignored) {
@@ -98,17 +101,17 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
 
     @Override
     public byte[] read(long handle, long maxBytes) {
-        InputStream input;
+        OpenHandle openHandle;
         synchronized (streams) {
-            input = streams.get(handle);
+            openHandle = streams.get(handle);
         }
-        if (input == null || maxBytes <= 0) {
+        if (openHandle == null || maxBytes <= 0) {
             return new byte[0];
         }
         int size = (int) Math.min(maxBytes, 128 * 1024L);
         byte[] buffer = new byte[size];
         try {
-            int n = input.read(buffer);
+            int n = openHandle.read(buffer);
             if (n <= 0) {
                 return new byte[0];
             }
@@ -124,16 +127,29 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
     }
 
     @Override
-    public void close(long handle) {
-        InputStream input;
+    public long seek(long handle, long offset, long whence) {
+        OpenHandle openHandle;
         synchronized (streams) {
-            input = streams.remove(handle);
+            openHandle = streams.get(handle);
         }
-        if (input != null) {
-            try {
-                input.close();
-            } catch (Exception ignored) {
-            }
+        if (openHandle == null) {
+            return -1;
+        }
+        try {
+            return openHandle.seek(offset, whence);
+        } catch (Exception ignored) {
+            return -1;
+        }
+    }
+
+    @Override
+    public void close(long handle) {
+        OpenHandle openHandle;
+        synchronized (streams) {
+            openHandle = streams.remove(handle);
+        }
+        if (openHandle != null) {
+            openHandle.close();
         }
     }
 
@@ -309,5 +325,65 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
         String stem = dot > 0 ? base.substring(0, dot) : base;
         String ext = dot > 0 ? base.substring(dot) : "";
         return stem + "-" + next + ext;
+    }
+
+    private static final class OpenHandle {
+        private final InputStream input;
+        private final FileChannel channel;
+        private final ParcelFileDescriptor descriptor;
+
+        private OpenHandle(InputStream input, FileChannel channel, ParcelFileDescriptor descriptor) {
+            this.input = input;
+            this.channel = channel;
+            this.descriptor = descriptor;
+        }
+
+        static OpenHandle open(ContentResolver resolver, Uri uri) throws Exception {
+            ParcelFileDescriptor descriptor = resolver.openFileDescriptor(uri, "r");
+            if (descriptor != null) {
+                FileInputStream input = new FileInputStream(descriptor.getFileDescriptor());
+                return new OpenHandle(input, input.getChannel(), descriptor);
+            }
+            InputStream input = resolver.openInputStream(uri);
+            return input == null ? null : new OpenHandle(input, null, null);
+        }
+
+        int read(byte[] buffer) throws Exception {
+            return input.read(buffer);
+        }
+
+        long seek(long offset, long whence) throws Exception {
+            if (channel == null) {
+                return -1;
+            }
+            long target;
+            if (whence == 0) {
+                target = offset;
+            } else if (whence == 1) {
+                target = channel.position() + offset;
+            } else if (whence == 2) {
+                target = channel.size() + offset;
+            } else {
+                return -1;
+            }
+            if (target < 0) {
+                return -1;
+            }
+            channel.position(target);
+            return channel.position();
+        }
+
+        void close() {
+            try {
+                input.close();
+            } catch (Exception ignored) {
+            }
+            if (descriptor != null) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 }

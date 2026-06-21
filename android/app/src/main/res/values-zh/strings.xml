@@ -117,6 +117,7 @@
     <string name="toast_storage_permission">当前 Android 版本需要存储权限才能保存到下载目录</string>
     <string name="toast_select_file_first">请先选择至少一个文件</string>
     <string name="toast_passphrase_required">需要填写口令</string>
+    <string name="toast_passphrase_weak">口令强度不足。请使用至少 8 位，并同时包含字母和数字。</string>
     <string name="toast_choose_save_location">请先选择保存位置</string>
     <string name="toast_select_download_files">请先选择要下载的文件</string>
     <string name="toast_no_remote_files">没有可下载的远程文件</string>

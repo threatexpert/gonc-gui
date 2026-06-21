@@ -117,6 +117,7 @@
     <string name="toast_storage_permission">Storage permission is required to save into Downloads on this Android version</string>
     <string name="toast_select_file_first">Select at least one file first</string>
     <string name="toast_passphrase_required">Passphrase is required</string>
+    <string name="toast_passphrase_weak">Passphrase is too weak. Use at least 8 characters with both letters and numbers.</string>
     <string name="toast_choose_save_location">Choose a save location first</string>
     <string name="toast_select_download_files">Select files to download first</string>
     <string name="toast_no_remote_files">No remote files to download</string>
