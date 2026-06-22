@@ -84,32 +84,40 @@ public final class MainActivity extends Activity {
     private static final String DEFAULT_VPN_ROUTES = "0.0.0.0/1\n128.0.0.0/1\n::/0";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private GoncVpnState.Listener vpnStateListener;
     private final List<ShareItem> shareItems = new ArrayList<>();
     private final List<String> logs = new ArrayList<>();
     private final GoncBridge bridge = new MobileGoncBridge();
     private final TransferMetrics sendMetrics = new TransferMetrics();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
     private final TransferMetrics vpnMetrics = new TransferMetrics();
+    private final TransferMetrics vpnServerMetrics = new TransferMetrics();
     private final Object downloadProgressLock = new Object();
 
     private LinearLayout root;
     private boolean sendMode = true;
     private boolean vpnMode;
+    private boolean vpnServerMode;
     private boolean sendUseUdp;
     private boolean receiveUseUdp;
+    private boolean vpnServerUseUdp;
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
     private boolean scanningForSendMode;
     private boolean scanningForVpnMode;
+    private boolean scanningForVpnServerMode;
     private boolean scanningForVpnProfile;
     private boolean sendPasswordVisible;
     private boolean receivePasswordVisible;
     private boolean vpnPasswordVisible;
+    private boolean vpnServerPasswordVisible;
     private boolean vpnAdvancedExpanded;
     private int sendPasswordVisibilityToken;
     private int receivePasswordVisibilityToken;
+    private int vpnServerPasswordVisibilityToken;
     private String sendPassword = Passwords.generate();
     private String receivePassword = "";
+    private String vpnServerPassword = Passwords.generate();
     private final List<VpnProfile> vpnProfiles = new ArrayList<>();
     private int selectedVpnProfileIndex;
     private Uri saveTreeUri;
@@ -137,12 +145,15 @@ public final class MainActivity extends Activity {
     private long downloadFinishedAtMs;
     private String sendStatus = "Idle";
     private String receiveStatus = "Idle";
+    private String vpnServerStatus = "Idle";
     private GoncBridge.Session sendSession;
     private GoncBridge.Session receiveSession;
+    private GoncBridge.Session vpnServerSession;
     private HttpReceiver.Session remoteListSession;
     private HttpReceiver.Session receiveDownload;
     private long sendRunId;
     private long receiveRunId;
+    private long vpnServerRunId;
     private long pauseAutoRenderUntilMs;
     private long lastLogRenderMs;
     private long lastDownloadProgressRenderMs;
@@ -187,7 +198,7 @@ public final class MainActivity extends Activity {
         saveLocationLabel = getString(R.string.default_save_location);
         loadVpnProfiles();
         buildRoot();
-        GoncVpnState.setListener(new GoncVpnState.Listener() {
+        vpnStateListener = new GoncVpnState.Listener() {
             @Override
             public void onVpnStateChanged() {
                 mainHandler.post(() -> {
@@ -207,7 +218,8 @@ public final class MainActivity extends Activity {
                     }
                 });
             }
-        });
+        };
+        GoncVpnState.setListener(vpnStateListener);
         syncVpnLogs();
         String lastCrash = GoncCrashReporter.lastCrash(this);
         if (!lastCrash.trim().isEmpty()) {
@@ -293,6 +305,17 @@ public final class MainActivity extends Activity {
                     render();
                     return;
                 }
+                if (scanningForVpnServerMode) {
+                    scanningForVpnServerMode = false;
+                    if (vpnServerSession != null) {
+                        return;
+                    }
+                    vpnServerPassword = result.trim();
+                    revealVpnServerPasswordTemporarily(null);
+                    appendLog("info", "VPN server passphrase scanned");
+                    render();
+                    return;
+                }
                 if (isPasswordLocked(scanningForSendMode)) {
                     return;
                 }
@@ -355,12 +378,15 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        GoncVpnState.setListener(null);
+        GoncVpnState.removeListener(vpnStateListener);
         if (sendSession != null) {
             sendSession.stop();
         }
         if (receiveSession != null) {
             receiveSession.stop();
+        }
+        if (vpnServerSession != null) {
+            vpnServerSession.stop();
         }
         if (remoteListSession != null) {
             remoteListSession.stop();
@@ -397,7 +423,9 @@ public final class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(header());
         root.addView(modeSwitch());
-        if (vpnMode) {
+        if (vpnServerMode) {
+            root.addView(vpnServerPanel());
+        } else if (vpnMode) {
             root.addView(vpnPanel());
         } else if (sendMode) {
             root.addView(sendPanel());
@@ -422,7 +450,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isRemoteFilesPanelVisible() {
-        return !vpnMode && !sendMode && (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus));
+        return !vpnMode && !vpnServerMode && !sendMode && (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus));
     }
 
     private void updateBackgroundDynamicViews() {
@@ -500,30 +528,48 @@ public final class MainActivity extends Activity {
     }
 
     private View modeSwitch() {
-        LinearLayout box = row();
+        LinearLayout box = column();
         box.setPadding(dp(4), dp(4), dp(4), dp(4));
         box.setBackground(rounded(Color.WHITE, dp(8), Color.rgb(216, 226, 238), 1));
 
-        Button send = modeButton(getString(R.string.send_files), !vpnMode && sendMode);
+        Button send = modeButton(getString(R.string.send_files), !vpnMode && !vpnServerMode && sendMode);
         send.setOnClickListener(v -> {
             vpnMode = false;
+            vpnServerMode = false;
             sendMode = true;
             render();
         });
-        Button receive = modeButton(getString(R.string.receive_files), !vpnMode && !sendMode);
+        Button receive = modeButton(getString(R.string.receive_files), !vpnMode && !vpnServerMode && !sendMode);
         receive.setOnClickListener(v -> {
             vpnMode = false;
+            vpnServerMode = false;
             sendMode = false;
             render();
         });
         Button vpn = modeButton(getString(R.string.vpn_tunnel), vpnMode);
         vpn.setOnClickListener(v -> {
             vpnMode = true;
+            vpnServerMode = false;
             render();
         });
-        box.addView(send, new LinearLayout.LayoutParams(0, dp(42), 1));
-        box.addView(receive, new LinearLayout.LayoutParams(0, dp(42), 1));
-        box.addView(vpn, new LinearLayout.LayoutParams(0, dp(42), 1));
+        Button vpnServer = modeButton(getString(R.string.vpn_server), vpnServerMode);
+        vpnServer.setOnClickListener(v -> {
+            vpnMode = false;
+            vpnServerMode = true;
+            render();
+        });
+
+        LinearLayout topRow = row();
+        topRow.addView(send, new LinearLayout.LayoutParams(0, dp(42), 1));
+        topRow.addView(receive, new LinearLayout.LayoutParams(0, dp(42), 1));
+        LinearLayout bottomRow = row();
+        bottomRow.addView(vpn, new LinearLayout.LayoutParams(0, dp(42), 1));
+        bottomRow.addView(vpnServer, new LinearLayout.LayoutParams(0, dp(42), 1));
+
+        box.addView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams bottomParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bottomParams.setMargins(0, dp(4), 0, 0);
+        box.addView(bottomRow, bottomParams);
         box.setLayoutParams(blockParams());
         return box;
     }
@@ -603,6 +649,263 @@ public final class MainActivity extends Activity {
         });
         card.addView(primary, blockParams(dp(12)));
         return card;
+    }
+
+    private View vpnServerPanel() {
+        LinearLayout card = card();
+
+        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), false), blockParams(0));
+        TextView intro = text(getString(R.string.vpn_server_intro), 13, muted(), Typeface.NORMAL);
+        intro.setSingleLine(false);
+        card.addView(intro, blockParams(dp(6)));
+        card.addView(vpnServerPasswordField());
+        card.addView(sectionDivider(), dividerParams(dp(12)));
+        card.addView(vpnServerProtocolToggle());
+
+        Button primary = vpnServerSession == null
+                ? primaryButton(getString(R.string.start_vpn_server))
+                : dangerButton(getString(R.string.stop_vpn_server));
+        primary.setOnClickListener(v -> {
+            if (vpnServerSession == null) {
+                startVpnServer();
+            } else {
+                stopVpnServer();
+            }
+        });
+        card.addView(primary, blockParams(dp(12)));
+        return card;
+    }
+
+    private View vpnServerPasswordField() {
+        boolean locked = vpnServerSession != null;
+        LinearLayout box = column();
+        box.addView(text(getString(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
+
+        LinearLayout line = row();
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(vpnServerPassword);
+        input.setTextColor(ink());
+        input.setTextSize(15);
+        input.setHint(getString(R.string.passphrase_input_hint));
+        input.setHintTextColor(Color.rgb(148, 163, 184));
+        input.setPadding(dp(12), 0, dp(12), 0);
+        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
+        input.setEnabled(!locked);
+        applyVpnServerPasswordVisibility(input);
+        input.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (vpnServerSession != null) {
+                    return;
+                }
+                vpnServerPassword = s.toString();
+                revealVpnServerPasswordTemporarily(input);
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+        line.addView(input, new LinearLayout.LayoutParams(0, dp(46), 1));
+        box.addView(line, blockParams(dp(8)));
+
+        LinearLayout actions = row();
+        Button change = secondaryButton(getString(R.string.random_passphrase));
+        setControlEnabled(change, !locked);
+        change.setOnClickListener(v -> randomizeVpnServerPassword());
+        Button copy = secondaryButton(getString(R.string.copy));
+        copy.setOnClickListener(v -> copyVpnServerPassword());
+        Button scan = secondaryButton(getString(R.string.scan));
+        setControlEnabled(scan, !locked);
+        scan.setOnClickListener(v -> scanVpnServerPassword());
+        Button qr = secondaryButton(getString(R.string.qr));
+        qr.setOnClickListener(v -> showPassphraseQr(vpnServerPassword.trim()));
+        actions.addView(change, new LinearLayout.LayoutParams(0, dp(40), 1));
+        actions.addView(copy, actionParams());
+        actions.addView(scan, actionParams());
+        actions.addView(qr, actionParams());
+        box.addView(actions, blockParams(dp(6)));
+        return box;
+    }
+
+    private View vpnServerProtocolToggle() {
+        LinearLayout box = column();
+        CheckBox checkBox = new CheckBox(this);
+        checkBox.setText(getString(R.string.use_udp_protocol));
+        checkBox.setTextColor(Color.rgb(64, 81, 105));
+        checkBox.setTextSize(14);
+        checkBox.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        checkBox.setChecked(vpnServerUseUdp);
+        setControlEnabled(checkBox, vpnServerSession == null);
+        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (vpnServerSession != null) {
+                return;
+            }
+            vpnServerUseUdp = isChecked;
+        });
+        box.addView(checkBox);
+        TextView hint = text(getString(R.string.use_udp_protocol_hint), 12, muted(), Typeface.NORMAL);
+        hint.setPadding(dp(4), 0, 0, 0);
+        box.addView(hint);
+        return box;
+    }
+
+    private void applyVpnServerPasswordVisibility(EditText input) {
+        input.setTransformationMethod(vpnServerPasswordVisible ? null : PasswordTransformationMethod.getInstance());
+        input.setSelection(input.getText().length());
+    }
+
+    private void revealVpnServerPasswordTemporarily(EditText input) {
+        vpnServerPasswordVisible = true;
+        int token = ++vpnServerPasswordVisibilityToken;
+        if (input != null) {
+            applyVpnServerPasswordVisibility(input);
+        }
+        mainHandler.postDelayed(() -> {
+            if (vpnServerPasswordVisibilityToken != token) {
+                return;
+            }
+            vpnServerPasswordVisible = false;
+            if (input != null && input.isAttachedToWindow()) {
+                applyVpnServerPasswordVisibility(input);
+            } else {
+                render();
+            }
+        }, 5000);
+    }
+
+    private void hideVpnServerPassword() {
+        vpnServerPasswordVisible = false;
+        vpnServerPasswordVisibilityToken++;
+    }
+
+    private void randomizeVpnServerPassword() {
+        if (vpnServerSession != null) {
+            return;
+        }
+        vpnServerPassword = Passwords.generate();
+        revealVpnServerPasswordTemporarily(null);
+        appendLog("info", "Passphrase randomized");
+        render();
+    }
+
+    private void copyVpnServerPassword() {
+        String passphrase = vpnServerPassword.trim();
+        if (passphrase.isEmpty()) {
+            Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        copyText("Gonc passphrase", passphrase);
+        appendLog("info", "Passphrase copied");
+        Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
+        render();
+    }
+
+    private void startVpnServer() {
+        String passphrase = vpnServerPassword.trim();
+        if (passphrase.isEmpty()) {
+            Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (Passwords.isWeak(passphrase)) {
+            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        hideVpnServerPassword();
+        vpnServerMetrics.reset();
+        vpnServerStatus = "Preparing";
+        appendLog("info", "Start VPN server requested");
+        long runId = ++vpnServerRunId;
+        vpnServerSession = bridge.startP2PLinkAgent(this, passphrase, vpnServerUseUdp, vpnServerCallback(runId));
+        updateKeepScreenOn();
+        render();
+    }
+
+    private void stopVpnServer() {
+        GoncBridge.Session current = vpnServerSession;
+        if (current != null) {
+            current.stop();
+            vpnServerSession = null;
+        }
+        vpnServerStatus = "Idle";
+        vpnServerMetrics.markStopped();
+        updateKeepScreenOn();
+        appendLog("warn", "VPN server stop requested");
+        render();
+    }
+
+    private GoncBridge.EventCallback vpnServerCallback(long runId) {
+        return new GoncBridge.EventCallback() {
+            @Override
+            public void onEvent(String level, String message) {
+                mainHandler.post(() -> {
+                    if (vpnServerRunId != runId || vpnServerSession == null) {
+                        return;
+                    }
+                    updateMetricsFromLog(vpnServerMetrics, message);
+                    appendLog(level, message);
+                    renderAfterBackgroundUpdate();
+                });
+            }
+
+            @Override
+            public void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
+                mainHandler.post(() -> {
+                    if (vpnServerRunId != runId || vpnServerSession == null) {
+                        return;
+                    }
+                    updateMetricsFromReport(vpnServerMetrics, topic, status, network, mode, peer);
+                    renderAfterBackgroundUpdate();
+                });
+            }
+
+            @Override
+            public void onReady(String endpoint) {
+                mainHandler.post(() -> {
+                    if (vpnServerRunId != runId || vpnServerSession == null) {
+                        return;
+                    }
+                    vpnServerStatus = "Ready";
+                    appendLog("info", "VPN server ready, waiting for clients");
+                    render();
+                });
+            }
+
+            @Override
+            public void onStopped() {
+                mainHandler.post(() -> {
+                    if (vpnServerRunId != runId) {
+                        return;
+                    }
+                    vpnServerSession = null;
+                    vpnServerStatus = "Idle";
+                    vpnServerMetrics.markStopped();
+                    updateKeepScreenOn();
+                    appendLog("warn", "Session stopped");
+                    render();
+                });
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                mainHandler.post(() -> {
+                    if (vpnServerRunId != runId) {
+                        return;
+                    }
+                    vpnServerSession = null;
+                    vpnServerStatus = "Error";
+                    vpnServerMetrics.p2pStatus = "error";
+                    updateKeepScreenOn();
+                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                    render();
+                });
+            }
+        };
     }
 
     private View receivePanel() {
@@ -2083,7 +2386,7 @@ public final class MainActivity extends Activity {
         box.addView(row1);
 
         LinearLayout row2 = row();
-        if (!vpnMode && sendMode) {
+        if (!vpnMode && (sendMode || vpnServerMode)) {
             row2.addView(metricBox(getString(R.string.connections), String.valueOf(metrics.connectedCount), METRIC_REF_CONNECTIONS), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             row2.addView(metricBox(getString(R.string.network), emptyDash(metrics.network), METRIC_REF_NETWORK), metricParams());
         } else {
@@ -2373,14 +2676,17 @@ public final class MainActivity extends Activity {
     private void endAllTasksAndExit() {
         sendRunId++;
         receiveRunId++;
+        vpnServerRunId++;
 
         GoncBridge.Session send = sendSession;
         GoncBridge.Session receive = receiveSession;
+        GoncBridge.Session vpnServer = vpnServerSession;
         HttpReceiver.Session listSession = remoteListSession;
         HttpReceiver.Session download = receiveDownload;
 
         sendSession = null;
         receiveSession = null;
+        vpnServerSession = null;
         remoteListSession = null;
         receiveDownload = null;
 
@@ -2389,6 +2695,9 @@ public final class MainActivity extends Activity {
         }
         if (receive != null) {
             receive.stop();
+        }
+        if (vpnServer != null) {
+            vpnServer.stop();
         }
         if (listSession != null) {
             listSession.stop();
@@ -2411,17 +2720,23 @@ public final class MainActivity extends Activity {
 
         sendMode = true;
         vpnMode = false;
+        vpnServerMode = false;
         sendUseUdp = false;
         receiveUseUdp = false;
+        vpnServerUseUdp = false;
         selectedVpnProfileIndex = 0;
         vpnPasswordVisible = false;
+        vpnServerPasswordVisible = false;
         activityExpanded = false;
         sendPassword = Passwords.generate();
         receivePassword = "";
+        vpnServerPassword = Passwords.generate();
+        vpnServerStatus = "Idle";
         sendPasswordVisible = false;
         receivePasswordVisible = false;
         sendPasswordVisibilityToken++;
         receivePasswordVisibilityToken++;
+        vpnServerPasswordVisibilityToken++;
 
         saveTreeUri = null;
         saveLocationLabel = getString(R.string.default_save_location);
@@ -2452,6 +2767,7 @@ public final class MainActivity extends Activity {
         receiveStatus = "Idle";
         sendMetrics.reset();
         receiveMetrics.reset();
+        vpnServerMetrics.reset();
     }
 
     private void loadRemoteFiles(String endpoint, long runId) {
@@ -3379,6 +3695,7 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = false;
         scanningForVpnMode = false;
+        scanningForVpnServerMode = false;
         scanningForSendMode = sender;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3393,6 +3710,7 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = false;
         scanningForVpnMode = true;
+        scanningForVpnServerMode = false;
         scanningForSendMode = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3407,6 +3725,22 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = true;
         scanningForVpnMode = false;
+        scanningForVpnServerMode = false;
+        scanningForSendMode = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
+            return;
+        }
+        launchQrScanner();
+    }
+
+    private void scanVpnServerPassword() {
+        if (vpnServerSession != null) {
+            return;
+        }
+        scanningForVpnProfile = false;
+        scanningForVpnMode = false;
+        scanningForVpnServerMode = true;
         scanningForSendMode = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3482,6 +3816,9 @@ public final class MainActivity extends Activity {
         if (vpnMode) {
             return GoncVpnState.status();
         }
+        if (vpnServerMode) {
+            return vpnServerStatus;
+        }
         return sendMode ? sendStatus : receiveStatus;
     }
 
@@ -3492,7 +3829,7 @@ public final class MainActivity extends Activity {
             state = currentStatus();
         }
         state = displayStatusLabel(state);
-        if (vpnMode || !sendMode) {
+        if (vpnMode || (!sendMode && !vpnServerMode)) {
             return state + "  " + formatRate(currentSpeed(metrics));
         }
         return state + "  " + metrics.connectedCount + "  " + formatRate(currentSpeed(metrics));
@@ -3504,7 +3841,7 @@ public final class MainActivity extends Activity {
             state = currentStatus();
         }
         String speed = getString(R.string.activity_summary_speed, formatRate(currentSpeed(metrics)));
-        if (vpnMode || !sendMode) {
+        if (vpnMode || (!sendMode && !vpnServerMode)) {
             return activityStateLabel(state, metrics) + " | " + speed;
         }
         return activityStateLabel(state, metrics)
@@ -3567,13 +3904,16 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isAnySessionRunning() {
-        return sendSession != null || receiveSession != null || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
+        return sendSession != null || receiveSession != null || vpnServerSession != null || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
     }
 
     private TransferMetrics currentMetrics() {
         if (vpnMode) {
             syncVpnMetrics();
             return vpnMetrics;
+        }
+        if (vpnServerMode) {
+            return vpnServerMetrics;
         }
         return currentMetrics(sendMode);
     }
@@ -3595,7 +3935,10 @@ public final class MainActivity extends Activity {
     }
 
     private void updateMetricsFromReport(boolean forSendMode, String topic, String status, String network, String mode, String peer) {
-        TransferMetrics metrics = currentMetrics(forSendMode);
+        updateMetricsFromReport(currentMetrics(forSendMode), topic, status, network, mode, peer);
+    }
+
+    private void updateMetricsFromReport(TransferMetrics metrics, String topic, String status, String network, String mode, String peer) {
         if (status != null && !status.trim().isEmpty()) {
             metrics.p2pStatus = status.trim();
         }
@@ -3635,7 +3978,10 @@ public final class MainActivity extends Activity {
     }
 
     private void updateMetricsFromLog(boolean forSendMode, String message) {
-        TransferMetrics metrics = currentMetrics(forSendMode);
+        updateMetricsFromLog(currentMetrics(forSendMode), message);
+    }
+
+    private void updateMetricsFromLog(TransferMetrics metrics, String message) {
         if (updateTraffic(metrics, message)) {
             return;
         }
@@ -3677,7 +4023,7 @@ public final class MainActivity extends Activity {
     }
 
     private double currentSpeed(TransferMetrics metrics) {
-        if (vpnMode) {
+        if (vpnMode || vpnServerMode) {
             if (System.currentTimeMillis() - metrics.lastTrafficMs > 4000) {
                 return 0;
             }
@@ -3771,6 +4117,7 @@ public final class MainActivity extends Activity {
         if (!uris.isEmpty()) {
             addUris(uris, intent);
             vpnMode = false;
+            vpnServerMode = false;
             sendMode = true;
             appendLog("info", "Received " + uris.size() + " file(s) from Android");
         }

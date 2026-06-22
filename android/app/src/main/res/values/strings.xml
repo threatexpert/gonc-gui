@@ -90,6 +90,10 @@
     <string name="vpn_advanced_settings">Advanced settings</string>
     <string name="vpn_advanced_settings_hide">Hide advanced settings</string>
     <string name="stop_vpn">Stop VPN</string>
+    <string name="vpn_server">VPN 服务端</string>
+    <string name="vpn_server_intro">Runs as a linkagent server; multiple clients can connect.</string>
+    <string name="start_vpn_server">Start VPN server</string>
+    <string name="stop_vpn_server">Stop VPN server</string>
     <string name="toast_vpn_permission_denied">VPN permission denied</string>
     <string name="battery_optimization_title">Allow background VPN</string>
     <string name="battery_optimization_message">Your system may restrict Gonc in the background. For a stable VPN connection, allow Gonc to ignore battery optimization or set battery usage to unrestricted.</string>

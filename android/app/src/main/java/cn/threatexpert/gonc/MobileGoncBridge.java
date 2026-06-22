@@ -53,6 +53,24 @@ final class MobileGoncBridge implements GoncBridge {
         return session;
     }
 
+    @Override
+    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, EventCallback callback) {
+        BridgeSession session = new BridgeSession();
+        Thread worker = new Thread(() -> {
+            try {
+                callback.onEvent("info", "Starting gonc mobile linkagent (VPN server) engine");
+                mobilegonc.Session goSession = Mobilegonc.startP2PLinkAgent(password, useUdp, bridgeCallback(callback));
+                session.attach(goSession);
+            } catch (Throwable error) {
+                if (!session.isStopped()) {
+                    callback.onError(error);
+                }
+            }
+        }, "gonc-linkagent");
+        worker.start();
+        return session;
+    }
+
     private static Callback bridgeCallback(EventCallback callback) {
         return new Callback() {
             @Override

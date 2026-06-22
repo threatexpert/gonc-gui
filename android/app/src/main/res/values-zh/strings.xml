@@ -88,6 +88,9 @@
     <string name="vpn_advanced_settings">高级设置</string>
     <string name="vpn_advanced_settings_hide">收起高级设置</string>
     <string name="stop_vpn">停止 VPN</string>
+    <string name="vpn_server_intro">作为 linkagent 服务端运行，支持多个客户端同时连接。</string>
+    <string name="start_vpn_server">开始 VPN 服务端</string>
+    <string name="stop_vpn_server">停止 VPN 服务端</string>
     <string name="toast_vpn_permission_denied">VPN 权限被拒绝</string>
     <string name="battery_optimization_title">允许 VPN 后台运行</string>
     <string name="battery_optimization_message">系统可能会限制 Gonc 在后台运行。为了让 VPN 连接稳定，请允许忽略电池优化，或在电池设置里把 Gonc 改为「无限制」。</string>

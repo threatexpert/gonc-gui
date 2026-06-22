@@ -51,6 +51,20 @@ final class PreviewGoncBridge implements GoncBridge {
         return session;
     }
 
+    @Override
+    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, EventCallback callback) {
+        PreviewSession session = new PreviewSession();
+        executor.execute(() -> {
+            if (session.isStopped()) {
+                callback.onStopped();
+                return;
+            }
+            callback.onEvent("info", "P2P linkagent (VPN server) screen is ready.");
+            callback.onReady("preview://linkagent-ready");
+        });
+        return session;
+    }
+
     private static final class PreviewSession implements Session {
         private volatile boolean stopped;
 

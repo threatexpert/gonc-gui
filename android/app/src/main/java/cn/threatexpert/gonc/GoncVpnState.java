@@ -51,6 +51,16 @@ final class GoncVpnState {
         }
     }
 
+    // Only clear the listener if it is still the one supplied. During an Activity
+    // recreation (e.g. a configuration change) the new instance registers in
+    // onCreate before the old instance reaches onDestroy; an unconditional clear
+    // there would wipe the new, visible listener and freeze its UI updates.
+    static synchronized void removeListener(Listener candidate) {
+        if (listener == candidate) {
+            listener = null;
+        }
+    }
+
     static synchronized String status() {
         return status;
     }
