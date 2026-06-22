@@ -7,7 +7,7 @@ call "%~dp0gradlew.bat" assembleDebug
 if errorlevel 1 (
     echo.
     echo Debug APK build failed.
-    pause
+    timeout 5
     exit /b 1
 )
 
@@ -15,4 +15,4 @@ echo.
 echo Debug APK built:
 echo %~dp0app\build\outputs\apk\debug\app-debug.apk
 echo.
-pause
+timeout 5

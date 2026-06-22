@@ -15,7 +15,7 @@ if errorlevel 1 (
     echo.
     echo Release APK build failed.
     echo Check android\keystore.properties. Release builds require a configured signing key.
-    pause
+    timeout 5
     exit /b 1
 )
 
@@ -23,7 +23,7 @@ if exist "%UNSIGNED_APK%" (
     echo.
     echo ERROR: unsigned release APK was produced, refusing to publish it:
     echo %UNSIGNED_APK%
-    pause
+    timeout 5
     exit /b 1
 )
 
@@ -31,7 +31,7 @@ if not exist "%SIGNED_APK%" (
     echo.
     echo ERROR: signed release APK was not produced:
     echo %SIGNED_APK%
-    pause
+    timeout 5
     exit /b 1
 )
 
@@ -39,4 +39,4 @@ echo.
 echo Signed release APK:
 echo %SIGNED_APK%
 echo.
-pause
+timeout 5

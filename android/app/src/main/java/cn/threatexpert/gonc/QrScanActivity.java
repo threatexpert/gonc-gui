@@ -36,6 +36,10 @@ public final class QrScanActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
         barcodeView = new DecoratedBarcodeView(this);
+        String prompt = getIntent() == null ? null : getIntent().getStringExtra(Intents.Scan.PROMPT_MESSAGE);
+        if (prompt != null && !prompt.trim().isEmpty()) {
+            barcodeView.setStatusText(prompt);
+        }
         barcodeView.decodeContinuous(new BarcodeCallback() {
             @Override
             public void barcodeResult(BarcodeResult result) {
