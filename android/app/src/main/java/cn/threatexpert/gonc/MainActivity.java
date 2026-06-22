@@ -105,6 +105,7 @@ public final class MainActivity extends Activity {
     private boolean sendPasswordVisible;
     private boolean receivePasswordVisible;
     private boolean vpnPasswordVisible;
+    private boolean vpnAdvancedExpanded;
     private int sendPasswordVisibilityToken;
     private int receivePasswordVisibilityToken;
     private String sendPassword = Passwords.generate();
@@ -143,6 +144,7 @@ public final class MainActivity extends Activity {
     private long sendRunId;
     private long receiveRunId;
     private long pauseAutoRenderUntilMs;
+    private long lastLogRenderMs;
     private long lastDownloadProgressRenderMs;
     private boolean downloadProgressRenderPending;
     private boolean downloadProgressApplyPending;
@@ -198,7 +200,11 @@ public final class MainActivity extends Activity {
             public void onVpnLog(GoncVpnState.LogEntry entry) {
                 mainHandler.post(() -> {
                     appendVpnLog(entry);
-                    renderAfterBackgroundUpdate();
+                    long now = System.currentTimeMillis();
+                    if (now - lastLogRenderMs >= 200) {
+                        lastLogRenderMs = now;
+                        renderAfterBackgroundUpdate();
+                    }
                 });
             }
         });
@@ -646,41 +652,66 @@ public final class MainActivity extends Activity {
             return card;
         }
 
-        card.addView(sectionBoundaryTitle(getString(R.string.vpn_profile_settings), false), blockParams(0));
-        card.addView(vpnProfileSelector(), blockParams(dp(8)));
-        card.addView(vpnProfileNameField(), blockParams(dp(8)));
+        // Profile selector (always visible)
+        card.addView(vpnProfileSelector(), blockParams(0));
+        // Passphrase (always visible, primary required input)
         card.addView(vpnPassphraseField(), blockParams(dp(8)));
-        card.addView(vpnOptions(), blockParams(dp(10)));
-        card.addView(vpnMultilineField(
-                getString(R.string.vpn_dns_servers),
-                getString(R.string.vpn_dns_hint),
-                currentVpnProfile().dnsServers,
-                2,
-                value -> currentVpnProfile().dnsServers = value
-        ), blockParams(dp(10)));
-        card.addView(vpnMultilineField(
-                getString(R.string.vpn_route_cidrs),
-                getString(R.string.vpn_route_cidrs_hint),
-                currentVpnProfile().routeCidrs,
-                4,
-                value -> currentVpnProfile().routeCidrs = value
-        ), blockParams(dp(10)));
-
+        // Connect button immediately after passphrase
         Button primary = primaryButton(getString(R.string.start_vpn));
-        primary.setOnClickListener(v -> {
-            requestStartVpn();
-        });
+        primary.setOnClickListener(v -> requestStartVpn());
         card.addView(primary, blockParams(dp(12)));
+
+        // Advanced settings toggle
+        Button advancedToggle = secondaryButton(vpnAdvancedExpanded
+                ? getString(R.string.vpn_advanced_settings_hide)
+                : getString(R.string.vpn_advanced_settings));
+        advancedToggle.setOnClickListener(v -> {
+            vpnAdvancedExpanded = !vpnAdvancedExpanded;
+            render();
+        });
+        card.addView(advancedToggle, blockParams(dp(6)));
+
+        // Advanced settings (collapsed by default)
+        if (vpnAdvancedExpanded) {
+            card.addView(vpnProfileNameField(), blockParams(dp(10)));
+            card.addView(vpnOptions(), blockParams(dp(10)));
+            card.addView(vpnMultilineField(
+                    getString(R.string.vpn_dns_servers),
+                    getString(R.string.vpn_dns_hint),
+                    currentVpnProfile().dnsServers,
+                    2,
+                    value -> currentVpnProfile().dnsServers = value
+            ), blockParams(dp(10)));
+            card.addView(vpnMultilineField(
+                    getString(R.string.vpn_route_cidrs),
+                    getString(R.string.vpn_route_cidrs_hint),
+                    currentVpnProfile().routeCidrs,
+                    4,
+                    value -> currentVpnProfile().routeCidrs = value
+            ), blockParams(dp(10)));
+        }
         return card;
     }
 
     private View vpnProfileSelector() {
-        LinearLayout box = column();
+        LinearLayout row = row();
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        // "配置" label
+        TextView label = text(getString(R.string.vpn_profile_label), 13, muted(), Typeface.BOLD);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelParams.setMargins(0, 0, dp(10), 0);
+        row.addView(label, labelParams);
+
+        // Spinner with border
         Spinner spinner = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, vpnProfileNames());
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
         spinner.setSelection(Math.max(0, Math.min(selectedVpnProfileIndex, vpnProfiles.size() - 1)));
+        spinner.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
+        spinner.setPadding(dp(10), 0, dp(10), 0);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -696,43 +727,62 @@ public final class MainActivity extends Activity {
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
-        box.addView(spinner, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        row.addView(spinner, new LinearLayout.LayoutParams(0, dp(46), 1));
 
-        LinearLayout actions = row();
-        Button add = secondaryButton(getString(R.string.vpn_profile_new));
-        add.setOnClickListener(v -> {
-            vpnProfiles.add(VpnProfile.defaults(uniqueVpnProfileName()));
-            selectedVpnProfileIndex = vpnProfiles.size() - 1;
-            saveVpnProfiles();
-            vpnPasswordVisible = false;
-            render();
+        // ⋮ overflow menu for profile management
+        Button menuBtn = secondaryButton("⋮");
+        menuBtn.setTextSize(16);
+        menuBtn.setOnClickListener(v -> {
+            android.widget.PopupMenu popup = new android.widget.PopupMenu(this, menuBtn);
+            popup.getMenu().add(0, 1, 0, getString(R.string.vpn_profile_new));
+            popup.getMenu().add(0, 2, 1, getString(R.string.vpn_profile_import));
+            popup.getMenu().add(0, 3, 2, getString(R.string.vpn_profile_export));
+            popup.getMenu().add(0, 4, 3, getString(R.string.vpn_profile_delete));
+            popup.setOnMenuItemClickListener(item -> {
+                switch (item.getItemId()) {
+                    case 1:
+                        vpnProfiles.add(VpnProfile.defaults(uniqueVpnProfileName()));
+                        selectedVpnProfileIndex = vpnProfiles.size() - 1;
+                        saveVpnProfiles();
+                        vpnPasswordVisible = false;
+                        render();
+                        return true;
+                    case 2:
+                        scanVpnProfile();
+                        return true;
+                    case 3:
+                        showVpnProfileQr();
+                        return true;
+                    case 4:
+                        String profileName = currentVpnProfile().displayName(this);
+                        new android.app.AlertDialog.Builder(this)
+                                .setMessage(getString(R.string.vpn_profile_delete_confirm, profileName))
+                                .setPositiveButton(getString(R.string.vpn_profile_delete), (dialog, which) -> {
+                                    if (vpnProfiles.size() > 1) {
+                                        vpnProfiles.remove(selectedVpnProfileIndex);
+                                        selectedVpnProfileIndex = Math.max(0, selectedVpnProfileIndex - 1);
+                                    } else {
+                                        vpnProfiles.set(0, VpnProfile.defaults(getString(R.string.vpn_profile_default_name)));
+                                        selectedVpnProfileIndex = 0;
+                                    }
+                                    saveVpnProfiles();
+                                    vpnPasswordVisible = false;
+                                    render();
+                                })
+                                .setNegativeButton(getString(R.string.cancel), null)
+                                .show();
+                        return true;
+                    default:
+                        return false;
+                }
+            });
+            popup.show();
         });
-        Button delete = secondaryButton(getString(R.string.vpn_profile_delete));
-        delete.setOnClickListener(v -> {
-            if (vpnProfiles.size() > 1) {
-                vpnProfiles.remove(selectedVpnProfileIndex);
-                selectedVpnProfileIndex = Math.max(0, selectedVpnProfileIndex - 1);
-            } else {
-                vpnProfiles.set(0, VpnProfile.defaults(getString(R.string.vpn_profile_default_name)));
-                selectedVpnProfileIndex = 0;
-            }
-            saveVpnProfiles();
-            vpnPasswordVisible = false;
-            render();
-        });
-        actions.addView(add, new LinearLayout.LayoutParams(0, dp(38), 1));
-        actions.addView(delete, actionParams(dp(38)));
-        box.addView(actions, blockParams(dp(6)));
+        LinearLayout.LayoutParams menuParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        menuParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(menuBtn, menuParams);
 
-        LinearLayout transfer = row();
-        Button scan = secondaryButton(getString(R.string.vpn_profile_scan));
-        scan.setOnClickListener(v -> scanVpnProfile());
-        Button qr = secondaryButton(getString(R.string.vpn_profile_qr));
-        qr.setOnClickListener(v -> showVpnProfileQr());
-        transfer.addView(scan, new LinearLayout.LayoutParams(0, dp(38), 1));
-        transfer.addView(qr, actionParams(dp(38)));
-        box.addView(transfer, blockParams(dp(6)));
-        return box;
+        return row;
     }
 
     private View vpnProfileNameField() {
@@ -753,7 +803,7 @@ public final class MainActivity extends Activity {
         input.setText(currentVpnProfile().passphrase);
         input.setTextColor(ink());
         input.setTextSize(15);
-        input.setHint(getString(R.string.passphrase_input_hint));
+        input.setHint(getString(R.string.vpn_passphrase_hint));
         input.setHintTextColor(Color.rgb(148, 163, 184));
         input.setPadding(dp(12), 0, dp(12), 0);
         input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));

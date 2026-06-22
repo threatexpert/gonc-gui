@@ -71,6 +71,11 @@
     <string name="vpn_profile_new_name">New profile</string>
     <string name="vpn_profile_new">New</string>
     <string name="vpn_profile_delete">Delete</string>
+    <string name="vpn_profile_delete_confirm">Delete profile \"%1$s\"?</string>
+    <string name="vpn_profile_label">Profile</string>
+    <string name="vpn_passphrase_hint">Enter the linkagent passphrase</string>
+    <string name="vpn_profile_import">Import profile (scan QR)</string>
+    <string name="vpn_profile_export">Export profile (QR code)</string>
     <string name="vpn_profile_scan">Scan profile</string>
     <string name="vpn_profile_qr">Profile QR</string>
     <string name="vpn_profile_qr_hint">The QR code contains the full profile. Only the profile name is shown here.</string>
@@ -82,6 +87,8 @@
     <string name="vpn_route_cidrs">Route CIDR</string>
     <string name="vpn_route_cidrs_hint">One CIDR per line, for example 0.0.0.0/1</string>
     <string name="start_vpn">Start VPN</string>
+    <string name="vpn_advanced_settings">Advanced settings</string>
+    <string name="vpn_advanced_settings_hide">Hide advanced settings</string>
     <string name="stop_vpn">Stop VPN</string>
     <string name="toast_vpn_permission_denied">VPN permission denied</string>
     <string name="battery_optimization_title">Allow background VPN</string>
