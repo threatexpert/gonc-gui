@@ -65,7 +65,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends Activity implements ModuleHost {
     private static final String SOURCE_URL = "https://github.com/threatexpert/gonc-gui";
     private static final int REQUEST_OPEN_DOCUMENT = 1001;
     private static final int REQUEST_SCAN_QR = 1002;
@@ -80,10 +80,9 @@ public final class MainActivity extends Activity {
     private static final String KEY_VPN_PROFILES = "vpn_profiles";
     private static final String KEY_SELECTED_VPN_PROFILE = "selected_vpn_profile";
     private static final String VPN_PROFILE_QR_TYPE = "gonc.vpn.profile";
-    private static final String DEFAULT_VPN_DNS = "8.8.8.8\n2001:4860:4860::8888";
-    private static final String DEFAULT_VPN_ROUTES = "0.0.0.0/1\n128.0.0.0/1\n::/0";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final UiKit ui = new UiKit(this);
     private GoncVpnState.Listener vpnStateListener;
     private final List<ShareItem> shareItems = new ArrayList<>();
     private final List<String> logs = new ArrayList<>();
@@ -91,7 +90,8 @@ public final class MainActivity extends Activity {
     private final TransferMetrics sendMetrics = new TransferMetrics();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
     private final TransferMetrics vpnMetrics = new TransferMetrics();
-    private final TransferMetrics vpnServerMetrics = new TransferMetrics();
+    private final VpnServerController vpnServer = new VpnServerController(this);
+    private java.util.function.Consumer<String> pendingPassphraseScan;
     private final Object downloadProgressLock = new Object();
 
     private LinearLayout root;
@@ -100,24 +100,19 @@ public final class MainActivity extends Activity {
     private boolean vpnServerMode;
     private boolean sendUseUdp;
     private boolean receiveUseUdp;
-    private boolean vpnServerUseUdp;
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
     private boolean scanningForSendMode;
     private boolean scanningForVpnMode;
-    private boolean scanningForVpnServerMode;
     private boolean scanningForVpnProfile;
     private boolean sendPasswordVisible;
     private boolean receivePasswordVisible;
     private boolean vpnPasswordVisible;
-    private boolean vpnServerPasswordVisible;
     private boolean vpnAdvancedExpanded;
     private int sendPasswordVisibilityToken;
     private int receivePasswordVisibilityToken;
-    private int vpnServerPasswordVisibilityToken;
     private String sendPassword = Passwords.generate();
     private String receivePassword = "";
-    private String vpnServerPassword = Passwords.generate();
     private final List<VpnProfile> vpnProfiles = new ArrayList<>();
     private int selectedVpnProfileIndex;
     private Uri saveTreeUri;
@@ -145,15 +140,12 @@ public final class MainActivity extends Activity {
     private long downloadFinishedAtMs;
     private String sendStatus = "Idle";
     private String receiveStatus = "Idle";
-    private String vpnServerStatus = "Idle";
     private GoncBridge.Session sendSession;
     private GoncBridge.Session receiveSession;
-    private GoncBridge.Session vpnServerSession;
     private HttpReceiver.Session remoteListSession;
     private HttpReceiver.Session receiveDownload;
     private long sendRunId;
     private long receiveRunId;
-    private long vpnServerRunId;
     private long pauseAutoRenderUntilMs;
     private long lastLogRenderMs;
     private long lastDownloadProgressRenderMs;
@@ -290,6 +282,12 @@ public final class MainActivity extends Activity {
         if (requestCode == REQUEST_SCAN_QR) {
             String result = data == null ? null : data.getStringExtra(Intents.Scan.RESULT);
             if (result != null && !result.trim().isEmpty()) {
+                if (pendingPassphraseScan != null) {
+                    java.util.function.Consumer<String> callback = pendingPassphraseScan;
+                    pendingPassphraseScan = null;
+                    callback.accept(result.trim());
+                    return;
+                }
                 if (scanningForVpnProfile) {
                     scanningForVpnProfile = false;
                     importVpnProfileFromQr(result.trim());
@@ -302,17 +300,6 @@ public final class MainActivity extends Activity {
                     currentVpnProfile().passphrase = result.trim();
                     scanningForVpnMode = false;
                     appendLog("info", "VPN passphrase scanned");
-                    render();
-                    return;
-                }
-                if (scanningForVpnServerMode) {
-                    scanningForVpnServerMode = false;
-                    if (vpnServerSession != null) {
-                        return;
-                    }
-                    vpnServerPassword = result.trim();
-                    revealVpnServerPasswordTemporarily(null);
-                    appendLog("info", "VPN server passphrase scanned");
                     render();
                     return;
                 }
@@ -385,9 +372,7 @@ public final class MainActivity extends Activity {
         if (receiveSession != null) {
             receiveSession.stop();
         }
-        if (vpnServerSession != null) {
-            vpnServerSession.stop();
-        }
+        vpnServer.shutdown();
         if (remoteListSession != null) {
             remoteListSession.stop();
         }
@@ -424,7 +409,7 @@ public final class MainActivity extends Activity {
         root.addView(header());
         root.addView(modeSwitch());
         if (vpnServerMode) {
-            root.addView(vpnServerPanel());
+            root.addView(vpnServer.panel());
         } else if (vpnMode) {
             root.addView(vpnPanel());
         } else if (sendMode) {
@@ -649,263 +634,6 @@ public final class MainActivity extends Activity {
         });
         card.addView(primary, blockParams(dp(12)));
         return card;
-    }
-
-    private View vpnServerPanel() {
-        LinearLayout card = card();
-
-        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), false), blockParams(0));
-        TextView intro = text(getString(R.string.vpn_server_intro), 13, muted(), Typeface.NORMAL);
-        intro.setSingleLine(false);
-        card.addView(intro, blockParams(dp(6)));
-        card.addView(vpnServerPasswordField());
-        card.addView(sectionDivider(), dividerParams(dp(12)));
-        card.addView(vpnServerProtocolToggle());
-
-        Button primary = vpnServerSession == null
-                ? primaryButton(getString(R.string.start_vpn_server))
-                : dangerButton(getString(R.string.stop_vpn_server));
-        primary.setOnClickListener(v -> {
-            if (vpnServerSession == null) {
-                startVpnServer();
-            } else {
-                stopVpnServer();
-            }
-        });
-        card.addView(primary, blockParams(dp(12)));
-        return card;
-    }
-
-    private View vpnServerPasswordField() {
-        boolean locked = vpnServerSession != null;
-        LinearLayout box = column();
-        box.addView(text(getString(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
-
-        LinearLayout line = row();
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(vpnServerPassword);
-        input.setTextColor(ink());
-        input.setTextSize(15);
-        input.setHint(getString(R.string.passphrase_input_hint));
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        input.setEnabled(!locked);
-        applyVpnServerPasswordVisibility(input);
-        input.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (vpnServerSession != null) {
-                    return;
-                }
-                vpnServerPassword = s.toString();
-                revealVpnServerPasswordTemporarily(input);
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
-        });
-        line.addView(input, new LinearLayout.LayoutParams(0, dp(46), 1));
-        box.addView(line, blockParams(dp(8)));
-
-        LinearLayout actions = row();
-        Button change = secondaryButton(getString(R.string.random_passphrase));
-        setControlEnabled(change, !locked);
-        change.setOnClickListener(v -> randomizeVpnServerPassword());
-        Button copy = secondaryButton(getString(R.string.copy));
-        copy.setOnClickListener(v -> copyVpnServerPassword());
-        Button scan = secondaryButton(getString(R.string.scan));
-        setControlEnabled(scan, !locked);
-        scan.setOnClickListener(v -> scanVpnServerPassword());
-        Button qr = secondaryButton(getString(R.string.qr));
-        qr.setOnClickListener(v -> showPassphraseQr(vpnServerPassword.trim()));
-        actions.addView(change, new LinearLayout.LayoutParams(0, dp(40), 1));
-        actions.addView(copy, actionParams());
-        actions.addView(scan, actionParams());
-        actions.addView(qr, actionParams());
-        box.addView(actions, blockParams(dp(6)));
-        return box;
-    }
-
-    private View vpnServerProtocolToggle() {
-        LinearLayout box = column();
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(getString(R.string.use_udp_protocol));
-        checkBox.setTextColor(Color.rgb(64, 81, 105));
-        checkBox.setTextSize(14);
-        checkBox.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        checkBox.setChecked(vpnServerUseUdp);
-        setControlEnabled(checkBox, vpnServerSession == null);
-        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (vpnServerSession != null) {
-                return;
-            }
-            vpnServerUseUdp = isChecked;
-        });
-        box.addView(checkBox);
-        TextView hint = text(getString(R.string.use_udp_protocol_hint), 12, muted(), Typeface.NORMAL);
-        hint.setPadding(dp(4), 0, 0, 0);
-        box.addView(hint);
-        return box;
-    }
-
-    private void applyVpnServerPasswordVisibility(EditText input) {
-        input.setTransformationMethod(vpnServerPasswordVisible ? null : PasswordTransformationMethod.getInstance());
-        input.setSelection(input.getText().length());
-    }
-
-    private void revealVpnServerPasswordTemporarily(EditText input) {
-        vpnServerPasswordVisible = true;
-        int token = ++vpnServerPasswordVisibilityToken;
-        if (input != null) {
-            applyVpnServerPasswordVisibility(input);
-        }
-        mainHandler.postDelayed(() -> {
-            if (vpnServerPasswordVisibilityToken != token) {
-                return;
-            }
-            vpnServerPasswordVisible = false;
-            if (input != null && input.isAttachedToWindow()) {
-                applyVpnServerPasswordVisibility(input);
-            } else {
-                render();
-            }
-        }, 5000);
-    }
-
-    private void hideVpnServerPassword() {
-        vpnServerPasswordVisible = false;
-        vpnServerPasswordVisibilityToken++;
-    }
-
-    private void randomizeVpnServerPassword() {
-        if (vpnServerSession != null) {
-            return;
-        }
-        vpnServerPassword = Passwords.generate();
-        revealVpnServerPasswordTemporarily(null);
-        appendLog("info", "Passphrase randomized");
-        render();
-    }
-
-    private void copyVpnServerPassword() {
-        String passphrase = vpnServerPassword.trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        copyText("Gonc passphrase", passphrase);
-        appendLog("info", "Passphrase copied");
-        Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
-        render();
-    }
-
-    private void startVpnServer() {
-        String passphrase = vpnServerPassword.trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (Passwords.isWeak(passphrase)) {
-            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        hideVpnServerPassword();
-        vpnServerMetrics.reset();
-        vpnServerStatus = "Preparing";
-        appendLog("info", "Start VPN server requested");
-        long runId = ++vpnServerRunId;
-        vpnServerSession = bridge.startP2PLinkAgent(this, passphrase, vpnServerUseUdp, vpnServerCallback(runId));
-        updateKeepScreenOn();
-        render();
-    }
-
-    private void stopVpnServer() {
-        GoncBridge.Session current = vpnServerSession;
-        if (current != null) {
-            current.stop();
-            vpnServerSession = null;
-        }
-        vpnServerStatus = "Idle";
-        vpnServerMetrics.markStopped();
-        updateKeepScreenOn();
-        appendLog("warn", "VPN server stop requested");
-        render();
-    }
-
-    private GoncBridge.EventCallback vpnServerCallback(long runId) {
-        return new GoncBridge.EventCallback() {
-            @Override
-            public void onEvent(String level, String message) {
-                mainHandler.post(() -> {
-                    if (vpnServerRunId != runId || vpnServerSession == null) {
-                        return;
-                    }
-                    updateMetricsFromLog(vpnServerMetrics, message);
-                    appendLog(level, message);
-                    renderAfterBackgroundUpdate();
-                });
-            }
-
-            @Override
-            public void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
-                mainHandler.post(() -> {
-                    if (vpnServerRunId != runId || vpnServerSession == null) {
-                        return;
-                    }
-                    updateMetricsFromReport(vpnServerMetrics, topic, status, network, mode, peer);
-                    renderAfterBackgroundUpdate();
-                });
-            }
-
-            @Override
-            public void onReady(String endpoint) {
-                mainHandler.post(() -> {
-                    if (vpnServerRunId != runId || vpnServerSession == null) {
-                        return;
-                    }
-                    vpnServerStatus = "Ready";
-                    appendLog("info", "VPN server ready, waiting for clients");
-                    render();
-                });
-            }
-
-            @Override
-            public void onStopped() {
-                mainHandler.post(() -> {
-                    if (vpnServerRunId != runId) {
-                        return;
-                    }
-                    vpnServerSession = null;
-                    vpnServerStatus = "Idle";
-                    vpnServerMetrics.markStopped();
-                    updateKeepScreenOn();
-                    appendLog("warn", "Session stopped");
-                    render();
-                });
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                mainHandler.post(() -> {
-                    if (vpnServerRunId != runId) {
-                        return;
-                    }
-                    vpnServerSession = null;
-                    vpnServerStatus = "Error";
-                    vpnServerMetrics.p2pStatus = "error";
-                    updateKeepScreenOn();
-                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    render();
-                });
-            }
-        };
     }
 
     private View receivePanel() {
@@ -1901,12 +1629,7 @@ public final class MainActivity extends Activity {
     }
 
     private Button segmentedButton(String label, boolean active) {
-        Button button = button(label, active ? Color.rgb(40, 112, 216) : Color.rgb(82, 101, 125), active ? Color.rgb(232, 240, 252) : Color.TRANSPARENT);
-        button.setTextSize(12);
-        button.setPadding(dp(6), 0, dp(6), 0);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        return button;
+        return ui.segmentedButton(label, active);
     }
 
     private boolean canClickRemoteAction() {
@@ -2457,26 +2180,15 @@ public final class MainActivity extends Activity {
     }
 
     private TextView sectionTitle(String title) {
-        TextView view = text(title, 16, ink(), Typeface.BOLD);
-        view.setPadding(0, 0, 0, dp(10));
-        return view;
+        return ui.sectionTitle(title);
     }
 
     private View sectionBoundaryTitle(String title, boolean separated) {
-        LinearLayout box = column();
-        if (separated) {
-            box.addView(sectionDivider(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
-        }
-        TextView view = text(title, 13, Color.rgb(64, 81, 105), Typeface.BOLD);
-        view.setPadding(0, separated ? dp(12) : 0, 0, dp(2));
-        box.addView(view);
-        return box;
+        return ui.sectionBoundaryTitle(title, separated);
     }
 
     private View sectionDivider() {
-        View line = new View(this);
-        line.setBackgroundColor(Color.rgb(226, 232, 240));
-        return line;
+        return ui.sectionDivider();
     }
 
     private void openDocumentPicker() {
@@ -2676,17 +2388,14 @@ public final class MainActivity extends Activity {
     private void endAllTasksAndExit() {
         sendRunId++;
         receiveRunId++;
-        vpnServerRunId++;
 
         GoncBridge.Session send = sendSession;
         GoncBridge.Session receive = receiveSession;
-        GoncBridge.Session vpnServer = vpnServerSession;
         HttpReceiver.Session listSession = remoteListSession;
         HttpReceiver.Session download = receiveDownload;
 
         sendSession = null;
         receiveSession = null;
-        vpnServerSession = null;
         remoteListSession = null;
         receiveDownload = null;
 
@@ -2696,9 +2405,7 @@ public final class MainActivity extends Activity {
         if (receive != null) {
             receive.stop();
         }
-        if (vpnServer != null) {
-            vpnServer.stop();
-        }
+        vpnServer.endTask();
         if (listSession != null) {
             listSession.stop();
         }
@@ -2723,20 +2430,16 @@ public final class MainActivity extends Activity {
         vpnServerMode = false;
         sendUseUdp = false;
         receiveUseUdp = false;
-        vpnServerUseUdp = false;
         selectedVpnProfileIndex = 0;
         vpnPasswordVisible = false;
-        vpnServerPasswordVisible = false;
         activityExpanded = false;
         sendPassword = Passwords.generate();
         receivePassword = "";
-        vpnServerPassword = Passwords.generate();
-        vpnServerStatus = "Idle";
         sendPasswordVisible = false;
         receivePasswordVisible = false;
         sendPasswordVisibilityToken++;
         receivePasswordVisibilityToken++;
-        vpnServerPasswordVisibilityToken++;
+        vpnServer.resetForFreshLaunch();
 
         saveTreeUri = null;
         saveLocationLabel = getString(R.string.default_save_location);
@@ -2767,7 +2470,6 @@ public final class MainActivity extends Activity {
         receiveStatus = "Idle";
         sendMetrics.reset();
         receiveMetrics.reset();
-        vpnServerMetrics.reset();
     }
 
     private void loadRemoteFiles(String endpoint, long runId) {
@@ -3576,7 +3278,8 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void showPassphraseQr(String passphrase) {
+    @Override
+    public void showPassphraseQr(String passphrase) {
         if (passphrase.isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
             return;
@@ -3695,7 +3398,7 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = false;
         scanningForVpnMode = false;
-        scanningForVpnServerMode = false;
+        pendingPassphraseScan = null;
         scanningForSendMode = sender;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3710,7 +3413,7 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = false;
         scanningForVpnMode = true;
-        scanningForVpnServerMode = false;
+        pendingPassphraseScan = null;
         scanningForSendMode = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3725,22 +3428,7 @@ public final class MainActivity extends Activity {
         }
         scanningForVpnProfile = true;
         scanningForVpnMode = false;
-        scanningForVpnServerMode = false;
-        scanningForSendMode = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
-            return;
-        }
-        launchQrScanner();
-    }
-
-    private void scanVpnServerPassword() {
-        if (vpnServerSession != null) {
-            return;
-        }
-        scanningForVpnProfile = false;
-        scanningForVpnMode = false;
-        scanningForVpnServerMode = true;
+        pendingPassphraseScan = null;
         scanningForSendMode = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
@@ -3805,7 +3493,8 @@ public final class MainActivity extends Activity {
         startActivity(Intent.createChooser(intent, getString(R.string.share_diagnostics)));
     }
 
-    private void copyText(String label, String value) {
+    @Override
+    public void copyText(String label, String value) {
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
@@ -3817,7 +3506,7 @@ public final class MainActivity extends Activity {
             return GoncVpnState.status();
         }
         if (vpnServerMode) {
-            return vpnServerStatus;
+            return vpnServer.status();
         }
         return sendMode ? sendStatus : receiveStatus;
     }
@@ -3904,7 +3593,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isAnySessionRunning() {
-        return sendSession != null || receiveSession != null || vpnServerSession != null || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
+        return sendSession != null || receiveSession != null || vpnServer.isRunning() || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
     }
 
     private TransferMetrics currentMetrics() {
@@ -3913,7 +3602,7 @@ public final class MainActivity extends Activity {
             return vpnMetrics;
         }
         if (vpnServerMode) {
-            return vpnServerMetrics;
+            return vpnServer.metrics();
         }
         return currentMetrics(sendMode);
     }
@@ -3938,7 +3627,8 @@ public final class MainActivity extends Activity {
         updateMetricsFromReport(currentMetrics(forSendMode), topic, status, network, mode, peer);
     }
 
-    private void updateMetricsFromReport(TransferMetrics metrics, String topic, String status, String network, String mode, String peer) {
+    @Override
+    public void updateMetricsFromReport(TransferMetrics metrics, String topic, String status, String network, String mode, String peer) {
         if (status != null && !status.trim().isEmpty()) {
             metrics.p2pStatus = status.trim();
         }
@@ -3981,7 +3671,8 @@ public final class MainActivity extends Activity {
         updateMetricsFromLog(currentMetrics(forSendMode), message);
     }
 
-    private void updateMetricsFromLog(TransferMetrics metrics, String message) {
+    @Override
+    public void updateMetricsFromLog(TransferMetrics metrics, String message) {
         if (updateTraffic(metrics, message)) {
             return;
         }
@@ -4097,7 +3788,64 @@ public final class MainActivity extends Activity {
         return clean;
     }
 
-    private void updateKeepScreenOn() {
+    // --- ModuleHost: shared services exposed to per-module controllers ---
+
+    @Override
+    public Context context() {
+        return this;
+    }
+
+    @Override
+    public UiKit ui() {
+        return ui;
+    }
+
+    @Override
+    public GoncBridge bridge() {
+        return bridge;
+    }
+
+    @Override
+    public Handler mainHandler() {
+        return mainHandler;
+    }
+
+    @Override
+    public void log(String level, String message) {
+        appendLog(level, message);
+    }
+
+    @Override
+    public void requestRender() {
+        render();
+    }
+
+    @Override
+    public void requestBackgroundRender() {
+        renderAfterBackgroundUpdate();
+    }
+
+    @Override
+    public void toast(int messageResId) {
+        Toast.makeText(this, messageResId, Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void scanPassphrase(java.util.function.Consumer<String> onResult) {
+        scanningForVpnProfile = false;
+        scanningForVpnMode = false;
+        scanningForSendMode = false;
+        pendingPassphraseScan = onResult;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
+            return;
+        }
+        launchQrScanner();
+    }
+
+    @Override
+    public void updateKeepScreenOn() {
         if (isAnySessionRunning()) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
@@ -4308,215 +4056,119 @@ public final class MainActivity extends Activity {
         }
     }
 
+    // --- UI DSL delegates to the shared UiKit (transitional; removed as the
+    // panel view code moves into per-module classes that call ui.* directly). ---
+
     private Button modeButton(String label, boolean active) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setTextSize(14);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(active ? Color.WHITE : Color.rgb(82, 101, 125));
-        button.setBackground(rounded(active ? ink() : Color.TRANSPARENT, dp(6), 0, 0));
-        return button;
+        return ui.modeButton(label, active);
     }
 
     private Button primaryButton(String label) {
-        Button button = button(label, Color.WHITE, Color.rgb(40, 112, 216));
-        button.setTextSize(16);
-        return button;
+        return ui.primaryButton(label);
     }
 
     private Button outlineButton(String label) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setTextSize(16);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(Color.rgb(40, 112, 216));
-        button.setBackground(rounded(Color.TRANSPARENT, dp(6), Color.rgb(40, 112, 216), 1));
-        return button;
+        return ui.outlineButton(label);
     }
 
     private Button dangerButton(String label) {
-        Button button = button(label, Color.WHITE, Color.rgb(201, 63, 63));
-        button.setTextSize(16);
-        return button;
+        return ui.dangerButton(label);
     }
 
     private Button warningButton(String label) {
-        Button button = button(label, Color.WHITE, Color.rgb(217, 119, 6));
-        button.setTextSize(16);
-        return button;
+        return ui.warningButton(label);
     }
 
     private Button secondaryButton(String label) {
-        return button(label, ink(), Color.rgb(237, 242, 247));
+        return ui.secondaryButton(label);
     }
 
     private Button ghostButton(String label) {
-        return button(label, Color.rgb(40, 112, 216), Color.TRANSPARENT);
+        return ui.ghostButton(label);
     }
 
     private Button compactGhostButton(String label) {
-        Button button = ghostButton(label);
-        button.setTextSize(13);
-        button.setMinWidth(0);
-        button.setMinimumWidth(0);
-        button.setMinHeight(0);
-        button.setMinimumHeight(0);
-        button.setPadding(dp(8), 0, dp(8), 0);
-        button.setIncludeFontPadding(false);
-        return button;
+        return ui.compactGhostButton(label);
     }
 
     private Button quietTouchButton(String label) {
-        Button button = ghostButton(label);
-        button.setMinWidth(dp(56));
-        button.setMinimumWidth(dp(56));
-        button.setMinHeight(dp(44));
-        button.setMinimumHeight(dp(44));
-        button.setPadding(dp(8), 0, dp(8), 0);
-        return button;
+        return ui.quietTouchButton(label);
     }
 
     private Button button(String label, int color, int background) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
-        button.setTextSize(14);
-        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        button.setTextColor(color);
-        button.setBackground(rounded(background, dp(6), 0, 0));
-        return button;
+        return ui.button(label, color, background);
     }
 
     private void setControlEnabled(View view, boolean enabled) {
-        view.setEnabled(enabled);
-        view.setAlpha(enabled ? 1.0f : 0.45f);
+        ui.setControlEnabled(view, enabled);
     }
 
     private TextView text(String value, int sp, int color, int style) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(sp);
-        view.setTextColor(color);
-        view.setTypeface(Typeface.DEFAULT, style);
-        return view;
+        return ui.text(value, sp, color, style);
     }
 
     private LinearLayout card() {
-        LinearLayout card = column();
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
-        card.setBackground(rounded(Color.WHITE, dp(8), Color.rgb(216, 226, 238), 1));
-        card.setLayoutParams(blockParams(dp(12)));
-        return card;
+        return ui.card();
     }
 
     private LinearLayout row() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.HORIZONTAL);
-        return layout;
+        return ui.row();
     }
 
     private LinearLayout column() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        return layout;
+        return ui.column();
     }
 
     private LinearLayout.LayoutParams blockParams() {
-        return blockParams(dp(10));
+        return ui.blockParams();
     }
 
     private LinearLayout.LayoutParams blockParams(int topMargin) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        params.setMargins(0, topMargin, 0, 0);
-        return params;
+        return ui.blockParams(topMargin);
     }
 
     private LinearLayout.LayoutParams dividerParams(int topMargin) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(1)
-        );
-        params.setMargins(0, topMargin, 0, 0);
-        return params;
+        return ui.dividerParams(topMargin);
     }
 
     private LinearLayout.LayoutParams actionParams() {
-        return actionParams(dp(40));
+        return ui.actionParams();
     }
 
     private LinearLayout.LayoutParams actionParams(int height) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, height, 1);
-        params.setMargins(dp(8), 0, 0, 0);
-        return params;
+        return ui.actionParams(height);
     }
 
     private LinearLayout.LayoutParams metricParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        params.setMargins(dp(8), 0, 0, 0);
-        return params;
+        return ui.metricParams();
     }
 
     private GradientDrawable rounded(int color, int radius, int strokeColor, int strokeWidthDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(radius);
-        if (strokeWidthDp > 0) {
-            drawable.setStroke(dp(strokeWidthDp), strokeColor);
-        }
-        return drawable;
+        return ui.rounded(color, radius, strokeColor, strokeWidthDp);
     }
 
     private int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+        return ui.dp(value);
     }
 
     private int ink() {
-        return Color.rgb(23, 32, 51);
+        return ui.ink();
     }
 
     private int muted() {
-        return Color.rgb(100, 116, 139);
+        return ui.muted();
     }
 
     private String formatBytes(long value) {
-        if (value < 0) {
-            return getString(R.string.unknown_size);
-        }
-        String[] units = {"B", "KB", "MB", "GB", "TB"};
-        double size = value;
-        int unit = 0;
-        while (size >= 1024 && unit < units.length - 1) {
-            size /= 1024;
-            unit++;
-        }
-        return String.format(Locale.ROOT, unit == 0 ? "%.0f %s" : "%.1f %s", size, units[unit]);
+        return ui.formatBytes(value);
     }
 
     private String formatRate(double bytesPerSecond) {
-        if (bytesPerSecond <= 0) {
-            return "0 B/s";
-        }
-        String[] units = {"B/s", "KB/s", "MB/s", "GB/s"};
-        double size = bytesPerSecond;
-        int unit = 0;
-        while (size >= 1024 && unit < units.length - 1) {
-            size /= 1024;
-            unit++;
-        }
-        return String.format(Locale.ROOT, unit == 0 ? "%.0f %s" : "%.1f %s", size, units[unit]);
+        return ui.formatRate(bytesPerSecond);
     }
 
     private String formatPercent(long done, long total) {
-        if (total <= 0) {
-            return "0%";
-        }
-        double value = Math.min(100, Math.max(0, done * 100.0 / total));
-        return String.format(Locale.ROOT, "%.1f%%", value);
+        return ui.formatPercent(done, total);
     }
 
     private void updateDownloadProgressViews() {
@@ -4581,10 +4233,7 @@ public final class MainActivity extends Activity {
     }
 
     private int progressValue(long done, long total) {
-        if (total <= 0) {
-            return 0;
-        }
-        return (int) Math.min(1000, Math.max(0, done * 1000.0 / total));
+        return ui.progressValue(done, total);
     }
 
     private String formatRemaining(long done, long total, double bytesPerSecond) {
@@ -4599,133 +4248,19 @@ public final class MainActivity extends Activity {
     }
 
     private String formatDuration(long seconds) {
-        long clean = Math.max(0, seconds);
-        long hours = clean / 3600;
-        long minutes = (clean % 3600) / 60;
-        long secs = clean % 60;
-        if (hours > 0) {
-            return String.format(Locale.ROOT, "%dh %02dm", hours, minutes);
-        }
-        if (minutes > 0) {
-            return String.format(Locale.ROOT, "%dm %02ds", minutes, secs);
-        }
-        return String.format(Locale.ROOT, "%ds", secs);
+        return ui.formatDuration(seconds);
     }
 
     private String emptyDash(String value) {
-        return value == null || value.trim().isEmpty() ? "-" : value.trim();
+        return ui.emptyDash(value);
     }
 
     private String titleCase(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return "-";
-        }
-        String clean = value.trim();
-        return clean.substring(0, 1).toUpperCase(Locale.ROOT) + clean.substring(1);
+        return ui.titleCase(value);
     }
 
     private interface TextSink {
         void set(String value);
-    }
-
-    private static final class VpnProfile {
-        String name;
-        String passphrase;
-        boolean useUdp;
-        boolean routeIpv6;
-        String dnsServers;
-        String routeCidrs;
-
-        static VpnProfile defaults(String name) {
-            VpnProfile profile = new VpnProfile();
-            profile.name = name == null ? "" : name;
-            profile.passphrase = "";
-            profile.useUdp = false;
-            profile.routeIpv6 = false;
-            profile.dnsServers = DEFAULT_VPN_DNS;
-            profile.routeCidrs = DEFAULT_VPN_ROUTES;
-            return profile;
-        }
-
-        static VpnProfile fromJson(JSONObject object, Context context) {
-            VpnProfile profile = defaults(context.getString(R.string.vpn_profile_default_name));
-            profile.name = object.optString("name", profile.name);
-            profile.passphrase = object.optString("passphrase", "");
-            profile.useUdp = object.optBoolean("useUdp", false);
-            profile.routeIpv6 = object.optBoolean("routeIpv6", false);
-            profile.dnsServers = object.optString("dnsServers", DEFAULT_VPN_DNS);
-            profile.routeCidrs = object.optString("routeCidrs", DEFAULT_VPN_ROUTES);
-            return profile;
-        }
-
-        JSONObject toJson() {
-            JSONObject object = new JSONObject();
-            try {
-                object.put("name", name == null ? "" : name);
-                object.put("passphrase", passphrase == null ? "" : passphrase);
-                object.put("useUdp", useUdp);
-                object.put("routeIpv6", routeIpv6);
-                object.put("dnsServers", dnsServers == null ? "" : dnsServers);
-                object.put("routeCidrs", routeCidrs == null ? "" : routeCidrs);
-            } catch (JSONException ignored) {
-            }
-            return object;
-        }
-
-        String displayName(Context context) {
-            return name == null || name.trim().isEmpty()
-                    ? context.getString(R.string.vpn_profile_default_name)
-                    : name.trim();
-        }
-    }
-
-    private static final class TransferMetrics {
-        final Map<String, String> sessions = new LinkedHashMap<>();
-        String p2pStatus = "idle";
-        String network = "-";
-        String routeMode = "-";
-        String peer = "-";
-        int connectedCount;
-        int connectingCount;
-        double inBps;
-        double outBps;
-        long lastTrafficMs;
-
-        void reset() {
-            sessions.clear();
-            p2pStatus = "starting";
-            network = "-";
-            routeMode = "-";
-            peer = "-";
-            connectedCount = 0;
-            connectingCount = 0;
-            inBps = 0;
-            outBps = 0;
-            lastTrafficMs = 0;
-        }
-
-        void markStopped() {
-            p2pStatus = "idle";
-            connectedCount = 0;
-            connectingCount = 0;
-            inBps = 0;
-            outBps = 0;
-            lastTrafficMs = 0;
-            routeMode = "-";
-            sessions.clear();
-        }
-
-        void recountConnections() {
-            connectedCount = 0;
-            connectingCount = 0;
-            for (String status : sessions.values()) {
-                if ("connected".equals(status)) {
-                    connectedCount++;
-                } else if ("connecting".equals(status)) {
-                    connectingCount++;
-                }
-            }
-        }
     }
 
     private static final class SelectionSummary {
