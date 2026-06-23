@@ -1,6 +1,7 @@
 package cn.threatexpert.gonc;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Handler;
 
 import java.util.function.Consumer;
@@ -23,6 +24,16 @@ interface ModuleHost {
 
     void log(String level, String message);
 
+    /** Log without persisting to the crash-diagnostics buffer (already persisted elsewhere). */
+    void logTransient(String level, String message);
+
+    SharedPreferences prefs();
+
+    /** Launch the VPN client tunnel (host owns the permission/battery/service flow). */
+    void startVpnClient();
+
+    void stopVpnClient();
+
     /** Full rebuild of the visible screen. */
     void requestRender();
 
@@ -37,6 +48,9 @@ interface ModuleHost {
 
     /** Launch the QR scanner; {@code onResult} receives the scanned text on the main thread. */
     void scanPassphrase(Consumer<String> onResult);
+
+    /** Launch the QR scanner with the profile-import prompt. */
+    void scanProfileQr(Consumer<String> onResult);
 
     void toast(int messageResId);
 

@@ -83,15 +83,15 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final UiKit ui = new UiKit(this);
-    private GoncVpnState.Listener vpnStateListener;
     private final List<ShareItem> shareItems = new ArrayList<>();
     private final List<String> logs = new ArrayList<>();
     private final GoncBridge bridge = new MobileGoncBridge();
     private final TransferMetrics sendMetrics = new TransferMetrics();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
-    private final TransferMetrics vpnMetrics = new TransferMetrics();
     private final VpnServerController vpnServer = new VpnServerController(this);
-    private java.util.function.Consumer<String> pendingPassphraseScan;
+    private final VpnClientController vpnClient = new VpnClientController(this);
+    private java.util.function.Consumer<String> pendingScanCallback;
+    private boolean pendingScanIsProfile;
     private final Object downloadProgressLock = new Object();
 
     private LinearLayout root;
@@ -103,18 +103,12 @@ public final class MainActivity extends Activity implements ModuleHost {
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
     private boolean scanningForSendMode;
-    private boolean scanningForVpnMode;
-    private boolean scanningForVpnProfile;
     private boolean sendPasswordVisible;
     private boolean receivePasswordVisible;
-    private boolean vpnPasswordVisible;
-    private boolean vpnAdvancedExpanded;
     private int sendPasswordVisibilityToken;
     private int receivePasswordVisibilityToken;
     private String sendPassword = Passwords.generate();
     private String receivePassword = "";
-    private final List<VpnProfile> vpnProfiles = new ArrayList<>();
-    private int selectedVpnProfileIndex;
     private Uri saveTreeUri;
     private String saveLocationLabel;
     private String receiveEndpoint = "";
@@ -167,7 +161,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     private TextView activityRouteValueView;
     private TextView activityPeerValueView;
     private TextView activityEndpointValueView;
-    private long lastVpnLogId;
     private TextView remoteFilesSummaryTextView;
     private TextView remoteFilesTotalSummaryTextView;
     private Button downloadSelectedButton;
@@ -188,31 +181,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         super.onCreate(savedInstanceState);
         GoncCrashReporter.install(this);
         saveLocationLabel = getString(R.string.default_save_location);
-        loadVpnProfiles();
+        vpnClient.load();
         buildRoot();
-        vpnStateListener = new GoncVpnState.Listener() {
-            @Override
-            public void onVpnStateChanged() {
-                mainHandler.post(() -> {
-                    updateKeepScreenOn();
-                    render();
-                });
-            }
-
-            @Override
-            public void onVpnLog(GoncVpnState.LogEntry entry) {
-                mainHandler.post(() -> {
-                    appendVpnLog(entry);
-                    long now = System.currentTimeMillis();
-                    if (now - lastLogRenderMs >= 200) {
-                        lastLogRenderMs = now;
-                        renderAfterBackgroundUpdate();
-                    }
-                });
-            }
-        };
-        GoncVpnState.setListener(vpnStateListener);
-        syncVpnLogs();
+        vpnClient.register();
         String lastCrash = GoncCrashReporter.lastCrash(this);
         if (!lastCrash.trim().isEmpty()) {
             appendLog("error", "Previous crash:\n" + lastCrash);
@@ -236,7 +207,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     @Override
     protected void onResume() {
         super.onResume();
-        syncVpnLogs();
+        vpnClient.syncLogs();
         renderAfterBackgroundUpdate();
         if (!pendingVpnStartAfterBatterySettings) {
             return;
@@ -282,25 +253,10 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (requestCode == REQUEST_SCAN_QR) {
             String result = data == null ? null : data.getStringExtra(Intents.Scan.RESULT);
             if (result != null && !result.trim().isEmpty()) {
-                if (pendingPassphraseScan != null) {
-                    java.util.function.Consumer<String> callback = pendingPassphraseScan;
-                    pendingPassphraseScan = null;
+                if (pendingScanCallback != null) {
+                    java.util.function.Consumer<String> callback = pendingScanCallback;
+                    pendingScanCallback = null;
                     callback.accept(result.trim());
-                    return;
-                }
-                if (scanningForVpnProfile) {
-                    scanningForVpnProfile = false;
-                    importVpnProfileFromQr(result.trim());
-                    return;
-                }
-                if (scanningForVpnMode) {
-                    if (GoncVpnState.isRunning()) {
-                        return;
-                    }
-                    currentVpnProfile().passphrase = result.trim();
-                    scanningForVpnMode = false;
-                    appendLog("info", "VPN passphrase scanned");
-                    render();
                     return;
                 }
                 if (isPasswordLocked(scanningForSendMode)) {
@@ -365,7 +321,7 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     protected void onDestroy() {
-        GoncVpnState.removeListener(vpnStateListener);
+        vpnClient.unregister();
         if (sendSession != null) {
             sendSession.stop();
         }
@@ -411,7 +367,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (vpnServerMode) {
             root.addView(vpnServer.panel());
         } else if (vpnMode) {
-            root.addView(vpnPanel());
+            root.addView(vpnClient.panel());
         } else if (sendMode) {
             root.addView(sendPanel());
         } else {
@@ -668,370 +624,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         });
         card.addView(primary, blockParams(dp(12)));
         return card;
-    }
-
-    private View vpnPanel() {
-        LinearLayout card = card();
-        boolean running = GoncVpnState.isRunning();
-        if (running) {
-            card.addView(vpnSessionBarView());
-            if (!GoncVpnState.error().trim().isEmpty()) {
-                TextView error = text(GoncVpnState.error(), 13, Color.rgb(201, 63, 63), Typeface.BOLD);
-                error.setSingleLine(false);
-                card.addView(error, blockParams(dp(8)));
-            }
-            return card;
-        }
-
-        // Profile selector (always visible)
-        card.addView(vpnProfileSelector(), blockParams(0));
-        // Passphrase (always visible, primary required input)
-        card.addView(vpnPassphraseField(), blockParams(dp(8)));
-        // Connect button immediately after passphrase
-        Button primary = primaryButton(getString(R.string.start_vpn));
-        primary.setOnClickListener(v -> requestStartVpn());
-        card.addView(primary, blockParams(dp(12)));
-
-        // Advanced settings toggle
-        Button advancedToggle = secondaryButton(vpnAdvancedExpanded
-                ? getString(R.string.vpn_advanced_settings_hide)
-                : getString(R.string.vpn_advanced_settings));
-        advancedToggle.setOnClickListener(v -> {
-            vpnAdvancedExpanded = !vpnAdvancedExpanded;
-            render();
-        });
-        card.addView(advancedToggle, blockParams(dp(6)));
-
-        // Advanced settings (collapsed by default)
-        if (vpnAdvancedExpanded) {
-            card.addView(vpnProfileNameField(), blockParams(dp(10)));
-            card.addView(vpnOptions(), blockParams(dp(10)));
-            card.addView(vpnMultilineField(
-                    getString(R.string.vpn_dns_servers),
-                    getString(R.string.vpn_dns_hint),
-                    currentVpnProfile().dnsServers,
-                    2,
-                    value -> currentVpnProfile().dnsServers = value
-            ), blockParams(dp(10)));
-            card.addView(vpnMultilineField(
-                    getString(R.string.vpn_route_cidrs),
-                    getString(R.string.vpn_route_cidrs_hint),
-                    currentVpnProfile().routeCidrs,
-                    4,
-                    value -> currentVpnProfile().routeCidrs = value
-            ), blockParams(dp(10)));
-        }
-        return card;
-    }
-
-    private View vpnProfileSelector() {
-        LinearLayout row = row();
-        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
-
-        // "配置" label
-        TextView label = text(getString(R.string.vpn_profile_label), 13, muted(), Typeface.BOLD);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        labelParams.setMargins(0, 0, dp(10), 0);
-        row.addView(label, labelParams);
-
-        // Spinner with border
-        Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, vpnProfileNames());
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinner.setAdapter(adapter);
-        spinner.setSelection(Math.max(0, Math.min(selectedVpnProfileIndex, vpnProfiles.size() - 1)));
-        spinner.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        spinner.setPadding(dp(10), 0, dp(10), 0);
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (position != selectedVpnProfileIndex && position >= 0 && position < vpnProfiles.size()) {
-                    selectedVpnProfileIndex = position;
-                    saveSelectedVpnProfile();
-                    vpnPasswordVisible = false;
-                    render();
-                }
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-            }
-        });
-        row.addView(spinner, new LinearLayout.LayoutParams(0, dp(46), 1));
-
-        // ⋮ overflow menu for profile management
-        Button menuBtn = secondaryButton("⋮");
-        menuBtn.setTextSize(16);
-        menuBtn.setOnClickListener(v -> {
-            android.widget.PopupMenu popup = new android.widget.PopupMenu(this, menuBtn);
-            popup.getMenu().add(0, 1, 0, getString(R.string.vpn_profile_new));
-            popup.getMenu().add(0, 2, 1, getString(R.string.vpn_profile_import));
-            popup.getMenu().add(0, 3, 2, getString(R.string.vpn_profile_export));
-            popup.getMenu().add(0, 4, 3, getString(R.string.vpn_profile_delete));
-            popup.setOnMenuItemClickListener(item -> {
-                switch (item.getItemId()) {
-                    case 1:
-                        vpnProfiles.add(VpnProfile.defaults(uniqueVpnProfileName()));
-                        selectedVpnProfileIndex = vpnProfiles.size() - 1;
-                        saveVpnProfiles();
-                        vpnPasswordVisible = false;
-                        render();
-                        return true;
-                    case 2:
-                        scanVpnProfile();
-                        return true;
-                    case 3:
-                        showVpnProfileQr();
-                        return true;
-                    case 4:
-                        String profileName = currentVpnProfile().displayName(this);
-                        new android.app.AlertDialog.Builder(this)
-                                .setMessage(getString(R.string.vpn_profile_delete_confirm, profileName))
-                                .setPositiveButton(getString(R.string.vpn_profile_delete), (dialog, which) -> {
-                                    if (vpnProfiles.size() > 1) {
-                                        vpnProfiles.remove(selectedVpnProfileIndex);
-                                        selectedVpnProfileIndex = Math.max(0, selectedVpnProfileIndex - 1);
-                                    } else {
-                                        vpnProfiles.set(0, VpnProfile.defaults(getString(R.string.vpn_profile_default_name)));
-                                        selectedVpnProfileIndex = 0;
-                                    }
-                                    saveVpnProfiles();
-                                    vpnPasswordVisible = false;
-                                    render();
-                                })
-                                .setNegativeButton(getString(R.string.cancel), null)
-                                .show();
-                        return true;
-                    default:
-                        return false;
-                }
-            });
-            popup.show();
-        });
-        LinearLayout.LayoutParams menuParams = new LinearLayout.LayoutParams(dp(46), dp(46));
-        menuParams.setMargins(dp(8), 0, 0, 0);
-        row.addView(menuBtn, menuParams);
-
-        return row;
-    }
-
-    private View vpnProfileNameField() {
-        return labeledSingleLineField(
-                getString(R.string.vpn_profile_name),
-                currentVpnProfile().name,
-                getString(R.string.vpn_profile_name_hint),
-                value -> currentVpnProfile().name = value
-        );
-    }
-
-    private View vpnPassphraseField() {
-        LinearLayout box = column();
-        box.addView(text(getString(R.string.passphrase), 13, muted(), Typeface.BOLD));
-        LinearLayout line = row();
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(currentVpnProfile().passphrase);
-        input.setTextColor(ink());
-        input.setTextSize(15);
-        input.setHint(getString(R.string.vpn_passphrase_hint));
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        input.setTransformationMethod(vpnPasswordVisible ? null : PasswordTransformationMethod.getInstance());
-        input.addTextChangedListener(simpleWatcher(value -> currentVpnProfile().passphrase = value));
-        line.addView(input, new LinearLayout.LayoutParams(0, dp(46), 1));
-
-        ImageButton visibility = new ImageButton(this);
-        visibility.setImageResource(android.R.drawable.ic_menu_view);
-        visibility.setBackground(rounded(Color.TRANSPARENT, dp(6), Color.rgb(203, 215, 230), 1));
-        visibility.setContentDescription(getString(vpnPasswordVisible ? R.string.hide : R.string.show));
-        visibility.setOnClickListener(v -> {
-            vpnPasswordVisible = !vpnPasswordVisible;
-            render();
-        });
-        LinearLayout.LayoutParams visibilityParams = new LinearLayout.LayoutParams(dp(46), dp(46));
-        visibilityParams.setMargins(dp(8), 0, 0, 0);
-        line.addView(visibility, visibilityParams);
-
-        Button scan = secondaryButton(getString(R.string.scan));
-        scan.setOnClickListener(v -> scanVpnPassword());
-        LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(dp(76), dp(46));
-        scanParams.setMargins(dp(8), 0, 0, 0);
-        line.addView(scan, scanParams);
-        box.addView(line, blockParams(dp(4)));
-        return box;
-    }
-
-    private View vpnOptions() {
-        LinearLayout box = column();
-        boolean running = GoncVpnState.isRunning();
-        CheckBox udp = new CheckBox(this);
-        udp.setText(getString(R.string.use_udp_protocol));
-        udp.setTextColor(Color.rgb(64, 81, 105));
-        udp.setTextSize(14);
-        udp.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        udp.setChecked(currentVpnProfile().useUdp);
-        setControlEnabled(udp, !running);
-        udp.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (!GoncVpnState.isRunning()) {
-                currentVpnProfile().useUdp = isChecked;
-            }
-        });
-        box.addView(udp);
-
-        CheckBox ipv6 = new CheckBox(this);
-        ipv6.setText(getString(R.string.vpn_route_ipv6));
-        ipv6.setTextColor(Color.rgb(64, 81, 105));
-        ipv6.setTextSize(14);
-        ipv6.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        ipv6.setChecked(currentVpnProfile().routeIpv6);
-        setControlEnabled(ipv6, !running);
-        ipv6.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (!GoncVpnState.isRunning()) {
-                currentVpnProfile().routeIpv6 = isChecked;
-            }
-        });
-        box.addView(ipv6);
-        TextView hint = text(getString(R.string.vpn_route_ipv6_hint), 12, muted(), Typeface.NORMAL);
-        hint.setPadding(dp(4), 0, 0, 0);
-        box.addView(hint);
-        return box;
-    }
-
-    private View labeledSingleLineField(String label, String value, String hint, TextSink sink) {
-        LinearLayout box = column();
-        box.addView(text(label, 13, muted(), Typeface.BOLD));
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(value == null ? "" : value);
-        input.setTextColor(ink());
-        input.setTextSize(15);
-        input.setHint(hint);
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        input.addTextChangedListener(simpleWatcher(sink));
-        box.addView(input, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
-        return box;
-    }
-
-    private View vpnMultilineField(String label, String hint, String value, int minLines, TextSink sink) {
-        LinearLayout box = column();
-        box.addView(text(label, 13, muted(), Typeface.BOLD));
-        EditText input = new EditText(this);
-        input.setSingleLine(false);
-        input.setMinLines(minLines);
-        input.setText(value == null ? "" : value);
-        input.setTextColor(ink());
-        input.setTextSize(14);
-        input.setHint(hint);
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(dp(12), dp(8), dp(12), dp(8));
-        input.setGravity(Gravity.TOP);
-        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        input.addTextChangedListener(simpleWatcher(sink));
-        box.addView(input, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        return box;
-    }
-
-    private View vpnSessionBarView() {
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(8), dp(10), dp(8));
-        row.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
-
-        View dot = new View(this);
-        dot.setBackground(rounded(vpnConnectionColor(), dp(6), 0, 0));
-        row.addView(dot, new LinearLayout.LayoutParams(dp(12), dp(12)));
-
-        String activeProfile = GoncVpnState.profileName();
-        if (activeProfile.trim().isEmpty()) {
-            activeProfile = currentVpnProfile().displayName(this);
-        }
-        TextView label = text(vpnConnectionLabel() + "\n" + getString(R.string.vpn_active_profile, activeProfile), 14, ink(), Typeface.BOLD);
-        label.setSingleLine(false);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        labelParams.setMargins(dp(10), 0, dp(8), 0);
-        row.addView(label, labelParams);
-
-        Button disconnect = dangerButton(getString(R.string.disconnect));
-        disconnect.setTextSize(14);
-        disconnect.setOnClickListener(v -> stopVpnService());
-        setControlEnabled(disconnect, !GoncVpnState.STOPPING.equals(GoncVpnState.status()));
-        LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        disconnectParams.setMargins(dp(8), 0, 0, 0);
-        row.addView(disconnect, disconnectParams);
-        return row;
-    }
-
-    private String vpnConnectionLabel() {
-        String state = vpnConnectionState();
-        String route = vpnRouteLabel();
-        if ("failed".equals(state)) {
-            return getString(R.string.connection_failed);
-        }
-        if ("connected".equals(state)) {
-            return appendRoute(getString(R.string.connection_connected), route);
-        }
-        if ("negotiating".equals(state)) {
-            return appendRoute(getString(R.string.connection_negotiating), route);
-        }
-        if ("waiting".equals(state)) {
-            return getString(R.string.connection_waiting_peer);
-        }
-        if ("disconnected".equals(state)) {
-            return getString(R.string.connection_disconnected);
-        }
-        return getString(R.string.connection_connecting);
-    }
-
-    private String vpnConnectionState() {
-        String clean = normalizeMetricStatus(GoncVpnState.p2pStatus());
-        if ("-".equals(clean)) {
-            return "waiting";
-        }
-        if ("failed".equals(clean) || "error".equals(clean)) {
-            return "failed";
-        }
-        if ("connected".equals(clean)) {
-            return "connected";
-        }
-        if ("negotiating".equals(clean)) {
-            return "negotiating";
-        }
-        if ("connecting".equals(clean)) {
-            return "connecting";
-        }
-        if ("wait".equals(clean)
-                || "waiting".equals(clean)
-                || "ready".equals(clean)
-                || "starting".equals(clean)
-                || "idle".equals(clean)) {
-            return "waiting";
-        }
-        if ("disconnected".equals(clean)) {
-            return "disconnected";
-        }
-        return "connecting";
-    }
-
-    private String vpnRouteLabel() {
-        return routeLabel(GoncVpnState.route());
-    }
-
-    private int vpnConnectionColor() {
-        String state = vpnConnectionState();
-        if ("failed".equals(state)) {
-            return Color.rgb(201, 63, 63);
-        }
-        if ("connected".equals(state)) {
-            return Color.rgb(16, 145, 96);
-        }
-        if ("disconnected".equals(state)) {
-            return Color.rgb(148, 163, 184);
-        }
-        return Color.rgb(217, 119, 6);
     }
 
     private View receiveSessionBarView() {
@@ -1352,7 +944,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private String appendRoute(String label, String route) {
-        return route.isEmpty() ? label : label + " \u00b7 " + route;
+        return ui.appendRoute(label, route);
     }
 
     private String receiveRouteLabel() {
@@ -1360,20 +952,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private String routeLabel(String mode) {
-        if (mode == null) {
-            return "";
-        }
-        String clean = mode.trim();
-        if (clean.isEmpty() || "-".equals(clean)) {
-            return "";
-        }
-        if ("relay".equals(clean.toLowerCase(Locale.ROOT))) {
-            return getString(R.string.route_relay);
-        }
-        if ("p2p".equals(clean.toLowerCase(Locale.ROOT))) {
-            return getString(R.string.route_direct);
-        }
-        return "";
+        return ui.routeLabel(mode);
     }
 
     private String displayRouteMetric(TransferMetrics metrics) {
@@ -2430,8 +2009,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         vpnServerMode = false;
         sendUseUdp = false;
         receiveUseUdp = false;
-        selectedVpnProfileIndex = 0;
-        vpnPasswordVisible = false;
+        vpnClient.resetForFreshLaunch();
         activityExpanded = false;
         sendPassword = Passwords.generate();
         receivePassword = "";
@@ -2849,166 +2427,12 @@ public final class MainActivity extends Activity implements ModuleHost {
         receiveMetrics.lastTrafficMs = 0;
     }
 
-    private void loadVpnProfiles() {
-        vpnProfiles.clear();
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String raw = prefs.getString(KEY_VPN_PROFILES, "");
-        if (raw != null && !raw.trim().isEmpty()) {
-            try {
-                JSONArray array = new JSONArray(raw);
-                for (int i = 0; i < array.length(); i++) {
-                    JSONObject object = array.optJSONObject(i);
-                    if (object != null) {
-                        vpnProfiles.add(VpnProfile.fromJson(object, this));
-                    }
-                }
-            } catch (JSONException error) {
-                GoncCrashReporter.appendLog(this, "warn", "Cannot load VPN profiles: " + error.getMessage());
-            }
-        }
-        if (vpnProfiles.isEmpty()) {
-            vpnProfiles.add(VpnProfile.defaults(getString(R.string.vpn_profile_default_name)));
-        }
-        selectedVpnProfileIndex = prefs.getInt(KEY_SELECTED_VPN_PROFILE, 0);
-        selectedVpnProfileIndex = Math.max(0, Math.min(selectedVpnProfileIndex, vpnProfiles.size() - 1));
-    }
-
-    private void saveVpnProfiles() {
-        normalizeCurrentVpnProfile();
-        JSONArray array = new JSONArray();
-        for (VpnProfile profile : vpnProfiles) {
-            array.put(profile.toJson());
-        }
-        getSharedPreferences(PREFS, MODE_PRIVATE)
-                .edit()
-                .putString(KEY_VPN_PROFILES, array.toString())
-                .putInt(KEY_SELECTED_VPN_PROFILE, selectedVpnProfileIndex)
-                .apply();
-    }
-
-    private void saveSelectedVpnProfile() {
-        getSharedPreferences(PREFS, MODE_PRIVATE)
-                .edit()
-                .putInt(KEY_SELECTED_VPN_PROFILE, selectedVpnProfileIndex)
-                .apply();
-    }
-
-    private VpnProfile currentVpnProfile() {
-        if (vpnProfiles.isEmpty()) {
-            vpnProfiles.add(VpnProfile.defaults(getString(R.string.vpn_profile_default_name)));
-            selectedVpnProfileIndex = 0;
-        }
-        selectedVpnProfileIndex = Math.max(0, Math.min(selectedVpnProfileIndex, vpnProfiles.size() - 1));
-        return vpnProfiles.get(selectedVpnProfileIndex);
-    }
-
-    private List<String> vpnProfileNames() {
-        List<String> names = new ArrayList<>();
-        for (VpnProfile profile : vpnProfiles) {
-            names.add(profile.displayName(this));
-        }
-        return names;
-    }
-
-    private String uniqueVpnProfileName() {
-        String base = getString(R.string.vpn_profile_new_name);
-        return uniqueVpnProfileName(base);
-    }
-
-    private String importedVpnProfileName(String name) {
-        String base = name == null || name.trim().isEmpty()
-                ? getString(R.string.vpn_profile_default_name)
-                : name.trim();
-        return uniqueVpnProfileName(base);
-    }
-
-    private String uniqueVpnProfileName(String base) {
-        Set<String> existing = new HashSet<>();
-        for (VpnProfile profile : vpnProfiles) {
-            existing.add(profile.displayName(this));
-        }
-        if (!existing.contains(base)) {
-            return base;
-        }
-        for (int i = 2; i < 1000; i++) {
-            String candidate = base + " " + i;
-            if (!existing.contains(candidate)) {
-                return candidate;
-            }
-        }
-        return base + " " + System.currentTimeMillis();
-    }
-
-    private void normalizeCurrentVpnProfile() {
-        VpnProfile profile = currentVpnProfile();
-        if (profile.name == null || profile.name.trim().isEmpty()) {
-            profile.name = getString(R.string.vpn_profile_default_name);
-        } else {
-            profile.name = profile.name.trim();
-        }
-        profile.passphrase = profile.passphrase == null ? "" : profile.passphrase.trim();
-        profile.dnsServers = normalizeLines(profile.dnsServers);
-        profile.routeCidrs = normalizeLines(profile.routeCidrs);
-    }
-
-    private String normalizeLines(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (String line : value.split("\\r?\\n")) {
-            String clean = line.trim();
-            if (clean.isEmpty()) {
-                continue;
-            }
-            if (builder.length() > 0) {
-                builder.append('\n');
-            }
-            builder.append(clean);
-        }
-        return builder.toString();
-    }
-
-    private TextWatcher simpleWatcher(TextSink sink) {
-        return new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                sink.set(s == null ? "" : s.toString());
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
-        };
-    }
-
-    private String vpnStatusLabel() {
-        String status = GoncVpnState.status();
-        if (GoncVpnState.CONNECTING.equals(status)) {
-            return getString(R.string.status_connecting);
-        }
-        if (GoncVpnState.CONNECTED.equals(status)) {
-            return getString(R.string.status_connected);
-        }
-        if (GoncVpnState.STOPPING.equals(status)) {
-            return getString(R.string.status_stopped);
-        }
-        if (GoncVpnState.ERROR.equals(status)) {
-            return getString(R.string.status_error);
-        }
-        return getString(R.string.status_disconnected);
-    }
-
     private void requestStartVpn() {
         requestStartVpn(false);
     }
 
     private void requestStartVpn(boolean skipBatteryOptimizationPrompt) {
-        VpnProfile profile = currentVpnProfile();
+        VpnProfile profile = vpnClient.currentProfile();
         String passphrase = profile.passphrase.trim();
         if (passphrase.isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
@@ -3093,9 +2517,8 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void startVpnService() {
-        VpnProfile profile = currentVpnProfile();
-        normalizeCurrentVpnProfile();
-        saveVpnProfiles();
+        VpnProfile profile = vpnClient.currentProfile();
+        vpnClient.normalizeAndSaveCurrent();
         Intent intent = new Intent(this, GoncVpnService.class);
         intent.setAction(GoncVpnService.ACTION_START);
         intent.putExtra(GoncVpnService.EXTRA_PASSWORD, profile.passphrase.trim());
@@ -3127,39 +2550,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         startService(intent);
         updateKeepScreenOn();
         render();
-    }
-
-    private void copyVpnPassword() {
-        String passphrase = currentVpnProfile().passphrase.trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        copyText("Gonc VPN passphrase", passphrase);
-        appendLog("info", "VPN passphrase copied");
-        Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
-    }
-
-    private void pasteVpnPassword() {
-        if (GoncVpnState.isRunning()) {
-            return;
-        }
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (clipboard == null || !clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null) {
-            Toast.makeText(this, R.string.toast_clipboard_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        ClipData clip = clipboard.getPrimaryClip();
-        if (clip.getItemCount() == 0) {
-            Toast.makeText(this, R.string.toast_clipboard_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        CharSequence value = clip.getItemAt(0).coerceToText(this);
-        if (value != null) {
-            currentVpnProfile().passphrase = value.toString().trim();
-            appendLog("info", "VPN passphrase pasted");
-            render();
-        }
     }
 
     private void copyPassword(boolean sender) {
@@ -3199,83 +2589,6 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private void showPasswordQr(boolean sender) {
         showPassphraseQr(passwordFor(sender).trim());
-    }
-
-    private void showVpnPasswordQr() {
-        showPassphraseQr(currentVpnProfile().passphrase.trim());
-    }
-
-    private void showVpnProfileQr() {
-        VpnProfile profile = currentVpnProfile();
-        normalizeCurrentVpnProfile();
-        saveVpnProfiles();
-        try {
-            String payload = vpnProfileQrPayload(profile);
-            LinearLayout layout = column();
-            layout.setPadding(dp(18), dp(18), dp(18), dp(8));
-            layout.setBackground(rounded(Color.WHITE, dp(8), 0, 0));
-            TextView title = text(profile.displayName(this), 16, ink(), Typeface.BOLD);
-            title.setGravity(Gravity.CENTER);
-            layout.addView(title);
-
-            Bitmap bitmap = QrCodes.encode(payload, dp(260));
-            ImageView image = new ImageView(this);
-            image.setImageBitmap(bitmap);
-            image.setAdjustViewBounds(true);
-            LinearLayout.LayoutParams imageParams = new LinearLayout.LayoutParams(dp(260), dp(260));
-            imageParams.gravity = Gravity.CENTER_HORIZONTAL;
-            imageParams.setMargins(0, dp(12), 0, 0);
-            layout.addView(image, imageParams);
-
-            TextView hint = text(getString(R.string.vpn_profile_qr_hint), 12, muted(), Typeface.NORMAL);
-            hint.setGravity(Gravity.CENTER);
-            layout.addView(hint, blockParams(dp(8)));
-
-            Dialog dialog = new Dialog(this);
-            dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            dialog.setContentView(layout);
-            Window window = dialog.getWindow();
-            if (window != null) {
-                window.setBackgroundDrawable(rounded(Color.WHITE, dp(10), 0, 0));
-            }
-            dialog.show();
-        } catch (Exception error) {
-            Toast.makeText(this, R.string.toast_qr_failed, Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private String vpnProfileQrPayload(VpnProfile profile) throws JSONException {
-        JSONObject root = new JSONObject();
-        root.put("type", VPN_PROFILE_QR_TYPE);
-        root.put("version", 1);
-        root.put("profile", profile.toJson());
-        return root.toString();
-    }
-
-    private void importVpnProfileFromQr(String value) {
-        try {
-            JSONObject root = new JSONObject(value);
-            if (!VPN_PROFILE_QR_TYPE.equals(root.optString("type"))) {
-                Toast.makeText(this, R.string.toast_vpn_profile_qr_invalid, Toast.LENGTH_SHORT).show();
-                return;
-            }
-            JSONObject profileJson = root.optJSONObject("profile");
-            if (profileJson == null) {
-                Toast.makeText(this, R.string.toast_vpn_profile_qr_invalid, Toast.LENGTH_SHORT).show();
-                return;
-            }
-            VpnProfile profile = VpnProfile.fromJson(profileJson, this);
-            profile.name = importedVpnProfileName(profile.displayName(this));
-            vpnProfiles.add(profile);
-            selectedVpnProfileIndex = vpnProfiles.size() - 1;
-            vpnPasswordVisible = false;
-            saveVpnProfiles();
-            appendLog("info", "VPN profile imported: " + profile.displayName(this));
-            Toast.makeText(this, getString(R.string.toast_vpn_profile_imported, profile.displayName(this)), Toast.LENGTH_SHORT).show();
-            render();
-        } catch (JSONException error) {
-            Toast.makeText(this, R.string.toast_vpn_profile_qr_invalid, Toast.LENGTH_SHORT).show();
-        }
     }
 
     @Override
@@ -3396,40 +2709,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (isPasswordLocked(sender)) {
             return;
         }
-        scanningForVpnProfile = false;
-        scanningForVpnMode = false;
-        pendingPassphraseScan = null;
+        pendingScanCallback = null;
+        pendingScanIsProfile = false;
         scanningForSendMode = sender;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
-            return;
-        }
-        launchQrScanner();
-    }
-
-    private void scanVpnPassword() {
-        if (GoncVpnState.isRunning()) {
-            return;
-        }
-        scanningForVpnProfile = false;
-        scanningForVpnMode = true;
-        pendingPassphraseScan = null;
-        scanningForSendMode = false;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
-            return;
-        }
-        launchQrScanner();
-    }
-
-    private void scanVpnProfile() {
-        if (GoncVpnState.isRunning()) {
-            return;
-        }
-        scanningForVpnProfile = true;
-        scanningForVpnMode = false;
-        pendingPassphraseScan = null;
-        scanningForSendMode = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
             return;
@@ -3441,7 +2723,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         Intent intent = new Intent(this, QrScanActivity.class);
         intent.setAction(Intents.Scan.ACTION);
         intent.putExtra(Intents.Scan.MODE, Intents.Scan.QR_CODE_MODE);
-        intent.putExtra(Intents.Scan.PROMPT_MESSAGE, getString(scanningForVpnProfile ? R.string.scan_vpn_profile_prompt : R.string.scan_prompt));
+        intent.putExtra(Intents.Scan.PROMPT_MESSAGE, getString(pendingScanIsProfile ? R.string.scan_vpn_profile_prompt : R.string.scan_prompt));
         intent.putExtra(Intents.Scan.BEEP_ENABLED, false);
         startActivityForResult(intent, REQUEST_SCAN_QR);
     }
@@ -3598,8 +2880,7 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private TransferMetrics currentMetrics() {
         if (vpnMode) {
-            syncVpnMetrics();
-            return vpnMetrics;
+            return vpnClient.metrics();
         }
         if (vpnServerMode) {
             return vpnServer.metrics();
@@ -3609,13 +2890,6 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private TransferMetrics currentMetrics(boolean forSendMode) {
         return forSendMode ? sendMetrics : receiveMetrics;
-    }
-
-    private void syncVpnMetrics() {
-        vpnMetrics.p2pStatus = GoncVpnState.p2pStatus();
-        vpnMetrics.network = GoncVpnState.network();
-        vpnMetrics.routeMode = GoncVpnState.route();
-        vpnMetrics.peer = GoncVpnState.peer();
     }
 
     private void updateMetricsReady(boolean forSendMode, String endpoint) {
@@ -3661,10 +2935,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private String normalizeMetricStatus(String status) {
-        if (status == null || status.trim().isEmpty()) {
-            return "-";
-        }
-        return status.trim().toLowerCase(Locale.ROOT);
+        return ui.normalizeMetricStatus(status);
     }
 
     private void updateMetricsFromLog(boolean forSendMode, String message) {
@@ -3832,16 +3103,44 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void scanPassphrase(java.util.function.Consumer<String> onResult) {
-        scanningForVpnProfile = false;
-        scanningForVpnMode = false;
+        startScan(false, onResult);
+    }
+
+    @Override
+    public void scanProfileQr(java.util.function.Consumer<String> onResult) {
+        startScan(true, onResult);
+    }
+
+    private void startScan(boolean profilePrompt, java.util.function.Consumer<String> onResult) {
         scanningForSendMode = false;
-        pendingPassphraseScan = onResult;
+        pendingScanCallback = onResult;
+        pendingScanIsProfile = profilePrompt;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
             return;
         }
         launchQrScanner();
+    }
+
+    @Override
+    public void logTransient(String level, String message) {
+        appendLog(level, message, false);
+    }
+
+    @Override
+    public android.content.SharedPreferences prefs() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE);
+    }
+
+    @Override
+    public void startVpnClient() {
+        requestStartVpn();
+    }
+
+    @Override
+    public void stopVpnClient() {
+        stopVpnService();
     }
 
     @Override
@@ -4038,21 +3337,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         logs.add(cleanLevel.toUpperCase(Locale.ROOT) + "  " + message);
         while (logs.size() > MAX_ACTIVITY_LOGS) {
             logs.remove(0);
-        }
-    }
-
-    private void appendVpnLog(GoncVpnState.LogEntry entry) {
-        if (entry == null || entry.id <= lastVpnLogId) {
-            return;
-        }
-        appendLog(entry.level, entry.message, false);
-        lastVpnLogId = entry.id;
-    }
-
-    private void syncVpnLogs() {
-        List<GoncVpnState.LogEntry> entries = GoncVpnState.logsAfter(lastVpnLogId);
-        for (GoncVpnState.LogEntry entry : entries) {
-            appendVpnLog(entry);
         }
     }
 
@@ -4257,10 +3541,6 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private String titleCase(String value) {
         return ui.titleCase(value);
-    }
-
-    private interface TextSink {
-        void set(String value);
     }
 
     private static final class SelectionSummary {

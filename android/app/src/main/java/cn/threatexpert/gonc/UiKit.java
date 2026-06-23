@@ -319,4 +319,34 @@ final class UiKit {
         String clean = value.trim();
         return clean.substring(0, 1).toUpperCase(Locale.ROOT) + clean.substring(1);
     }
+
+    // --- status/route display (shared by VPN client + receive) ------------
+
+    String normalizeMetricStatus(String status) {
+        if (status == null || status.trim().isEmpty()) {
+            return "-";
+        }
+        return status.trim().toLowerCase(Locale.ROOT);
+    }
+
+    String routeLabel(String mode) {
+        if (mode == null) {
+            return "";
+        }
+        String clean = mode.trim();
+        if (clean.isEmpty() || "-".equals(clean)) {
+            return "";
+        }
+        if ("relay".equals(clean.toLowerCase(Locale.ROOT))) {
+            return context.getString(R.string.route_relay);
+        }
+        if ("p2p".equals(clean.toLowerCase(Locale.ROOT))) {
+            return context.getString(R.string.route_direct);
+        }
+        return "";
+    }
+
+    String appendRoute(String label, String route) {
+        return route.isEmpty() ? label : label + " · " + route;
+    }
 }
