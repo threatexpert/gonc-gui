@@ -86,64 +86,21 @@ public final class MainActivity extends Activity implements ModuleHost {
     private final UiKit ui = new UiKit(this);
     private final List<String> logs = new ArrayList<>();
     private final GoncBridge bridge = new MobileGoncBridge();
-    private final TransferMetrics receiveMetrics = new TransferMetrics();
     private VpnServerController vpnServer;
     private VpnClientController vpnClient;
     private SendController sendController;
+    private ReceiveController receiveController;
     private java.util.function.Consumer<String> pendingScanCallback;
     private boolean pendingScanIsProfile;
-    private final Object downloadProgressLock = new Object();
 
     private LinearLayout root;
     private boolean sendMode = true;
     private boolean vpnMode;
     private boolean vpnServerMode;
-    private boolean receiveUseUdp;
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
-    private boolean receivePasswordVisible;
-    private int receivePasswordVisibilityToken;
-    private String receivePassword = "";
-    private Uri saveTreeUri;
-    private String saveLocationLabel;
-    private String receiveEndpoint = "";
-    private String remoteListStatus = "Idle";
-    private String remoteCurrentPath = "";
-    private boolean remoteCurrentPathMissing;
-    private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
-    private final Set<String> selectedRemotePaths = new HashSet<>();
-    private int remoteFileCount;
-    private int remoteDirCount;
-    private long remoteTotalBytes;
-    private boolean resumeDownloads = true;
-    private String downloadStatus = "Idle";
-    private int downloadDoneFiles;
-    private int downloadTotalFiles;
-    private long downloadDoneBytes;
-    private long downloadTotalBytes;
-    private long downloadNetworkBytes;
-    private double downloadBytesPerSecond;
-    private int downloadSkippedFiles;
-    private int downloadResumedFiles;
-    private long downloadStartedAtMs;
-    private long downloadFinishedAtMs;
-    private String receiveStatus = "Idle";
-    private GoncBridge.Session receiveSession;
-    private HttpReceiver.Session remoteListSession;
-    private HttpReceiver.Session receiveDownload;
-    private long receiveRunId;
     private long pauseAutoRenderUntilMs;
     private long lastLogRenderMs;
-    private long lastDownloadProgressRenderMs;
-    private boolean downloadProgressRenderPending;
-    private boolean downloadProgressApplyPending;
-    private DownloadProgressSnapshot pendingDownloadProgress;
-    private TextView downloadStatusView;
-    private TextView downloadDetailView;
-    private ProgressBar downloadProgressBar;
-    private TextView downloadSummaryView;
-    private View receiveConnectionDotView;
-    private TextView receiveConnectionLabelView;
     private TextView activitySummaryTextView;
     private LinearLayout activityLogContentView;
     private TextView activityP2PStatusValueView;
@@ -153,11 +110,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     private TextView activityRouteValueView;
     private TextView activityPeerValueView;
     private TextView activityEndpointValueView;
-    private TextView remoteFilesSummaryTextView;
-    private TextView remoteFilesTotalSummaryTextView;
-    private Button downloadSelectedButton;
-    private final Map<String, CheckBox> remoteFileCheckboxes = new LinkedHashMap<>();
-    private boolean updatingRemoteSelectionViews;
 
     private static final int METRIC_REF_NONE = 0;
     private static final int METRIC_REF_P2P_STATUS = 1;
@@ -172,20 +124,22 @@ public final class MainActivity extends Activity implements ModuleHost {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         GoncCrashReporter.install(this);
-        saveLocationLabel = getString(R.string.default_save_location);
         RetainedModules retained = (RetainedModules) getLastNonConfigurationInstance();
         boolean reusedModules = retained != null;
         if (reusedModules) {
             vpnServer = retained.vpnServer;
             vpnClient = retained.vpnClient;
             sendController = retained.sendController;
+            receiveController = retained.receiveController;
             vpnServer.attach(this);
             vpnClient.attach(this);
             sendController.attach(this);
+            receiveController.attach(this);
         } else {
             vpnServer = new VpnServerController(this);
             vpnClient = new VpnClientController(this);
             sendController = new SendController(this);
+            receiveController = new ReceiveController(this);
             vpnClient.load();
         }
         buildRoot();
@@ -289,7 +243,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             sendMode = true;
             render();
         } else if (requestCode == REQUEST_OPEN_SAVE_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            saveTreeUri = data.getData();
+            Uri saveTreeUri = data.getData();
             int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             try {
                 if (flags != 0) {
@@ -297,7 +251,8 @@ public final class MainActivity extends Activity implements ModuleHost {
                 }
             } catch (RuntimeException ignored) {
             }
-            saveLocationLabel = HttpReceiver.displayName(this, saveTreeUri);
+            String saveLocationLabel = HttpReceiver.displayName(this, saveTreeUri);
+            receiveController.setSaveLocation(saveTreeUri, saveLocationLabel);
             appendLog("info", "Save location selected: " + saveLocationLabel);
             render();
         }
@@ -323,8 +278,8 @@ public final class MainActivity extends Activity implements ModuleHost {
     public Object onRetainNonConfigurationInstance() {
         // Keep the extracted module controllers (and their live sessions)
         // alive across a configuration-change recreation; the new Activity
-        // re-attaches itself via attach(). Receive state is not retained yet.
-        return new RetainedModules(vpnServer, vpnClient, sendController);
+        // re-attaches itself via attach().
+        return new RetainedModules(vpnServer, vpnClient, sendController, receiveController);
     }
 
     @Override
@@ -335,15 +290,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             vpnClient.unregister();
             sendController.shutdown();
             vpnServer.shutdown();
-        }
-        if (receiveSession != null) {
-            receiveSession.stop();
-        }
-        if (remoteListSession != null) {
-            remoteListSession.stop();
-        }
-        if (receiveDownload != null) {
-            receiveDownload.stop();
+            receiveController.shutdown();
         }
         super.onDestroy();
     }
@@ -352,11 +299,13 @@ public final class MainActivity extends Activity implements ModuleHost {
         final VpnServerController vpnServer;
         final VpnClientController vpnClient;
         final SendController sendController;
+        final ReceiveController receiveController;
 
-        RetainedModules(VpnServerController vpnServer, VpnClientController vpnClient, SendController sendController) {
+        RetainedModules(VpnServerController vpnServer, VpnClientController vpnClient, SendController sendController, ReceiveController receiveController) {
             this.vpnServer = vpnServer;
             this.vpnClient = vpnClient;
             this.sendController = sendController;
+            this.receiveController = receiveController;
         }
     }
 
@@ -393,10 +342,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         } else if (sendMode) {
             root.addView(sendController.panel());
         } else {
-            root.addView(receivePanel());
-            if (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus)) {
-                root.addView(remoteFilesPanel());
-            }
+            root.addView(receiveController.panel());
         }
         root.addView(logPanel());
     }
@@ -413,46 +359,16 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private boolean isRemoteFilesPanelVisible() {
-        return !vpnMode && !vpnServerMode && !sendMode && (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus));
+        return !vpnMode && !vpnServerMode && !sendMode && receiveController.shouldShowRemoteFilesPanel();
     }
 
     private void updateBackgroundDynamicViews() {
-        if (receiveConnectionDotView != null) {
-            receiveConnectionDotView.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
-        }
-        if (receiveConnectionLabelView != null) {
-            receiveConnectionLabelView.setText(receiveConnectionLabel());
-        }
+        receiveController.updateDynamicViews();
         if (activitySummaryTextView != null) {
             activitySummaryTextView.setText(activitySummary(currentMetrics()));
         }
         updateActivityMetricViews();
         updateActivityLogViews();
-    }
-
-    private void renderDownloadProgress() {
-        if (System.currentTimeMillis() < pauseAutoRenderUntilMs) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        long elapsed = now - lastDownloadProgressRenderMs;
-        if (elapsed >= 350) {
-            lastDownloadProgressRenderMs = now;
-            updateDownloadProgressViews();
-            return;
-        }
-        if (downloadProgressRenderPending) {
-            return;
-        }
-        downloadProgressRenderPending = true;
-        mainHandler.postDelayed(() -> {
-            downloadProgressRenderPending = false;
-            if (receiveDownload == null || System.currentTimeMillis() < pauseAutoRenderUntilMs) {
-                return;
-            }
-            lastDownloadProgressRenderMs = System.currentTimeMillis();
-            updateDownloadProgressViews();
-        }, Math.max(50, 350 - elapsed));
     }
 
     private void pauseAutoRender() {
@@ -572,365 +488,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         return box;
     }
 
-    private View receivePanel() {
-        LinearLayout card = card();
-        if (receiveSession != null) {
-            card.addView(receiveSessionBarView());
-            return card;
-        }
-        card.addView(sectionBoundaryTitle(getString(R.string.save_location_config), false), blockParams(0));
-        LinearLayout save = row();
-        TextView saveText = text(getString(R.string.save_to, saveLocationLabel), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
-        saveText.setSingleLine(true);
-        save.addView(saveText, new LinearLayout.LayoutParams(0, dp(42), 1));
-        Button choose = secondaryButton(getString(R.string.choose));
-        choose.setOnClickListener(v -> openSaveLocationPicker());
-        LinearLayout.LayoutParams chooseParams = new LinearLayout.LayoutParams(dp(104), dp(42));
-        chooseParams.setMargins(dp(8), 0, 0, 0);
-        save.addView(choose, chooseParams);
-        card.addView(save, blockParams());
-        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), true), blockParams(dp(14)));
-        card.addView(passwordField());
-        card.addView(sectionDivider(), dividerParams(dp(12)));
-        card.addView(protocolToggle());
-
-        Button primary = receiveSession == null ? primaryButton(getString(R.string.connect)) : dangerButton(getString(R.string.disconnect));
-        primary.setOnClickListener(v -> {
-            if (receiveSession == null) {
-                startP2PReceive();
-            } else {
-                stopSession();
-            }
-        });
-        card.addView(primary, blockParams(dp(12)));
-        return card;
-    }
-
-    private View receiveSessionBarView() {
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(8), dp(10), dp(8));
-        row.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
-
-        View dot = new View(this);
-        dot.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
-        receiveConnectionDotView = dot;
-        row.addView(dot, new LinearLayout.LayoutParams(dp(12), dp(12)));
-
-        TextView label = text(receiveConnectionLabel(), 14, ink(), Typeface.BOLD);
-        label.setSingleLine(false);
-        receiveConnectionLabelView = label;
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        labelParams.setMargins(dp(10), 0, dp(8), 0);
-        row.addView(label, labelParams);
-
-        Button passphrase = secondaryButton(getString(R.string.passphrase));
-        passphrase.setOnClickListener(v -> showPasswordQr());
-        row.addView(passphrase, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
-
-        Button disconnect = dangerButton(getString(R.string.disconnect));
-        disconnect.setTextSize(14);
-        disconnect.setOnClickListener(v -> stopSession());
-        LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
-        disconnectParams.setMargins(dp(8), 0, 0, 0);
-        row.addView(disconnect, disconnectParams);
-        return row;
-    }
-
-    private View receiveProgressPanel() {
-        LinearLayout card = card();
-        card.addView(sectionTitle(getString(R.string.receive_status)));
-        card.addView(receiveProgressContent());
-        return card;
-    }
-
-    private View receiveProgressContent() {
-        LinearLayout box = column();
-        TextView line = text(displayDownloadStatus(downloadStatus), 14, ink(), Typeface.BOLD);
-        line.setSingleLine(false);
-        downloadStatusView = line;
-        box.addView(line);
-
-        long total = Math.max(downloadTotalBytes, 0);
-        long done = Math.max(downloadDoneBytes, 0);
-        TextView detail = text(downloadProgressDetail(done, total), 13, muted(), Typeface.BOLD);
-        detail.setSingleLine(false);
-        downloadDetailView = detail;
-        box.addView(detail, blockParams(dp(8)));
-
-        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progress.setMax(1000);
-        progress.setProgress(progressValue(done, total));
-        downloadProgressBar = progress;
-        box.addView(progress, blockParams(dp(6)));
-
-        TextView speed = text(downloadProgressSummary(done, total), 13, Color.rgb(15, 111, 83), Typeface.BOLD);
-        downloadSummaryView = speed;
-        box.addView(speed, blockParams(dp(4)));
-        return box;
-    }
-
-    private View remoteFilesPanel() {
-        LinearLayout card = card();
-        remoteFileCheckboxes.clear();
-        card.addView(sectionTitle(getString(R.string.remote_files)));
-
-        LinearLayout pathRow = row();
-        pathRow.setGravity(Gravity.CENTER_VERTICAL);
-        pathRow.addView(remoteBreadcrumbView(), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button selectAll = quietTouchButton(getString(R.string.select_all));
-        setControlEnabled(selectAll, canClickRemoteAction() && !visibleRemoteFiles().isEmpty());
-        selectAll.setOnClickListener(v -> selectVisibleRemoteFiles());
-        pathRow.addView(selectAll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
-        Button invert = quietTouchButton(getString(R.string.invert_selection));
-        setControlEnabled(invert, canClickRemoteAction() && !visibleRemoteFiles().isEmpty());
-        invert.setOnClickListener(v -> invertVisibleRemoteFiles());
-        pathRow.addView(invert, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
-        Button refresh = quietTouchButton(getString(R.string.refresh));
-        setControlEnabled(refresh, canClickRemoteAction());
-        refresh.setOnClickListener(v -> refreshRemoteFiles(remoteCurrentPath));
-        pathRow.addView(refresh, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
-        card.addView(pathRow, blockParams(dp(8)));
-        if (shouldShowRemoteListStatus()) {
-            card.addView(remoteListStatusView(), blockParams(dp(4)));
-        }
-
-        boolean currentRoot = normalizeRemotePath(remoteCurrentPath).isEmpty();
-        if (remoteFiles.isEmpty() && currentRoot && !remoteCurrentPathMissing) {
-            card.addView(text(getString(R.string.remote_list_waiting), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
-            return card;
-        }
-
-        List<HttpReceiver.RemoteFile> visible = visibleRemoteFiles();
-        LinearLayout list = column();
-        remoteFileCheckboxes.clear();
-        if (!remoteCurrentPath.isEmpty()) {
-            list.addView(parentDirectoryRow());
-        }
-        if (remoteCurrentPathMissing) {
-            list.addView(text(getString(R.string.folder_missing), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
-        } else if (visible.isEmpty()) {
-            list.addView(text(currentRoot ? getString(R.string.toast_no_remote_files) : getString(R.string.folder_empty), 13, muted(), Typeface.NORMAL), blockParams(dp(8)));
-        } else {
-            for (HttpReceiver.RemoteFile file : visible) {
-                list.addView(remoteFileRow(file));
-            }
-        }
-        ScrollView listScroll = new InterceptingScrollView(this);
-        listScroll.setFillViewport(false);
-        listScroll.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
-        listScroll.addView(list, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        int rowCount = visible.size() + (remoteCurrentPath.isEmpty() ? 0 : 1) + (visible.isEmpty() || remoteCurrentPathMissing ? 1 : 0);
-        int listHeight = Math.min(dp(340), Math.max(dp(96), rowCount * dp(58) + dp(16)));
-        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight);
-        listParams.setMargins(0, dp(8), 0, 0);
-        card.addView(listScroll, listParams);
-        card.addView(remoteFilesSummaryView(), blockParams(dp(10)));
-        if (shouldShowDownloadProgress()) {
-            card.addView(receiveProgressContent(), blockParams(dp(8)));
-        }
-        card.addView(remoteDownloadActionBar(), blockParams(dp(10)));
-        return card;
-    }
-
-    private View remoteDownloadActionBar() {
-        LinearLayout box = column();
-        box.setPadding(dp(10), dp(10), dp(10), dp(10));
-        box.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
-        box.addView(downloadModeToggle());
-
-        LinearLayout actions = row();
-        if (receiveDownload != null) {
-            Button stop = warningButton(getString(R.string.stop_download));
-            stop.setOnClickListener(v -> stopReceiveDownload());
-            stop.setOnTouchListener((v, event) -> {
-                if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                    stopReceiveDownload();
-                    return true;
-                }
-                return false;
-            });
-            actions.addView(stop, new LinearLayout.LayoutParams(0, dp(42), 1));
-        } else {
-            Button selected = outlineButton(getString(R.string.download_selected));
-            downloadSelectedButton = selected;
-            boolean canDownloadSelected = canStartRemoteDownload() && !selectedRemotePaths.isEmpty();
-            setControlEnabled(selected, canDownloadSelected);
-            selected.setOnClickListener(v -> refreshAndStartDownload(new ArrayList<>(selectedRemotePaths)));
-
-            Button all = primaryButton(getString(R.string.receive_all));
-            setControlEnabled(all, canStartRemoteDownload());
-            all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths()));
-
-            actions.addView(selected, new LinearLayout.LayoutParams(0, dp(42), 1));
-            actions.addView(all, actionParams(dp(42)));
-        }
-        box.addView(actions, blockParams(dp(10)));
-        return box;
-    }
-
-    private View parentDirectoryRow() {
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        row.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
-
-        TextView icon = text("\u21b0", 20, Color.rgb(32, 101, 165), Typeface.BOLD);
-        icon.setGravity(Gravity.CENTER);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(34), dp(42)));
-
-        LinearLayout labels = column();
-        TextView name = text(getString(R.string.parent_directory), 13, Color.rgb(32, 101, 165), Typeface.BOLD);
-        labels.addView(name);
-        labels.addView(text(parentPath(remoteCurrentPath).isEmpty() ? "/" : displayRemotePath(parentPath(remoteCurrentPath)), 12, muted(), Typeface.NORMAL));
-        row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        row.addView(text("\u203a", 22, muted(), Typeface.BOLD), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        row.setLayoutParams(blockParams(dp(6)));
-        setControlEnabled(row, canClickRemoteAction());
-        row.setOnClickListener(v -> {
-            if (canClickRemoteAction()) {
-                browseRemotePath(parentPath(remoteCurrentPath));
-            }
-        });
-        return row;
-    }
-
-    private View remoteFileRow(HttpReceiver.RemoteFile file) {
-        String normalizedPath = normalizeRemotePath(file.path);
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(6), dp(10), dp(6));
-        row.setBackground(rounded(file.isDir ? Color.rgb(246, 250, 255) : Color.WHITE, dp(7), Color.rgb(226, 232, 240), 1));
-
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setChecked(selectedRemotePaths.contains(normalizedPath));
-        remoteFileCheckboxes.put(normalizedPath, checkBox);
-        setControlEnabled(checkBox, canClickRemoteAction());
-        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (updatingRemoteSelectionViews) {
-                return;
-            }
-            if (!canClickRemoteAction()) {
-                return;
-            }
-            if (isChecked) {
-                selectedRemotePaths.add(normalizedPath);
-            } else {
-                selectedRemotePaths.remove(normalizedPath);
-            }
-            updateRemoteSelectionViews();
-        });
-        row.addView(checkBox, new LinearLayout.LayoutParams(dp(42), dp(42)));
-
-        TextView icon = text(file.isDir ? "\uD83D\uDCC1" : "\uD83D\uDCC4", 20, file.isDir ? Color.rgb(32, 101, 165) : muted(), Typeface.NORMAL);
-        icon.setGravity(Gravity.CENTER);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(34), dp(42)));
-
-        LinearLayout labels = column();
-        TextView name = text(baseName(normalizedPath), 13, file.isDir ? Color.rgb(32, 101, 165) : ink(), Typeface.BOLD);
-        name.setSingleLine(true);
-        labels.addView(name);
-        labels.addView(text(file.isDir ? getString(R.string.folder) : formatBytes(file.size), 12, muted(), Typeface.NORMAL));
-        row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        if (file.isDir) {
-            row.addView(text("\u203a", 22, Color.rgb(32, 101, 165), Typeface.BOLD), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        }
-        row.setLayoutParams(blockParams(dp(6)));
-        setControlEnabled(row, canClickRemoteAction());
-        row.setOnClickListener(v -> {
-            if (file.isDir && canClickRemoteAction()) {
-                browseRemotePath(normalizedPath);
-            }
-        });
-        return row;
-    }
-
-    private View remoteBreadcrumbView() {
-        LinearLayout crumbs = row();
-        crumbs.setGravity(Gravity.CENTER_VERTICAL);
-        String current = normalizeRemotePath(remoteCurrentPath);
-        addBreadcrumbPart(crumbs, "/", "");
-        if (!current.isEmpty()) {
-            StringBuilder path = new StringBuilder();
-            for (String part : current.split("/")) {
-                if (part.isEmpty()) {
-                    continue;
-                }
-                crumbs.addView(text("\u203a", 16, muted(), Typeface.BOLD));
-                if (path.length() > 0) {
-                    path.append('/');
-                }
-                path.append(part);
-                addBreadcrumbPart(crumbs, part, path.toString());
-            }
-        }
-        return crumbs;
-    }
-
-    private void addBreadcrumbPart(LinearLayout row, String label, String path) {
-        TextView part = text(label, 13, Color.rgb(32, 101, 165), Typeface.BOLD);
-        part.setSingleLine(true);
-        part.setPadding(dp(6), dp(6), dp(6), dp(6));
-        part.setBackground(rounded(Color.TRANSPARENT, dp(6), 0, 0));
-        setControlEnabled(part, canClickRemoteAction());
-        part.setOnClickListener(v -> {
-            if (canClickRemoteAction()) {
-                browseRemotePath(path);
-            }
-        });
-        row.addView(part, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-    }
-
-    private View receiveConnectionStatusView() {
-        LinearLayout box = row();
-        box.setGravity(Gravity.CENTER_VERTICAL);
-        box.setPadding(dp(10), dp(8), dp(10), dp(8));
-        box.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(226, 232, 240), 1));
-
-        View dot = new View(this);
-        dot.setBackground(rounded(receiveConnectionColor(), dp(6), 0, 0));
-        receiveConnectionDotView = dot;
-        box.addView(dot, new LinearLayout.LayoutParams(dp(12), dp(12)));
-
-        LinearLayout labels = column();
-        TextView label = text(receiveConnectionLabel(), 14, ink(), Typeface.BOLD);
-        receiveConnectionLabelView = label;
-        labels.addView(label);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        labelParams.setMargins(dp(10), 0, 0, 0);
-        box.addView(labels, labelParams);
-        return box;
-    }
-
-    private String receiveConnectionLabel() {
-        if (receiveSession == null) {
-            return getString(R.string.connection_disconnected);
-        }
-        String state = receiveConnectionState();
-        String route = receiveRouteLabel();
-        if ("failed".equals(state)) {
-            return getString(R.string.connection_failed_retry);
-        }
-        if ("connected".equals(state)) {
-            return appendRoute(getString(R.string.connection_connected), route);
-        }
-        if ("negotiating".equals(state)) {
-            return appendRoute(getString(R.string.connection_negotiating), route);
-        }
-        if ("waiting".equals(state)) {
-            return getString(R.string.connection_waiting_peer);
-        }
-        return getString(R.string.connection_connecting);
-    }
-
-    private String appendRoute(String label, String route) {
-        return ui.appendRoute(label, route);
-    }
-
-    private String receiveRouteLabel() {
-        return routeLabel(receiveMetrics.routeMode);
-    }
-
     private String routeLabel(String mode) {
         return ui.routeLabel(mode);
     }
@@ -938,534 +495,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     private String displayRouteMetric(TransferMetrics metrics) {
         String route = routeLabel(metrics.routeMode);
         return route.isEmpty() ? "-" : route;
-    }
-
-    private int receiveConnectionColor() {
-        if (receiveSession == null) {
-            return Color.rgb(148, 163, 184);
-        }
-        String state = receiveConnectionState();
-        if ("failed".equals(state)) {
-            return Color.rgb(201, 63, 63);
-        }
-        if ("connected".equals(state)) {
-            return Color.rgb(18, 151, 101);
-        }
-        return Color.rgb(222, 153, 42);
-    }
-
-    private String receiveConnectionState() {
-        if (receiveSession == null) {
-            return "disconnected";
-        }
-        String status = displayStatus(receiveMetrics);
-        if (status == null) {
-            return "waiting";
-        }
-        String clean = status.trim().toLowerCase(Locale.ROOT);
-        if ("failed".equals(clean) || "error".equals(clean)) {
-            return "failed";
-        }
-        if ("connected".equals(clean)) {
-            return "connected";
-        }
-        if ("negotiating".equals(clean)) {
-            return "negotiating";
-        }
-        if ("wait".equals(clean)
-                || "waiting".equals(clean)
-                || "ready".equals(clean)
-                || "idle".equals(clean)
-                || "disconnected".equals(clean)) {
-            return "waiting";
-        }
-        return "connecting";
-    }
-
-    private View remoteFilesSummaryView() {
-        LinearLayout box = column();
-        TextView selected = text(selectionSummaryText(), 14, ink(), Typeface.BOLD);
-        selected.setSingleLine(false);
-        remoteFilesSummaryTextView = selected;
-        box.addView(selected);
-
-        TextView total = text(remoteTotalSummaryText(), 12, muted(), Typeface.NORMAL);
-        total.setSingleLine(false);
-        remoteFilesTotalSummaryTextView = total;
-        box.addView(total, blockParams(dp(3)));
-        return box;
-    }
-
-    private void updateRemoteSelectionViews() {
-        updatingRemoteSelectionViews = true;
-        try {
-            for (Map.Entry<String, CheckBox> entry : remoteFileCheckboxes.entrySet()) {
-                entry.getValue().setChecked(selectedRemotePaths.contains(entry.getKey()));
-            }
-        } finally {
-            updatingRemoteSelectionViews = false;
-        }
-        if (remoteFilesSummaryTextView != null) {
-            remoteFilesSummaryTextView.setText(selectionSummaryText());
-        }
-        if (remoteFilesTotalSummaryTextView != null) {
-            remoteFilesTotalSummaryTextView.setText(remoteTotalSummaryText());
-        }
-        if (downloadSelectedButton != null) {
-            setControlEnabled(downloadSelectedButton, canStartRemoteDownload() && !selectedRemotePaths.isEmpty());
-        }
-    }
-
-    private String selectionSummaryText() {
-        SelectionSummary selected = selectedRemoteSummary();
-        return getString(R.string.selection_summary, selectedRemotePaths.size(), formatBytes(selected.bytes));
-    }
-
-    private String remoteTotalSummaryText() {
-        return getString(R.string.remote_total_summary, remoteFileCount, remoteDirCount, formatBytes(remoteTotalBytes));
-    }
-
-    private SelectionSummary selectedRemoteSummary() {
-        SelectionSummary summary = new SelectionSummary();
-        for (HttpReceiver.RemoteFile file : selectedRemoteFiles()) {
-            if (!file.isDir) {
-                summary.files++;
-                summary.bytes += Math.max(0, file.size);
-            }
-        }
-        return summary;
-    }
-
-    private boolean canStartRemoteDownload() {
-        return canClickRemoteAction()
-                && "connected".equals(receiveConnectionState())
-                && !remoteCurrentPathMissing
-                && !currentDirectoryFiles().isEmpty();
-    }
-
-    private boolean shouldShowDownloadProgress() {
-        return receiveDownload != null
-                || "Receive complete".equals(downloadStatus)
-                || "Receive failed".equals(downloadStatus);
-    }
-
-    private boolean shouldShowRemoteListStatus() {
-        if (isRemoteListBusy()) {
-            return true;
-        }
-        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
-        return "Remote list failed".equals(status)
-                || "Remote refresh failed".equals(status)
-                || "Failed".equals(status)
-                || "Remote path missing".equals(status);
-    }
-
-    private View remoteListStatusView() {
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        if (isRemoteListBusy()) {
-            ProgressBar spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
-            spinner.setIndeterminate(true);
-            LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(22), dp(22));
-            spinnerParams.setMargins(0, 0, dp(8), 0);
-            row.addView(spinner, spinnerParams);
-        }
-        TextView view = text(displayRemoteListStatus(), 12, remoteListStatusColor(), Typeface.BOLD);
-        view.setSingleLine(false);
-        row.addView(view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        return row;
-    }
-
-    private boolean isRemoteListBusy() {
-        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
-        return status.startsWith("Fetching ") || "Refreshing remote file list".equals(status);
-    }
-
-    private String displayRemoteListStatus() {
-        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
-        if (status.isEmpty() || "Idle".equals(status)) {
-            return getString(R.string.status_idle);
-        }
-        if ("Waiting for peer".equals(status)) {
-            return getString(R.string.connection_waiting_peer);
-        }
-        if (status.startsWith("Fetching ")) {
-            return getString(R.string.remote_list_fetching, status.substring("Fetching ".length()));
-        }
-        if ("Refreshing remote file list".equals(status)) {
-            return getString(R.string.remote_list_refreshing);
-        }
-        if ("Remote list ready".equals(status)) {
-            return getString(R.string.remote_list_ready_status);
-        }
-        if ("Remote list refreshed".equals(status)) {
-            return getString(R.string.remote_list_refreshed_status);
-        }
-        if ("No remote files".equals(status)) {
-            return getString(R.string.toast_no_remote_files);
-        }
-        if ("Remote path missing".equals(status)) {
-            return getString(R.string.folder_missing);
-        }
-        if ("Remote list failed".equals(status) || "Remote refresh failed".equals(status) || "Failed".equals(status)) {
-            return getString(R.string.remote_list_failed_status);
-        }
-        if ("Stopped".equals(status)) {
-            return getString(R.string.status_stopped);
-        }
-        return status;
-    }
-
-    private int remoteListStatusColor() {
-        String status = remoteListStatus == null ? "" : remoteListStatus.trim();
-        if ("Remote list ready".equals(status) || "Remote list refreshed".equals(status)) {
-            return Color.rgb(15, 111, 83);
-        }
-        if ("Remote list failed".equals(status) || "Remote refresh failed".equals(status) || "Failed".equals(status) || "Remote path missing".equals(status)) {
-            return Color.rgb(201, 63, 63);
-        }
-        if ("Waiting for peer".equals(status) || status.startsWith("Fetching ") || "Refreshing remote file list".equals(status)) {
-            return Color.rgb(172, 103, 22);
-        }
-        return muted();
-    }
-
-    private String displayDownloadStatus(String status) {
-        if ("Idle".equals(status)) {
-            return getString(R.string.status_idle);
-        }
-        if ("Preparing download".equals(status)) {
-            return getString(R.string.status_preparing_download);
-        }
-        if ("Receive complete".equals(status)) {
-            return getString(R.string.status_receive_complete);
-        }
-        if ("Receive failed".equals(status)) {
-            return getString(R.string.status_receive_failed);
-        }
-        if ("Stopped".equals(status)) {
-            return getString(R.string.status_stopped);
-        }
-        if (status != null && status.startsWith("Receiving ")) {
-            return getString(R.string.status_receiving, status.substring("Receiving ".length()));
-        }
-        return status == null ? "" : status;
-    }
-
-    private double currentDownloadSpeed() {
-        return receiveDownload == null ? 0 : downloadBytesPerSecond;
-    }
-
-    private View downloadModeToggle() {
-        LinearLayout box = column();
-        LinearLayout line = row();
-        line.setGravity(Gravity.CENTER_VERTICAL);
-        TextView label = text(getString(R.string.mode), 12, muted(), Typeface.BOLD);
-        line.addView(label, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(30)));
-        Button resume = segmentedButton(getString(R.string.resume), resumeDownloads);
-        setControlEnabled(resume, receiveDownload == null);
-        resume.setOnClickListener(v -> {
-            if (receiveDownload == null) {
-                resumeDownloads = true;
-                render();
-            }
-        });
-        Button overwrite = segmentedButton(getString(R.string.overwrite), !resumeDownloads);
-        setControlEnabled(overwrite, receiveDownload == null);
-        overwrite.setOnClickListener(v -> {
-            if (receiveDownload == null) {
-                resumeDownloads = false;
-                render();
-            }
-        });
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(30), 1);
-        params.setMargins(dp(8), 0, 0, 0);
-        line.addView(resume, params);
-        line.addView(overwrite, actionParams(dp(30)));
-        box.addView(line);
-        box.addView(text(getString(R.string.resume_overwrite_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
-        return box;
-    }
-
-    private Button segmentedButton(String label, boolean active) {
-        return ui.segmentedButton(label, active);
-    }
-
-    private boolean canClickRemoteAction() {
-        return receiveDownload == null && remoteListSession == null;
-    }
-
-    private void browseRemotePath(String path) {
-        if (!canClickRemoteAction()) {
-            return;
-        }
-        remoteCurrentPath = normalizeRemotePath(path);
-        remoteListStatus = remoteFiles.isEmpty() ? "No remote files" : "Remote list ready";
-        render();
-    }
-
-    private List<String> currentDownloadPaths() {
-        List<String> paths = new ArrayList<>();
-        paths.add(normalizeRemotePath(remoteCurrentPath));
-        return paths;
-    }
-
-    private List<HttpReceiver.RemoteFile> selectedRemoteFiles() {
-        List<HttpReceiver.RemoteFile> files = new ArrayList<>();
-        for (HttpReceiver.RemoteFile file : remoteFiles) {
-            if (isSelectedForDownload(file)) {
-                files.add(file);
-            }
-        }
-        return files;
-    }
-
-    private boolean isSelectedForDownload(HttpReceiver.RemoteFile file) {
-        String path = normalizeRemotePath(file.path);
-        if (selectedRemotePaths.contains(path)) {
-            return true;
-        }
-        for (String selected : selectedRemotePaths) {
-            if (!path.isEmpty() && selected != null && path.startsWith(selected + "/")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void selectVisibleRemoteFiles() {
-        for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
-            selectedRemotePaths.add(normalizeRemotePath(file.path));
-        }
-        updateRemoteSelectionViews();
-    }
-
-    private void invertVisibleRemoteFiles() {
-        for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
-            String path = normalizeRemotePath(file.path);
-            if (selectedRemotePaths.contains(path)) {
-                selectedRemotePaths.remove(path);
-            } else {
-                selectedRemotePaths.add(path);
-            }
-        }
-        updateRemoteSelectionViews();
-    }
-
-    private List<HttpReceiver.RemoteFile> currentDirectoryFiles() {
-        List<HttpReceiver.RemoteFile> files = new ArrayList<>();
-        String current = normalizeRemotePath(remoteCurrentPath);
-        for (HttpReceiver.RemoteFile file : remoteFiles) {
-            String path = normalizeRemotePath(file.path);
-            if (current.isEmpty() || path.equals(current) || path.startsWith(current + "/")) {
-                files.add(file);
-            }
-        }
-        return files;
-    }
-
-    private List<HttpReceiver.RemoteFile> visibleRemoteFiles() {
-        Map<String, HttpReceiver.RemoteFile> visible = new LinkedHashMap<>();
-        String current = normalizeRemotePath(remoteCurrentPath);
-        for (HttpReceiver.RemoteFile file : remoteFiles) {
-            String path = normalizeRemotePath(file.path);
-            if (path.isEmpty() || path.equals(current)) {
-                continue;
-            }
-            if (parentPath(path).equals(current)) {
-                visible.put(path, file);
-                continue;
-            }
-            if (isDescendantOf(path, current)) {
-                String childPath = firstChildPath(path, current);
-                if (!visible.containsKey(childPath)) {
-                    HttpReceiver.RemoteFile dir = new HttpReceiver.RemoteFile();
-                    dir.name = baseName(childPath);
-                    dir.path = childPath;
-                    dir.isDir = true;
-                    dir.size = 0;
-                    visible.put(childPath, dir);
-                }
-            }
-        }
-        List<HttpReceiver.RemoteFile> sorted = new ArrayList<>(visible.values());
-        Collections.sort(sorted, (left, right) -> {
-            if (left.isDir != right.isDir) {
-                return left.isDir ? -1 : 1;
-            }
-            return baseName(left.path).compareToIgnoreCase(baseName(right.path));
-        });
-        return sorted;
-    }
-
-    private boolean isDescendantOf(String path, String parent) {
-        if (parent.isEmpty()) {
-            return path.contains("/");
-        }
-        return path.startsWith(parent + "/") && path.substring(parent.length() + 1).contains("/");
-    }
-
-    private String firstChildPath(String path, String parent) {
-        String rest = parent.isEmpty() ? path : path.substring(parent.length() + 1);
-        int slash = rest.indexOf('/');
-        String child = slash >= 0 ? rest.substring(0, slash) : rest;
-        return parent.isEmpty() ? child : parent + "/" + child;
-    }
-
-    private String parentPath(String path) {
-        String normalized = normalizeRemotePath(path);
-        int slash = normalized.lastIndexOf('/');
-        return slash <= 0 ? "" : normalized.substring(0, slash);
-    }
-
-    private String baseName(String path) {
-        String normalized = normalizeRemotePath(path);
-        if (normalized.isEmpty()) {
-            return "/";
-        }
-        int slash = normalized.lastIndexOf('/');
-        return slash >= 0 ? normalized.substring(slash + 1) : normalized;
-    }
-
-    private String displayRemotePath(String path) {
-        String normalized = normalizeRemotePath(path);
-        return normalized.isEmpty() ? "/" : "/" + normalized;
-    }
-
-    private String normalizeRemotePath(String path) {
-        String clean = path == null ? "" : path.trim().replace('\\', '/');
-        while (clean.startsWith("/")) {
-            clean = clean.substring(1);
-        }
-        while (clean.endsWith("/") && clean.length() > 1) {
-            clean = clean.substring(0, clean.length() - 1);
-        }
-        return ".".equals(clean) ? "" : clean;
-    }
-
-    private View passwordField() {
-        boolean locked = receiveSession != null;
-        LinearLayout box = column();
-        box.addView(text(getString(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
-
-        LinearLayout line = row();
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(receivePassword);
-        input.setTextColor(ink());
-        input.setTextSize(15);
-        input.setHint(getString(R.string.passphrase_input_hint));
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(dp(12), 0, dp(12), 0);
-        input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
-        input.setEnabled(!locked);
-        input.setTextColor(ink());
-        applyPasswordVisibility(input);
-        input.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (receiveSession != null) {
-                    return;
-                }
-                receivePassword = s.toString();
-                revealPasswordTemporarily(input);
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
-        });
-        line.addView(input, new LinearLayout.LayoutParams(0, dp(46), 1));
-
-        box.addView(line, blockParams(dp(8)));
-
-        LinearLayout actions = row();
-        Button random = secondaryButton(getString(R.string.random_passphrase));
-        setControlEnabled(random, !locked);
-        random.setOnClickListener(v -> randomizePassword());
-        Button paste = secondaryButton(getString(R.string.paste));
-        setControlEnabled(paste, !locked);
-        paste.setOnClickListener(v -> pastePassword());
-        Button scan = secondaryButton(getString(R.string.scan));
-        setControlEnabled(scan, !locked);
-        scan.setOnClickListener(v -> scanPassword());
-        Button qr = secondaryButton(getString(R.string.qr));
-        qr.setOnClickListener(v -> showPasswordQr());
-        actions.addView(random, new LinearLayout.LayoutParams(0, dp(40), 1));
-        actions.addView(paste, actionParams());
-        actions.addView(scan, actionParams());
-        actions.addView(qr, actionParams());
-        box.addView(actions, blockParams(dp(6)));
-        return box;
-    }
-
-    private void applyPasswordVisibility(EditText input) {
-        input.setTransformationMethod(receivePasswordVisible ? null : PasswordTransformationMethod.getInstance());
-        input.setSelection(input.getText().length());
-    }
-
-    private void revealPasswordTemporarily() {
-        revealPasswordTemporarily(null);
-    }
-
-    private void revealPasswordTemporarily(EditText input) {
-        receivePasswordVisible = true;
-        int token = ++receivePasswordVisibilityToken;
-        if (input != null) {
-            applyPasswordVisibility(input);
-        }
-        mainHandler.postDelayed(() -> {
-            if (receivePasswordVisibilityToken != token) {
-                return;
-            }
-            receivePasswordVisible = false;
-            if (input != null && input.isAttachedToWindow()) {
-                applyPasswordVisibility(input);
-            } else {
-                render();
-            }
-        }, 5000);
-    }
-
-    private void hidePassword() {
-        receivePasswordVisible = false;
-        receivePasswordVisibilityToken++;
-    }
-
-    private void randomizePassword() {
-        if (receiveSession != null) {
-            return;
-        }
-        receivePassword = Passwords.generate();
-        revealPasswordTemporarily();
-        appendLog("info", "Passphrase randomized");
-        render();
-    }
-
-    private View protocolToggle() {
-        LinearLayout box = column();
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(getString(R.string.use_udp_protocol));
-        checkBox.setTextColor(Color.rgb(64, 81, 105));
-        checkBox.setTextSize(14);
-        checkBox.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        checkBox.setChecked(receiveUseUdp);
-        setControlEnabled(checkBox, receiveSession == null);
-        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (receiveSession != null) {
-                return;
-            }
-            receiveUseUdp = isChecked;
-        });
-        box.addView(checkBox);
-        TextView hint = text(getString(R.string.use_udp_protocol_hint), 12, muted(), Typeface.NORMAL);
-        hint.setPadding(dp(4), 0, 0, 0);
-        box.addView(hint);
-        return box;
     }
 
     private View logPanel() {
@@ -1584,8 +613,8 @@ public final class MainActivity extends Activity implements ModuleHost {
         box.addView(metricBox(getString(R.string.peer), emptyDash(metrics.peer), METRIC_REF_PEER), blockParams(dp(8)));
         if (vpnMode && !GoncVpnState.endpoint().trim().isEmpty()) {
             box.addView(metricBox(getString(R.string.vpn_endpoint), GoncVpnState.endpoint(), METRIC_REF_ENDPOINT), blockParams(dp(8)));
-        } else if (!receiveEndpoint.trim().isEmpty()) {
-            box.addView(metricBox(getString(R.string.file_endpoint), receiveEndpoint, METRIC_REF_ENDPOINT), blockParams(dp(8)));
+        } else if (!receiveController.endpoint().trim().isEmpty()) {
+            box.addView(metricBox(getString(R.string.file_endpoint), receiveController.endpoint(), METRIC_REF_ENDPOINT), blockParams(dp(8)));
         }
         return box;
     }
@@ -1639,7 +668,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             activityPeerValueView.setText(emptyDash(metrics.peer));
         }
         if (activityEndpointValueView != null) {
-            activityEndpointValueView.setText(receiveEndpoint);
+            activityEndpointValueView.setText(receiveController.endpoint());
         }
     }
 
@@ -1676,169 +705,10 @@ public final class MainActivity extends Activity implements ModuleHost {
         startActivityForResult(intent, REQUEST_OPEN_SAVE_TREE);
     }
 
-    private void startP2PReceive() {
-        String passphrase = receivePassword.trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (Passwords.isWeak(passphrase)) {
-            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        hidePassword();
-        receiveMetrics.reset();
-        remoteListStatus = "Waiting for peer";
-        downloadStatus = "Idle";
-        downloadDoneFiles = 0;
-        downloadTotalFiles = 0;
-        downloadDoneBytes = 0;
-        downloadTotalBytes = 0;
-        downloadNetworkBytes = 0;
-        downloadBytesPerSecond = 0;
-        downloadSkippedFiles = 0;
-        downloadResumedFiles = 0;
-        downloadStartedAtMs = 0;
-        downloadFinishedAtMs = 0;
-        receiveEndpoint = "";
-        remoteCurrentPath = "";
-        remoteCurrentPathMissing = false;
-        remoteFiles.clear();
-        selectedRemotePaths.clear();
-        remoteFileCount = 0;
-        remoteDirCount = 0;
-        remoteTotalBytes = 0;
-        receiveStatus = "Preparing";
-        appendLog("info", "Start receiving requested");
-        long runId = ++receiveRunId;
-        receiveSession = bridge.startP2PReceive(this, passphrase, receiveUseUdp, callback(runId));
-        updateKeepScreenOn();
-        render();
-    }
-
-    private GoncBridge.EventCallback callback(long runId) {
-        return new GoncBridge.EventCallback() {
-            @Override
-            public void onEvent(String level, String message) {
-                mainHandler.post(() -> {
-                    if (!isActiveRun(runId)) {
-                        return;
-                    }
-                    updateMetricsFromLog(receiveMetrics, message);
-                    appendLog(level, message);
-                    renderAfterBackgroundUpdate();
-                });
-            }
-
-            @Override
-            public void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
-                mainHandler.post(() -> {
-                    if (!isActiveRun(runId)) {
-                        return;
-                    }
-                    updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
-                    renderAfterBackgroundUpdate();
-                });
-            }
-
-            @Override
-            public void onReady(String endpoint) {
-                mainHandler.post(() -> {
-                    if (!isActiveRun(runId)) {
-                        return;
-                    }
-                    receiveStatus = "Ready";
-                    receiveMetrics.p2pStatus = "connected";
-                    appendLog("info", "Ready: " + endpoint);
-                    loadRemoteFiles(endpoint, runId);
-                    render();
-                });
-            }
-
-            @Override
-            public void onStopped() {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    receiveSession = null;
-                    receiveStatus = "Idle";
-                    stopReceiveWorkers();
-                    receiveMetrics.markStopped();
-                    updateKeepScreenOn();
-                    appendLog("warn", "Session stopped");
-                    render();
-                });
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    receiveSession = null;
-                    receiveStatus = "Error";
-                    stopReceiveWorkers();
-                    remoteListStatus = "Failed";
-                    receiveMetrics.p2pStatus = "error";
-                    updateKeepScreenOn();
-                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    render();
-                });
-            }
-        };
-    }
-
-    private void stopSession() {
-        GoncBridge.Session current = receiveSession;
-        if (current != null) {
-            current.stop();
-            receiveSession = null;
-        }
-        if (receiveDownload != null) {
-            receiveDownload.stop();
-            receiveDownload = null;
-        }
-        if (remoteListSession != null) {
-            remoteListSession.stop();
-            remoteListSession = null;
-        }
-        remoteListStatus = "Stopped";
-        downloadStatus = "Stopped";
-        downloadBytesPerSecond = 0;
-        receiveMetrics.inBps = 0;
-        receiveMetrics.outBps = 0;
-        receiveMetrics.lastTrafficMs = 0;
-        receiveStatus = "Idle";
-        receiveMetrics.markStopped();
-        updateKeepScreenOn();
-        appendLog("warn", "Receive stop requested");
-        render();
-    }
-
     private void endAllTasksAndExit() {
-        receiveRunId++;
-
-        GoncBridge.Session receive = receiveSession;
-        HttpReceiver.Session listSession = remoteListSession;
-        HttpReceiver.Session download = receiveDownload;
-
-        receiveSession = null;
-        remoteListSession = null;
-        receiveDownload = null;
-
         sendController.endTask();
-        if (receive != null) {
-            receive.stop();
-        }
+        receiveController.endTask();
         vpnServer.endTask();
-        if (listSession != null) {
-            listSession.stop();
-        }
-        if (download != null) {
-            download.stop();
-        }
         if (GoncVpnState.isRunning()) {
             stopVpnService();
         }
@@ -1854,419 +724,11 @@ public final class MainActivity extends Activity implements ModuleHost {
         sendMode = true;
         vpnMode = false;
         vpnServerMode = false;
-        receiveUseUdp = false;
         vpnClient.resetForFreshLaunch();
         sendController.resetForFreshLaunch();
-        activityExpanded = false;
-        receivePassword = "";
-        receivePasswordVisible = false;
-        receivePasswordVisibilityToken++;
+        receiveController.resetForFreshLaunch();
         vpnServer.resetForFreshLaunch();
-
-        saveTreeUri = null;
-        saveLocationLabel = getString(R.string.default_save_location);
-        receiveEndpoint = "";
-        remoteListStatus = "Idle";
-        remoteCurrentPath = "";
-        remoteCurrentPathMissing = false;
-        remoteFiles.clear();
-        selectedRemotePaths.clear();
-        remoteFileCount = 0;
-        remoteDirCount = 0;
-        remoteTotalBytes = 0;
-
-        resumeDownloads = true;
-        downloadStatus = "Idle";
-        downloadDoneFiles = 0;
-        downloadTotalFiles = 0;
-        downloadDoneBytes = 0;
-        downloadTotalBytes = 0;
-        downloadNetworkBytes = 0;
-        downloadBytesPerSecond = 0;
-        downloadSkippedFiles = 0;
-        downloadResumedFiles = 0;
-        downloadStartedAtMs = 0;
-        downloadFinishedAtMs = 0;
-
-        receiveStatus = "Idle";
-        receiveMetrics.reset();
-    }
-
-    private void loadRemoteFiles(String endpoint, long runId) {
-        loadRemoteFiles(endpoint, runId, "", true, true);
-    }
-
-    private void refreshRemoteFiles(String subPath) {
-        if (receiveEndpoint == null || !receiveEndpoint.startsWith("http://")) {
-            remoteListStatus = "Waiting for peer";
-            Toast.makeText(this, R.string.toast_peer_not_connected, Toast.LENGTH_SHORT).show();
-            render();
-            return;
-        }
-        if (!"connected".equals(receiveConnectionState())) {
-            remoteListStatus = "Waiting for peer";
-            Toast.makeText(this, R.string.toast_peer_not_connected, Toast.LENGTH_SHORT).show();
-            render();
-            return;
-        }
-        loadRemoteFiles(receiveEndpoint, receiveRunId, subPath, false, false);
-    }
-
-    private void loadRemoteFiles(String endpoint, long runId, String subPath, boolean clearSelection, boolean replaceAll) {
-        if (endpoint == null || !endpoint.startsWith("http://")) {
-            return;
-        }
-        if (remoteListSession != null) {
-            remoteListSession.stop();
-        }
-        String targetPath = normalizeRemotePath(subPath);
-        receiveEndpoint = endpoint;
-        remoteListStatus = "Fetching " + displayRemotePath(targetPath);
-        remoteCurrentPath = targetPath;
-        remoteCurrentPathMissing = false;
-        if (replaceAll) {
-            remoteFiles.clear();
-            remoteFileCount = 0;
-            remoteDirCount = 0;
-            remoteTotalBytes = 0;
-        }
-        if (clearSelection) {
-            selectedRemotePaths.clear();
-        }
-        remoteListSession = HttpReceiver.startList(endpoint, targetPath, new HttpReceiver.ListCallback() {
-            @Override
-            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    remoteListSession = null;
-                    remoteCurrentPathMissing = missing && !targetPath.isEmpty();
-                    if (replaceAll) {
-                        remoteFiles.clear();
-                        remoteFiles.addAll(files);
-                    } else {
-                        List<String> refreshedPaths = new ArrayList<>();
-                        refreshedPaths.add(targetPath);
-                        mergeRemoteFiles(refreshedPaths, files);
-                    }
-                    recalculateRemoteFileSummary();
-                    remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : (replaceAll ? "Remote list ready" : "Remote list refreshed"));
-                    updateKeepScreenOn();
-                    if (remoteCurrentPathMissing) {
-                        appendLog("warn", "Remote path missing " + displayRemotePath(targetPath));
-                    } else {
-                        appendLog("info", "Remote list ready " + displayRemotePath(targetPath) + ": " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
-                    }
-                    render();
-                });
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    remoteListSession = null;
-                    remoteListStatus = "Remote list failed";
-                    updateKeepScreenOn();
-                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    Toast.makeText(MainActivity.this, R.string.toast_remote_refresh_failed, Toast.LENGTH_SHORT).show();
-                    render();
-                });
-            }
-        });
-        updateKeepScreenOn();
-        render();
-    }
-
-    private void mergeRemoteFiles(List<String> refreshedPaths, List<HttpReceiver.RemoteFile> freshFiles) {
-        Map<String, HttpReceiver.RemoteFile> merged = new LinkedHashMap<>();
-        for (HttpReceiver.RemoteFile file : remoteFiles) {
-            String path = normalizeRemotePath(file.path);
-            if (!isUnderAnyRefreshPath(path, refreshedPaths)) {
-                merged.put(path, file);
-            }
-        }
-        for (HttpReceiver.RemoteFile file : freshFiles) {
-            merged.put(normalizeRemotePath(file.path), file);
-        }
-        remoteFiles.clear();
-        remoteFiles.addAll(merged.values());
-    }
-
-    private boolean isUnderAnyRefreshPath(String path, List<String> refreshedPaths) {
-        String normalized = normalizeRemotePath(path);
-        if (refreshedPaths == null || refreshedPaths.isEmpty()) {
-            return true;
-        }
-        for (String refreshPath : refreshedPaths) {
-            String target = normalizeRemotePath(refreshPath);
-            if (target.isEmpty() || normalized.equals(target) || normalized.startsWith(target + "/")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void recalculateRemoteFileSummary() {
-        int fileCount = 0;
-        int dirCount = 0;
-        long totalBytes = 0;
-        for (HttpReceiver.RemoteFile file : remoteFiles) {
-            if (file.isDir) {
-                dirCount++;
-            } else {
-                fileCount++;
-                totalBytes += Math.max(0, file.size);
-            }
-        }
-        remoteFileCount = fileCount;
-        remoteDirCount = dirCount;
-        remoteTotalBytes = totalBytes;
-    }
-
-    private void refreshAndStartDownload(List<String> paths) {
-        if (receiveEndpoint == null || !receiveEndpoint.startsWith("http://")) {
-            remoteListStatus = "Waiting for peer";
-            Toast.makeText(this, R.string.toast_peer_not_connected, Toast.LENGTH_SHORT).show();
-            render();
-            return;
-        }
-        if (!"connected".equals(receiveConnectionState())) {
-            remoteListStatus = "Waiting for peer";
-            Toast.makeText(this, R.string.toast_peer_not_connected, Toast.LENGTH_SHORT).show();
-            render();
-            return;
-        }
-        if (paths == null || paths.isEmpty()) {
-            Toast.makeText(this, R.string.toast_select_download_files, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!ensureDefaultSavePermission()) {
-            return;
-        }
-        if (currentDirectoryFiles().isEmpty() && paths.size() == 1 && normalizeRemotePath(paths.get(0)).equals(normalizeRemotePath(remoteCurrentPath))) {
-            Toast.makeText(this, R.string.toast_no_remote_files, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (remoteListSession != null) {
-            remoteListSession.stop();
-        }
-        List<String> normalizedPaths = new ArrayList<>();
-        for (String path : paths) {
-            normalizedPaths.add(normalizeRemotePath(path));
-        }
-        remoteListStatus = "Refreshing remote file list";
-        downloadStatus = "Preparing download";
-        remoteListSession = HttpReceiver.startList(receiveEndpoint, normalizedPaths, new HttpReceiver.ListCallback() {
-            @Override
-            public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(receiveRunId)) {
-                        return;
-                    }
-                    remoteListSession = null;
-                    mergeRemoteFiles(normalizedPaths, files);
-                    recalculateRemoteFileSummary();
-                    remoteCurrentPathMissing = missing && normalizedPaths.size() == 1 && normalizeRemotePath(remoteCurrentPath).equals(normalizedPaths.get(0)) && !remoteCurrentPath.isEmpty();
-                    remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : "Remote list refreshed");
-                    updateKeepScreenOn();
-                    if (files.isEmpty()) {
-                        downloadStatus = "Idle";
-                        Toast.makeText(MainActivity.this, R.string.toast_no_remote_files, Toast.LENGTH_SHORT).show();
-                        render();
-                        return;
-                    }
-                    appendLog("info", "Remote list refreshed before download: " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
-                    startReceiveDownload(receiveEndpoint, receiveRunId, files);
-                    render();
-                });
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(receiveRunId)) {
-                        return;
-                    }
-                    remoteListSession = null;
-                    remoteListStatus = "Remote refresh failed";
-                    downloadStatus = "Idle";
-                    updateKeepScreenOn();
-                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    Toast.makeText(MainActivity.this, R.string.toast_remote_refresh_failed, Toast.LENGTH_SHORT).show();
-                    render();
-                });
-            }
-        });
-        updateKeepScreenOn();
-        render();
-    }
-
-    private void startReceiveDownload(String endpoint, long runId, List<HttpReceiver.RemoteFile> files) {
-        if (endpoint == null || !endpoint.startsWith("http://")) {
-            return;
-        }
-        if (files == null || files.isEmpty()) {
-            Toast.makeText(this, R.string.toast_select_download_files, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!ensureDefaultSavePermission()) {
-            return;
-        }
-        if (receiveDownload != null) {
-            receiveDownload.stop();
-        }
-        receiveEndpoint = endpoint;
-        downloadStatus = "Preparing download";
-        downloadDoneFiles = 0;
-        downloadTotalFiles = 0;
-        downloadDoneBytes = 0;
-        downloadTotalBytes = 0;
-        downloadNetworkBytes = 0;
-        downloadBytesPerSecond = 0;
-        downloadSkippedFiles = 0;
-        downloadResumedFiles = 0;
-        downloadStartedAtMs = System.currentTimeMillis();
-        downloadFinishedAtMs = 0;
-        receiveDownload = HttpReceiver.start(this, endpoint, saveTreeUri, files, resumeDownloads, new HttpReceiver.Callback() {
-            @Override
-            public void onProgress(int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
-                queueDownloadProgress(runId, doneFiles, totalFiles, doneBytes, totalBytes, networkBytes, bytesPerSecond, current);
-            }
-
-            @Override
-            public void onComplete(int totalFiles, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
-                        return;
-                    }
-                    receiveDownload = null;
-                    downloadDoneFiles = totalFiles;
-                    downloadTotalFiles = totalFiles;
-                    downloadDoneBytes = totalBytes;
-                    downloadTotalBytes = totalBytes;
-                    downloadNetworkBytes = networkBytes;
-                    downloadBytesPerSecond = 0;
-                    downloadFinishedAtMs = System.currentTimeMillis();
-                    downloadSkippedFiles = skippedFiles;
-                    downloadResumedFiles = resumedFiles;
-                    receiveMetrics.inBps = 0;
-                    receiveMetrics.outBps = 0;
-                    receiveMetrics.lastTrafficMs = 0;
-                    downloadStatus = "Receive complete";
-                    updateKeepScreenOn();
-                    appendLog("info", "Receive complete: " + totalFiles + " file(s), " + HttpReceiver.formatBytes(totalBytes) + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
-                    render();
-                });
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                mainHandler.post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
-                        return;
-                    }
-                    receiveDownload = null;
-                    downloadStatus = "Receive failed";
-                    downloadBytesPerSecond = 0;
-                    receiveMetrics.inBps = 0;
-                    receiveMetrics.outBps = 0;
-                    receiveMetrics.lastTrafficMs = 0;
-                    updateKeepScreenOn();
-                    appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    render();
-                });
-            }
-        });
-        updateKeepScreenOn();
-    }
-
-    private void queueDownloadProgress(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
-        synchronized (downloadProgressLock) {
-            pendingDownloadProgress = new DownloadProgressSnapshot(runId, doneFiles, totalFiles, doneBytes, totalBytes, networkBytes, bytesPerSecond, current);
-            if (downloadProgressApplyPending) {
-                return;
-            }
-            downloadProgressApplyPending = true;
-        }
-        mainHandler.post(this::applyLatestDownloadProgress);
-    }
-
-    private void applyLatestDownloadProgress() {
-        DownloadProgressSnapshot progress;
-        synchronized (downloadProgressLock) {
-            progress = pendingDownloadProgress;
-            pendingDownloadProgress = null;
-            downloadProgressApplyPending = false;
-        }
-        if (progress == null || !isCurrentRun(progress.runId) || receiveDownload == null) {
-            return;
-        }
-        downloadDoneFiles = progress.doneFiles;
-        downloadTotalFiles = progress.totalFiles;
-        downloadDoneBytes = progress.doneBytes;
-        downloadTotalBytes = progress.totalBytes;
-        downloadNetworkBytes = progress.networkBytes;
-        downloadBytesPerSecond = progress.bytesPerSecond;
-        receiveMetrics.inBps = progress.bytesPerSecond;
-        receiveMetrics.lastTrafficMs = System.currentTimeMillis();
-        downloadStatus = progress.current == null || progress.current.trim().isEmpty() ? "Preparing download" : "Receiving " + progress.current;
-        renderDownloadProgress();
-    }
-
-    private boolean ensureDefaultSavePermission() {
-        if (saveTreeUri != null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return true;
-        }
-        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
-            return true;
-        }
-        requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE_PERMISSION);
-        return false;
-    }
-
-    private void stopReceiveDownload() {
-        if (receiveDownload != null) {
-            receiveDownload.stop();
-            receiveDownload = null;
-        }
-        synchronized (downloadProgressLock) {
-            pendingDownloadProgress = null;
-            downloadProgressApplyPending = false;
-        }
-        downloadStatus = "Stopped";
-        downloadFinishedAtMs = System.currentTimeMillis();
-        downloadBytesPerSecond = 0;
-        receiveMetrics.inBps = 0;
-        receiveMetrics.outBps = 0;
-        receiveMetrics.lastTrafficMs = 0;
-        updateKeepScreenOn();
-        appendLog("warn", "Receive download stop requested");
-        render();
-    }
-
-    private void stopReceiveWorkers() {
-        if (remoteListSession != null) {
-            remoteListSession.stop();
-            remoteListSession = null;
-        }
-        if (receiveDownload != null) {
-            receiveDownload.stop();
-            receiveDownload = null;
-        }
-        downloadBytesPerSecond = 0;
-        receiveMetrics.inBps = 0;
-        receiveMetrics.outBps = 0;
-        receiveMetrics.lastTrafficMs = 0;
+        activityExpanded = false;
     }
 
     private void requestStartVpn() {
@@ -2394,33 +856,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         render();
     }
 
-    private void pastePassword() {
-        if (receiveSession != null) {
-            return;
-        }
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (clipboard == null || !clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null) {
-            Toast.makeText(this, R.string.toast_clipboard_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        ClipData clip = clipboard.getPrimaryClip();
-        if (clip.getItemCount() == 0) {
-            Toast.makeText(this, R.string.toast_clipboard_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        CharSequence value = clip.getItemAt(0).coerceToText(this);
-        if (value != null) {
-            receivePassword = value.toString().trim();
-            revealPasswordTemporarily();
-            appendLog("info", "Passphrase pasted");
-            render();
-        }
-    }
-
-    private void showPasswordQr() {
-        showPassphraseQr(receivePassword.trim());
-    }
-
     @Override
     public void showPassphraseQr(String passphrase) {
         if (passphrase.isEmpty()) {
@@ -2545,21 +980,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
     }
 
-    private void scanPassword() {
-        if (receiveSession != null) {
-            return;
-        }
-        scanPassphrase(result -> {
-            if (receiveSession != null) {
-                return;
-            }
-            receivePassword = result.trim();
-            revealPasswordTemporarily();
-            appendLog("info", "Passphrase scanned");
-            render();
-        });
-    }
-
     private void launchQrScanner() {
         Intent intent = new Intent(this, QrScanActivity.class);
         intent.setAction(Intents.Scan.ACTION);
@@ -2626,12 +1046,25 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private String currentStatus() {
         if (vpnMode) {
-            return GoncVpnState.status();
+            // Translate the VPN lifecycle status into the shared status vocabulary so
+            // the activity summary reads the same as the file modules ("空闲" instead
+            // of the raw "Disconnected").
+            String status = GoncVpnState.status();
+            if (GoncVpnState.CONNECTING.equals(status)) {
+                return "starting";
+            }
+            if (GoncVpnState.CONNECTED.equals(status)) {
+                return "connected";
+            }
+            if (GoncVpnState.ERROR.equals(status)) {
+                return "Error";
+            }
+            return "Idle"; // Disconnected / Stopping → idle
         }
         if (vpnServerMode) {
             return vpnServer.status();
         }
-        return sendMode ? sendController.status() : receiveStatus;
+        return sendMode ? sendController.status() : receiveController.status();
     }
 
     private String statusSummary() {
@@ -2688,16 +1121,8 @@ public final class MainActivity extends Activity implements ModuleHost {
         return displayStatusLabel(clean);
     }
 
-    private boolean isCurrentRun(long runId) {
-        return receiveRunId == runId;
-    }
-
-    private boolean isActiveRun(long runId) {
-        return receiveRunId == runId && receiveSession != null;
-    }
-
     private boolean isAnySessionRunning() {
-        return sendController.isRunning() || receiveSession != null || vpnServer.isRunning() || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
+        return sendController.isRunning() || receiveController.isBusy() || vpnServer.isRunning() || GoncVpnState.isRunning();
     }
 
     private TransferMetrics currentMetrics() {
@@ -2710,7 +1135,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (sendMode) {
             return sendController.metrics();
         }
-        return receiveMetrics;
+        return receiveController.metrics();
     }
 
     @Override
@@ -2799,11 +1224,11 @@ public final class MainActivity extends Activity implements ModuleHost {
             }
             return Math.max(metrics.inBps, metrics.outBps);
         }
-        if (!sendMode && receiveDownload == null) {
+        if (!sendMode && !receiveController.isDownloading()) {
             return 0;
         }
-        if (!sendMode && downloadBytesPerSecond > 0) {
-            return downloadBytesPerSecond;
+        if (!sendMode && receiveController.currentDownloadSpeed() > 0) {
+            return receiveController.currentDownloadSpeed();
         }
         if (System.currentTimeMillis() - metrics.lastTrafficMs > 4000) {
             return 0;
@@ -2812,18 +1237,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private String displayStatus(TransferMetrics metrics) {
-        String status = normalizeMetricStatus(metrics.p2pStatus);
-        if ("negotiating".equals(status)
-                || "connected".equals(status)
-                || "failed".equals(status)
-                || "error".equals(status)
-                || "disconnected".equals(status)) {
-            return status;
-        }
-        if (metrics.connectingCount > 0 && metrics.connectedCount == 0) {
-            return "connecting";
-        }
-        return metrics.p2pStatus;
+        return ui.displayStatus(metrics);
     }
 
     private String displayStatusLabel(String status) {
@@ -2958,6 +1372,28 @@ public final class MainActivity extends Activity implements ModuleHost {
     @Override
     public void pickSendFolder() {
         openSendFolderPicker();
+    }
+
+    @Override
+    public void pickSaveLocation() {
+        openSaveLocationPicker();
+    }
+
+    @Override
+    public boolean ensureLegacyStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return true;
+        }
+        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE_PERMISSION);
+        return false;
+    }
+
+    @Override
+    public boolean isAutoRenderPaused() {
+        return System.currentTimeMillis() < pauseAutoRenderUntilMs;
     }
 
     @Override
@@ -3253,80 +1689,8 @@ public final class MainActivity extends Activity implements ModuleHost {
         return ui.formatPercent(done, total);
     }
 
-    private void updateDownloadProgressViews() {
-        long total = Math.max(downloadTotalBytes, 0);
-        long done = Math.max(downloadDoneBytes, 0);
-        if (downloadStatusView != null) {
-            downloadStatusView.setText(displayDownloadStatus(downloadStatus));
-        }
-        if (downloadDetailView != null) {
-            downloadDetailView.setText(downloadProgressDetail(done, total));
-        }
-        if (downloadProgressBar != null) {
-            downloadProgressBar.setProgress(progressValue(done, total));
-        }
-        if (downloadSummaryView != null) {
-            downloadSummaryView.setText(downloadProgressSummary(done, total));
-        }
-    }
-
-    private String downloadProgressDetail(long done, long total) {
-        String detailText = getString(R.string.progress_detail, formatPercent(done, total), downloadDoneFiles, downloadTotalFiles, formatBytes(done), formatBytes(total));
-        if (downloadSkippedFiles > 0 || downloadResumedFiles > 0) {
-            detailText = getString(R.string.progress_detail_extra, detailText, downloadSkippedFiles, downloadResumedFiles);
-        }
-        return detailText;
-    }
-
-    private String downloadProgressSummary(long done, long total) {
-        if ("Receive complete".equals(downloadStatus)) {
-            return getString(R.string.progress_completed_summary,
-                    formatDuration(downloadElapsedSeconds()),
-                    formatRate(downloadAverageBytesPerSecond()));
-        }
-        if ("Stopped".equals(downloadStatus)) {
-            return getString(R.string.progress_stopped_summary, formatDuration(downloadElapsedSeconds()));
-        }
-        double speedValue = currentDownloadSpeed();
-        String speedText = getString(R.string.progress_speed, formatRate(speedValue));
-        String remaining = formatRemaining(done, total, speedValue);
-        if (!remaining.isEmpty()) {
-            speedText = speedText + "  |  " + remaining;
-        }
-        return speedText;
-    }
-
-    private long downloadElapsedSeconds() {
-        if (downloadStartedAtMs <= 0) {
-            return 0;
-        }
-        long end = downloadFinishedAtMs > 0 ? downloadFinishedAtMs : System.currentTimeMillis();
-        return Math.max(0, (end - downloadStartedAtMs + 999) / 1000);
-    }
-
-    private double downloadAverageBytesPerSecond() {
-        long elapsedMs;
-        if (downloadStartedAtMs <= 0 || downloadFinishedAtMs <= downloadStartedAtMs) {
-            elapsedMs = Math.max(1, downloadElapsedSeconds() * 1000);
-        } else {
-            elapsedMs = downloadFinishedAtMs - downloadStartedAtMs;
-        }
-        return Math.max(0, downloadNetworkBytes * 1000.0 / elapsedMs);
-    }
-
     private int progressValue(long done, long total) {
         return ui.progressValue(done, total);
-    }
-
-    private String formatRemaining(long done, long total, double bytesPerSecond) {
-        if (total <= 0 || done >= total || receiveDownload == null) {
-            return "";
-        }
-        if (bytesPerSecond <= 1) {
-            return getString(R.string.progress_remaining_estimating);
-        }
-        long seconds = Math.max(1, (long) Math.ceil((total - done) / bytesPerSecond));
-        return getString(R.string.progress_remaining, formatDuration(seconds));
     }
 
     private String formatDuration(long seconds) {
@@ -3339,32 +1703,5 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private String titleCase(String value) {
         return ui.titleCase(value);
-    }
-
-    private static final class SelectionSummary {
-        int files;
-        long bytes;
-    }
-
-    private static final class DownloadProgressSnapshot {
-        final long runId;
-        final int doneFiles;
-        final int totalFiles;
-        final long doneBytes;
-        final long totalBytes;
-        final long networkBytes;
-        final double bytesPerSecond;
-        final String current;
-
-        DownloadProgressSnapshot(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
-            this.runId = runId;
-            this.doneFiles = doneFiles;
-            this.totalFiles = totalFiles;
-            this.doneBytes = doneBytes;
-            this.totalBytes = totalBytes;
-            this.networkBytes = networkBytes;
-            this.bytesPerSecond = bytesPerSecond;
-            this.current = current;
-        }
     }
 }

@@ -113,7 +113,9 @@ final class GoncVpnState {
             status = CONNECTING;
             endpoint = "";
             error = "";
-            p2pStatus = "idle";
+            // Match the file modules' TransferMetrics.reset() so the initial label
+            // reads the same ("连接中" until gonc's first report arrives).
+            p2pStatus = "starting";
             network = "-";
             route = "-";
             peer = "-";
@@ -162,6 +164,8 @@ final class GoncVpnState {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             if (nextStatus != null && !nextStatus.trim().isEmpty()) {
+                // Store gonc's report status verbatim; the shared UiKit.displayStatus /
+                // connectionState do all interpretation (same path as the file modules).
                 p2pStatus = nextStatus.trim();
             }
             if (nextNetwork != null && !nextNetwork.trim().isEmpty()) {

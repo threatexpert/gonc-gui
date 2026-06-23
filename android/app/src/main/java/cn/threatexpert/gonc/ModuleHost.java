@@ -39,6 +39,20 @@ interface ModuleHost {
 
     void pickSendFolder();
 
+    /** Open the system folder picker for the receive save location; result flows back via ReceiveController.setSaveLocation. */
+    void pickSaveLocation();
+
+    /**
+     * Ensure legacy ({@code WRITE_EXTERNAL_STORAGE}) save permission. Returns
+     * {@code true} when writing is already allowed (or not needed on this SDK);
+     * {@code false} after launching the permission request, in which case the
+     * caller should abort and let the user retry.
+     */
+    boolean ensureLegacyStoragePermission();
+
+    /** Whether high-frequency auto-render is currently paused (user is interacting with a metric value). */
+    boolean isAutoRenderPaused();
+
     /** Full rebuild of the visible screen. */
     void requestRender();
 

@@ -329,6 +329,85 @@ final class UiKit {
         return status.trim().toLowerCase(Locale.ROOT);
     }
 
+    /** Collapse the raw p2p status + connection counters into a single display state. */
+    String displayStatus(TransferMetrics metrics) {
+        String status = normalizeMetricStatus(metrics.p2pStatus);
+        // gonc reports P2P failures as "error:<reason>"; collapse those (and any
+        // "failed" from log parsing) to a single "failed" so the label and the
+        // activity P2P box agree regardless of the reason text. A bare "error"
+        // (a hard session crash from a controller's onError) is left as-is.
+        if (status.startsWith("error:") || status.startsWith("failed")) {
+            return "failed";
+        }
+        if ("negotiating".equals(status)
+                || "connected".equals(status)
+                || "error".equals(status)
+                || "disconnected".equals(status)) {
+            return status;
+        }
+        if (metrics.connectingCount > 0 && metrics.connectedCount == 0) {
+            return "connecting";
+        }
+        return metrics.p2pStatus;
+    }
+
+    /**
+     * The single connection state machine shared by the receive module and the
+     * VPN client, so their "status next to the disconnect button" behave
+     * identically off the same gonc P2P report. Callers handle the
+     * not-running/disconnected case before calling this.
+     */
+    String connectionState(TransferMetrics metrics) {
+        String clean = displayStatus(metrics);
+        clean = clean == null ? "" : clean.trim().toLowerCase(Locale.ROOT);
+        if (clean.startsWith("failed") || clean.startsWith("error")) {
+            return "failed";
+        }
+        if ("connected".equals(clean)) {
+            return "connected";
+        }
+        if ("negotiating".equals(clean)) {
+            return "negotiating";
+        }
+        if ("wait".equals(clean)
+                || "waiting".equals(clean)
+                || "ready".equals(clean)
+                || "idle".equals(clean)
+                || "disconnected".equals(clean)) {
+            return "waiting";
+        }
+        return "connecting";
+    }
+
+    int connectionColor(String state) {
+        if ("failed".equals(state)) {
+            return Color.rgb(201, 63, 63);
+        }
+        if ("connected".equals(state)) {
+            return Color.rgb(18, 151, 101);
+        }
+        return Color.rgb(222, 153, 42);
+    }
+
+    /** Localized status label for the active connection, shared by receive + VPN client. */
+    String connectionLabel(TransferMetrics metrics) {
+        String state = connectionState(metrics);
+        String route = routeLabel(metrics.routeMode);
+        if ("failed".equals(state)) {
+            return context.getString(R.string.connection_failed_retry);
+        }
+        if ("connected".equals(state)) {
+            return appendRoute(context.getString(R.string.connection_connected), route);
+        }
+        if ("negotiating".equals(state)) {
+            return appendRoute(context.getString(R.string.connection_negotiating), route);
+        }
+        if ("waiting".equals(state)) {
+            return context.getString(R.string.connection_waiting_peer);
+        }
+        return context.getString(R.string.connection_connecting);
+    }
+
     String routeLabel(String mode) {
         if (mode == null) {
             return "";

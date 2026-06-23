@@ -3,12 +3,14 @@ package cn.threatexpert.gonc;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 
 import org.json.JSONObject;
 
@@ -199,6 +201,7 @@ final class HttpReceiver {
                 file.isDir = json.optBoolean("is_dir");
                 file.size = json.optLong("size");
                 file.path = json.optString("path");
+                file.modifiedMs = parseModTime(json.optString("mod_time"));
                 if (file.path == null || file.path.trim().isEmpty()) {
                     file.path = file.name;
                 }
@@ -208,6 +211,23 @@ final class HttpReceiver {
             conn.disconnect();
         }
         return new ListResult(files, false);
+    }
+
+    /** Parse the server's RFC3339 {@code mod_time} into epoch millis; 0 when absent/zero/unparseable. */
+    private static long parseModTime(String value) {
+        if (value == null) {
+            return 0;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return 0;
+        }
+        try {
+            long ms = java.time.OffsetDateTime.parse(trimmed).toInstant().toEpochMilli();
+            return ms > 0 ? ms : 0; // drop Go's zero time (year 0001) / pre-epoch
+        } catch (RuntimeException error) {
+            return 0;
+        }
     }
 
     private static String normalizePath(String path) {
@@ -497,6 +517,61 @@ final class HttpReceiver {
         return name.isEmpty() ? "received-file" : name;
     }
 
+    /**
+     * Whether {@code candidate} is {@code base} itself or a collision-renamed
+     * sibling sharing the same extension, e.g. {@code stem (1)ext}, {@code stem(1)ext},
+     * {@code stem-1ext}. Different OEM file pickers use slightly different separators,
+     * so accept an optional separator + parens around the digits.
+     */
+    private static boolean isNameVariant(String candidate, String base) {
+        if (candidate == null) {
+            return false;
+        }
+        if (candidate.equals(base)) {
+            return true;
+        }
+        int dot = base.lastIndexOf('.');
+        String baseStem = dot > 0 ? base.substring(0, dot) : base;
+        String ext = dot > 0 ? base.substring(dot) : "";
+        String candStem;
+        if (ext.isEmpty()) {
+            if (candidate.indexOf('.') >= 0) {
+                return false; // candidate gained an extension the base lacks
+            }
+            candStem = candidate;
+        } else {
+            if (!candidate.endsWith(ext)) {
+                return false;
+            }
+            candStem = candidate.substring(0, candidate.length() - ext.length());
+        }
+        if (!candStem.startsWith(baseStem)) {
+            return false;
+        }
+        return isCollisionSuffix(candStem.substring(baseStem.length()));
+    }
+
+    /** Accept "(1)", " (2)", "(3)", "-4", "_5", " 6" — the numeric tails added on collision. */
+    private static boolean isCollisionSuffix(String suffix) {
+        String s = suffix.trim();
+        if (s.startsWith("(") && s.endsWith(")")) {
+            s = s.substring(1, s.length() - 1).trim();
+        } else {
+            while (!s.isEmpty() && (s.charAt(0) == '-' || s.charAt(0) == '_' || s.charAt(0) == ' ')) {
+                s = s.substring(1);
+            }
+        }
+        if (s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            if (!Character.isDigit(s.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static String resolveUrl(String serverUrl, String path) throws Exception {
         String base = serverUrl.endsWith("/") ? serverUrl.substring(0, serverUrl.length() - 1) : serverUrl;
         String[] parts = pathParts(path);
@@ -537,6 +612,8 @@ final class HttpReceiver {
         private final Context context;
         private final ContentResolver resolver;
         private final Uri treeUri;
+        private final SharedPreferences targetPrefs;
+        private final String saveKeyPrefix;
         private final Map<String, Uri> treeDirectoryCache = new LinkedHashMap<>();
         private final Map<String, Map<String, DocumentInfo>> treeChildrenCache = new LinkedHashMap<>();
         private final Map<String, Map<String, DocumentInfo>> publicFilesCache = new LinkedHashMap<>();
@@ -545,8 +622,64 @@ final class HttpReceiver {
             this.context = context;
             this.resolver = context.getContentResolver();
             this.treeUri = treeUri;
+            this.targetPrefs = context.getSharedPreferences("gonc_download_targets", Context.MODE_PRIVATE);
+            this.saveKeyPrefix = treeUri == null ? "default" : treeUri.toString();
             if (treeUri != null) {
                 treeDirectoryCache.put("", rootDocumentUri(treeUri));
+            }
+        }
+
+        // --- resumable target memory --------------------------------------
+        // Remember the exact destination Uri we created for each (save location +
+        // remote path), so a resume continues that same file regardless of how the
+        // OS renamed it on a name collision ("name (1)", "name(1)", ...) or whether
+        // scoped storage hides a same-named file made by another app.
+
+        private String targetKey(String remotePath) {
+            return saveKeyPrefix + "\n" + normalizePath(remotePath);
+        }
+
+        private DocumentInfo rememberedTarget(String remotePath) {
+            String uriStr = targetPrefs.getString(targetKey(remotePath), null);
+            if (uriStr == null) {
+                return null;
+            }
+            Uri uri = Uri.parse(uriStr);
+            long size = uriSize(uri);
+            if (size < 0) {
+                // The file is gone (user deleted it / record stale) — forget it.
+                targetPrefs.edit().remove(targetKey(remotePath)).apply();
+                return null;
+            }
+            return new DocumentInfo(uri, size);
+        }
+
+        private void rememberTarget(String remotePath, Uri uri) {
+            if (uri != null) {
+                targetPrefs.edit().putString(targetKey(remotePath), uri.toString()).apply();
+            }
+        }
+
+        private long uriSize(Uri uri) {
+            try {
+                if ("file".equals(uri.getScheme())) {
+                    File file = new File(uri.getPath());
+                    return file.exists() ? file.length() : -1;
+                }
+                Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.SIZE}, null, null, null);
+                if (cursor == null) {
+                    return -1;
+                }
+                try {
+                    if (cursor.moveToFirst()) {
+                        return cursor.isNull(0) ? 0 : cursor.getLong(0);
+                    }
+                    return -1;
+                } finally {
+                    cursor.close();
+                }
+            } catch (Exception error) {
+                return -1;
             }
         }
 
@@ -556,6 +689,12 @@ final class HttpReceiver {
             }
             String[] parts = pathParts(remotePath);
             String name = parts.length == 0 ? safeName(fallbackName) : parts[parts.length - 1];
+            if (!replaceExisting) {
+                DocumentInfo remembered = rememberedTarget(remotePath);
+                if (remembered != null) {
+                    return remembered;
+                }
+            }
             Uri parent = ensureTreeDirectory(parentPath(parts));
             DocumentInfo existing = treeChild(parent, name);
             if (existing != null && replaceExisting) {
@@ -564,6 +703,7 @@ final class HttpReceiver {
                 existing = null;
             }
             if (existing != null) {
+                rememberTarget(remotePath, existing.uri);
                 return existing;
             }
             Uri created = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name);
@@ -572,6 +712,7 @@ final class HttpReceiver {
             }
             DocumentInfo info = new DocumentInfo(created, 0);
             treeChildren(parent).put(name, info);
+            rememberTarget(remotePath, created);
             return info;
         }
 
@@ -653,14 +794,28 @@ final class HttpReceiver {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 String relativeDir = publicRelativeDir(parts);
                 Map<String, DocumentInfo> files = publicFiles(relativeDir);
-                DocumentInfo existing = files.get(name);
-                if (existing != null && replaceExisting) {
-                    resolver.delete(existing.uri, null, null);
-                    files.remove(name);
-                    existing = null;
-                }
-                if (existing != null) {
-                    return existing;
+                if (replaceExisting) {
+                    DocumentInfo existing = files.get(name);
+                    if (existing != null) {
+                        resolver.delete(existing.uri, null, null);
+                        files.remove(name);
+                    }
+                } else {
+                    // Resume: continue the exact file we created last time, looked up by
+                    // the Uri we persisted for this remote path. Independent of MediaStore's
+                    // collision rename ("name (1)", "name(1)", ... — OEM dependent) and of
+                    // scoped-storage hiding a same-named file made by another app.
+                    DocumentInfo remembered = rememberedTarget(remotePath);
+                    if (remembered != null) {
+                        return remembered;
+                    }
+                    // Fallback when no record exists yet (e.g. app data cleared): reuse our
+                    // own plain name or a collision-renamed sibling, most-complete first.
+                    DocumentInfo variant = bestResumeVariant(files, name);
+                    if (variant != null) {
+                        rememberTarget(remotePath, variant.uri);
+                        return variant;
+                    }
                 }
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.Downloads.DISPLAY_NAME, name);
@@ -672,6 +827,7 @@ final class HttpReceiver {
                 }
                 DocumentInfo info = new DocumentInfo(created, 0);
                 files.put(name, info);
+                rememberTarget(remotePath, created);
                 return info;
             }
 
@@ -698,8 +854,10 @@ final class HttpReceiver {
                     MediaStore.Downloads.DISPLAY_NAME,
                     MediaStore.Downloads.SIZE
             };
-            String selection = MediaStore.Downloads.RELATIVE_PATH + "=?";
-            String[] args = {normalizedDir};
+            // Some devices store RELATIVE_PATH with a trailing slash, some without; match both.
+            String withoutSlash = normalizedDir.endsWith("/") ? normalizedDir.substring(0, normalizedDir.length() - 1) : normalizedDir;
+            String selection = MediaStore.Downloads.RELATIVE_PATH + "=? OR " + MediaStore.Downloads.RELATIVE_PATH + "=?";
+            String[] args = {normalizedDir, withoutSlash};
             Cursor cursor = resolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, columns, selection, args, null);
             if (cursor != null) {
                 try {
@@ -719,6 +877,21 @@ final class HttpReceiver {
             }
             publicFilesCache.put(normalizedDir, files);
             return files;
+        }
+
+        /**
+         * Pick the existing file to resume among our own downloads in this folder:
+         * the plain name or a "name (n)" collision-rename, choosing the largest so a
+         * completed copy short-circuits and the most-progressed partial is continued.
+         */
+        private DocumentInfo bestResumeVariant(Map<String, DocumentInfo> files, String name) {
+            DocumentInfo best = null;
+            for (Map.Entry<String, DocumentInfo> entry : files.entrySet()) {
+                if (isNameVariant(entry.getKey(), name) && (best == null || entry.getValue().size > best.size)) {
+                    best = entry.getValue();
+                }
+            }
+            return best;
         }
 
         private static String[] parentPath(String[] parts) {
@@ -801,6 +974,7 @@ final class HttpReceiver {
         boolean isDir;
         long size;
         String path;
+        long modifiedMs; // epoch millis of last modification; 0 when unknown
     }
 
     private static final class ListResult {

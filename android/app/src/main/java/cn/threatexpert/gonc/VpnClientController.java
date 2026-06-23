@@ -447,69 +447,12 @@ final class VpnClientController {
     }
 
     private String connectionLabel() {
-        UiKit u = host.ui();
-        String state = connectionState();
-        String route = u.routeLabel(GoncVpnState.route());
-        if ("failed".equals(state)) {
-            return string(R.string.connection_failed);
-        }
-        if ("connected".equals(state)) {
-            return u.appendRoute(string(R.string.connection_connected), route);
-        }
-        if ("negotiating".equals(state)) {
-            return u.appendRoute(string(R.string.connection_negotiating), route);
-        }
-        if ("waiting".equals(state)) {
-            return string(R.string.connection_waiting_peer);
-        }
-        if ("disconnected".equals(state)) {
-            return string(R.string.connection_disconnected);
-        }
-        return string(R.string.connection_connecting);
-    }
-
-    private String connectionState() {
-        String clean = host.ui().normalizeMetricStatus(GoncVpnState.p2pStatus());
-        if ("-".equals(clean)) {
-            return "waiting";
-        }
-        if ("failed".equals(clean) || "error".equals(clean)) {
-            return "failed";
-        }
-        if ("connected".equals(clean)) {
-            return "connected";
-        }
-        if ("negotiating".equals(clean)) {
-            return "negotiating";
-        }
-        if ("connecting".equals(clean)) {
-            return "connecting";
-        }
-        if ("wait".equals(clean)
-                || "waiting".equals(clean)
-                || "ready".equals(clean)
-                || "starting".equals(clean)
-                || "idle".equals(clean)) {
-            return "waiting";
-        }
-        if ("disconnected".equals(clean)) {
-            return "disconnected";
-        }
-        return "connecting";
+        // Same shared interpretation as the receive module, off the same gonc P2P report.
+        return host.ui().connectionLabel(metrics());
     }
 
     private int connectionColor() {
-        String state = connectionState();
-        if ("failed".equals(state)) {
-            return Color.rgb(201, 63, 63);
-        }
-        if ("connected".equals(state)) {
-            return Color.rgb(16, 145, 96);
-        }
-        if ("disconnected".equals(state)) {
-            return Color.rgb(148, 163, 184);
-        }
-        return Color.rgb(217, 119, 6);
+        return host.ui().connectionColor(host.ui().connectionState(metrics()));
     }
 
     // --- scan + QR --------------------------------------------------------
