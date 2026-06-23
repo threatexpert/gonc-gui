@@ -29,6 +29,9 @@ public final class GoncVpnService extends VpnService {
     static final String EXTRA_ENABLE_IPV6 = "enable_ipv6";
     static final String EXTRA_DNS_SERVERS = "dns_servers";
     static final String EXTRA_ROUTE_CIDRS = "route_cidrs";
+    static final String EXTRA_LINK_CONFIG = "link_config";
+    static final String EXTRA_EXTRA_ARGS = "extra_args";
+    static final String EXTRA_TUNNEL_ONLY = "tunnel_only";
 
     private static final int NOTIFICATION_ID = 2001;
     private static final String CHANNEL_ID = "gonc_vpn";
@@ -40,6 +43,7 @@ public final class GoncVpnService extends VpnService {
     private boolean tun2socksRunning;
     private boolean stopRequested;
     private boolean stopWorkerRunning;
+    private volatile String lastGoncMessage = "";
 
     @Override
     public void onCreate() {
@@ -72,13 +76,16 @@ public final class GoncVpnService extends VpnService {
             boolean enableIpv6 = intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
             String dnsServers = intent.getStringExtra(EXTRA_DNS_SERVERS);
             String routeCidrs = intent.getStringExtra(EXTRA_ROUTE_CIDRS);
-            startVpn(password, useUdp, enableIpv6, dnsServers, routeCidrs);
+            String linkConfig = intent.getStringExtra(EXTRA_LINK_CONFIG);
+            String extraArgs = intent.getStringExtra(EXTRA_EXTRA_ARGS);
+            boolean tunnelOnly = intent.getBooleanExtra(EXTRA_TUNNEL_ONLY, false);
+            startVpn(password, useUdp, enableIpv6, dnsServers, routeCidrs, linkConfig, extraArgs, tunnelOnly);
             return START_STICKY;
         }
         return START_NOT_STICKY;
     }
 
-    private void startVpn(String password, boolean useUdp, boolean enableIpv6, String dnsServers, String routeCidrs) {
+    private void startVpn(String password, boolean useUdp, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, String extraArgs, boolean tunnelOnly) {
         synchronized (lock) {
             if (goncSession != null || vpnInterface != null || tun2socksRunning) {
                 log("warn", "VPN is already running");
@@ -86,25 +93,28 @@ public final class GoncVpnService extends VpnService {
             }
             stopRequested = false;
         }
+        lastGoncMessage = "";
         GoncVpnState.setStatus(GoncVpnState.CONNECTING);
-        log("info", "Starting VPN tunnel");
+        log("info", tunnelOnly ? "Starting SOCKS5 tunnel (tunnel only)" : "Starting VPN tunnel");
 
-        ParcelFileDescriptor tun;
-        try {
-            GoncCrashReporter.stage(this, "establish VPN interface");
-            tun = establishInterface(enableIpv6, dnsServers, routeCidrs);
-            if (tun == null) {
-                throw new IllegalStateException("Could not establish VPN interface");
+        ParcelFileDescriptor tun = null;
+        if (!tunnelOnly) {
+            try {
+                GoncCrashReporter.stage(this, "establish VPN interface");
+                tun = establishInterface(enableIpv6, dnsServers, routeCidrs);
+                if (tun == null) {
+                    throw new IllegalStateException("Could not establish VPN interface");
+                }
+                synchronized (lock) {
+                    vpnInterface = tun;
+                }
+            } catch (Throwable error) {
+                GoncCrashReporter.recordNonFatal(this, "VPN establish failed", error);
+                log("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                GoncVpnState.setError(error.getMessage() == null ? error.toString() : error.getMessage());
+                stopVpn();
+                return;
             }
-            synchronized (lock) {
-                vpnInterface = tun;
-            }
-        } catch (Throwable error) {
-            GoncCrashReporter.recordNonFatal(this, "VPN establish failed", error);
-            log("error", error.getMessage() == null ? error.toString() : error.getMessage());
-            GoncVpnState.setError(error.getMessage() == null ? error.toString() : error.getMessage());
-            stopVpn();
-            return;
         }
 
         ParcelFileDescriptor establishedTun = tun;
@@ -113,16 +123,17 @@ public final class GoncVpnService extends VpnService {
                 if (isStopRequested()) {
                     return;
                 }
-                GoncCrashReporter.stage(this, "select local proxy port");
-                int socksPort = findAvailableLocalPort();
-                log("info", "Selected local SOCKS5 port " + socksPort);
-                GoncVpnState.setEndpoint("socks5://127.0.0.1:" + socksPort);
+                GoncCrashReporter.stage(this, "resolve link config");
+                String effectiveLink = resolveLinkConfig(linkConfig);
+                String socks5Endpoint = "socks5://" + socks5AddressFromLink(effectiveLink);
+                log("info", "Using link config " + effectiveLink);
+                GoncVpnState.setEndpoint(socks5Endpoint);
 
                 if (isStopRequested()) {
                     return;
                 }
                 GoncCrashReporter.stage(this, "start gonc tunnel");
-                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, socksPort, "", vpnCallback());
+                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback());
                 boolean stopSessionNow = false;
                 synchronized (lock) {
                     if (stopRequested) {
@@ -139,6 +150,12 @@ public final class GoncVpnService extends VpnService {
                         GoncCrashReporter.recordNonFatal(this, "Error stopping canceled gonc", error);
                         log("error", "Error stopping canceled gonc: " + (error.getMessage() == null ? error.toString() : error.getMessage()));
                     }
+                    return;
+                }
+
+                if (tunnelOnly) {
+                    // No system VPN interface / tun2socks: the SOCKS5 tunnel is the whole
+                    // job. We report "connected" once the P2P link is up (vpnCallback).
                     return;
                 }
 
@@ -159,7 +176,7 @@ public final class GoncVpnService extends VpnService {
                 boolean startedTun2Socks = false;
                 boolean shouldStopAfterStart = false;
                 try {
-                    Mobilegonc.startTun2Socks(tun2socksFd, "socks5://127.0.0.1:" + socksPort, "tun0", MTU, "warn");
+                    Mobilegonc.startTun2Socks(tun2socksFd, socks5Endpoint, "tun0", MTU, "warn");
                     startedTun2Socks = true;
                     // Step 3: close the original low-numbered fd via bionic so Android's
                     // fdsan tables are properly updated. Go already cleared the PFD tag
@@ -193,6 +210,48 @@ public final class GoncVpnService extends VpnService {
         synchronized (lock) {
             return stopRequested;
         }
+    }
+
+    /**
+     * Turn the user's link config into the string gonc's -link expects. Blank picks a
+     * free local port and yields {@code x://127.0.0.1:<port>}; anything else (a bare
+     * port, which gonc accepts directly, or a full mux link) is passed through verbatim.
+     */
+    private String resolveLinkConfig(String linkConfig) throws IOException {
+        String clean = linkConfig == null ? "" : linkConfig.trim();
+        if (clean.isEmpty()) {
+            return "x://127.0.0.1:" + findAvailableLocalPort();
+        }
+        return clean;
+    }
+
+    private static boolean isAllDigits(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            if (!Character.isDigit(value.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Best-effort "host:port" of the SOCKS5 listener from a link like {@code x://127.0.0.1:3080;...} or a bare port. */
+    private static String socks5AddressFromLink(String link) {
+        String value = link == null ? "" : link.trim();
+        if (isAllDigits(value)) {
+            return "127.0.0.1:" + value; // gonc binds a bare port on the loopback
+        }
+        int scheme = value.indexOf("://");
+        if (scheme >= 0) {
+            value = value.substring(scheme + 3);
+        }
+        int semi = value.indexOf(';');
+        if (semi >= 0) {
+            value = value.substring(0, semi);
+        }
+        return value.trim();
     }
 
     private int findAvailableLocalPort() throws IOException {
@@ -339,6 +398,9 @@ public final class GoncVpnService extends VpnService {
             @Override
             public void event(String level, String message) {
                 log(level == null ? "info" : level, message == null ? "" : message);
+                if (message != null && !message.trim().isEmpty()) {
+                    lastGoncMessage = message.trim();
+                }
             }
 
             @Override
@@ -365,7 +427,7 @@ public final class GoncVpnService extends VpnService {
                     goncSession = null;
                 }
                 if (!stopRequested) {
-                    GoncVpnState.setError("VPN tunnel disconnected");
+                    GoncVpnState.setError(buildStopError(exitCode));
                     stopVpn();
                 }
             }
@@ -380,6 +442,23 @@ public final class GoncVpnService extends VpnService {
 
     private boolean hasActiveResourcesLocked() {
         return vpnInterface != null || goncSession != null || tun2socksRunning;
+    }
+
+    /**
+     * Compose a user-facing error for an unexpected tunnel stop. A non-zero exit
+     * (e.g. bad extra args / link config rejected by gonc) gets the exit code plus
+     * the last line gonc printed, so the failure isn't silent.
+     */
+    private String buildStopError(long exitCode) {
+        if (exitCode == 0) {
+            return getString(R.string.vpn_error_disconnected);
+        }
+        String base = getString(R.string.vpn_error_exit_code, exitCode);
+        String detail = lastGoncMessage == null ? "" : lastGoncMessage.trim();
+        if (detail.length() > 300) {
+            detail = detail.substring(0, 300) + "…";
+        }
+        return detail.isEmpty() ? base : base + "\n" + detail;
     }
 
     private void markConnected() {

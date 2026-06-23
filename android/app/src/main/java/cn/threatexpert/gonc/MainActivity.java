@@ -141,6 +141,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             sendController = new SendController(this);
             receiveController = new ReceiveController(this);
             vpnClient.load();
+            vpnServer.load();
         }
         buildRoot();
         if (!reusedModules) {
@@ -750,6 +751,12 @@ public final class MainActivity extends Activity implements ModuleHost {
             showBatteryOptimizationDialog();
             return;
         }
+        if (profile.tunnelOnly) {
+            // Tunnel-only never establishes the system VPN interface, so it needs no
+            // VpnService consent — start the (specialUse) foreground service directly.
+            startVpnService();
+            return;
+        }
         requestVpnPermissionOrStart();
     }
 
@@ -830,7 +837,10 @@ public final class MainActivity extends Activity implements ModuleHost {
         intent.putExtra(GoncVpnService.EXTRA_ENABLE_IPV6, profile.routeIpv6);
         intent.putExtra(GoncVpnService.EXTRA_DNS_SERVERS, profile.dnsServers);
         intent.putExtra(GoncVpnService.EXTRA_ROUTE_CIDRS, profile.routeCidrs);
-        appendLog("info", "VPN start requested: " + profile.displayName(this));
+        intent.putExtra(GoncVpnService.EXTRA_LINK_CONFIG, profile.linkConfig == null ? "" : profile.linkConfig.trim());
+        intent.putExtra(GoncVpnService.EXTRA_EXTRA_ARGS, profile.extraArgs == null ? "" : profile.extraArgs.trim());
+        intent.putExtra(GoncVpnService.EXTRA_TUNNEL_ONLY, profile.tunnelOnly);
+        appendLog("info", "VPN start requested: " + profile.displayName(this) + (profile.tunnelOnly ? " (tunnel only)" : ""));
         GoncVpnState.startConnecting(profile.displayName(this));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);

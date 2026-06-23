@@ -1,16 +1,25 @@
 package cn.threatexpert.gonc;
 
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.method.PasswordTransformationMethod;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * VPN server ("link agent") module: owns its own state, view building and gonc
@@ -18,14 +27,21 @@ import android.widget.TextView;
  * (render, logging, QR, clipboard, metrics) through {@link ModuleHost}.
  */
 final class VpnServerController {
+    private static final String KEY_SERVER_EXTRA_ARGS_HISTORY = "vpn_server_extra_args_history";
+    private static final int MAX_EXTRA_ARGS_HISTORY = 5;
+
     private ModuleHost host;
     private final TransferMetrics metrics = new TransferMetrics();
+    private final List<String> extraArgsHistory = new ArrayList<>();
 
     private boolean useUdp;
+    private boolean advancedExpanded;
+    private String extraArgs = "";
     private boolean passwordVisible;
     private int passwordVisibilityToken;
     private String password = Passwords.generate();
     private String status = "Idle";
+    private String errorMessage;
     private GoncBridge.Session session;
     private long runId;
 
@@ -36,6 +52,56 @@ final class VpnServerController {
     /** Rebind to the current host after an Activity recreation (config change). */
     void attach(ModuleHost host) {
         this.host = host;
+    }
+
+    /**
+     * Load the extra-args history. Must be called from onCreate (needs a ready Context).
+     * The current value is intentionally NOT restored — only the picker history is.
+     */
+    void load() {
+        extraArgsHistory.clear();
+        String raw = host.prefs().getString(KEY_SERVER_EXTRA_ARGS_HISTORY, "");
+        if (raw == null || raw.trim().isEmpty()) {
+            return;
+        }
+        try {
+            JSONArray array = new JSONArray(raw);
+            for (int i = 0; i < array.length() && extraArgsHistory.size() < MAX_EXTRA_ARGS_HISTORY; i++) {
+                String value = array.optString(i, "").trim();
+                if (!value.isEmpty() && !extraArgsHistory.contains(value)) {
+                    extraArgsHistory.add(value);
+                }
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
+    /** Record a used value as the most recent history entry (deduped, capped). */
+    private void addToHistory(String value) {
+        String clean = value == null ? "" : value.trim();
+        if (clean.isEmpty()) {
+            return;
+        }
+        extraArgsHistory.remove(clean);
+        extraArgsHistory.add(0, clean);
+        while (extraArgsHistory.size() > MAX_EXTRA_ARGS_HISTORY) {
+            extraArgsHistory.remove(extraArgsHistory.size() - 1);
+        }
+        saveHistory();
+    }
+
+    private void removeFromHistory(String value) {
+        if (extraArgsHistory.remove(value)) {
+            saveHistory();
+        }
+    }
+
+    private void saveHistory() {
+        JSONArray array = new JSONArray();
+        for (String item : extraArgsHistory) {
+            array.put(item);
+        }
+        host.prefs().edit().putString(KEY_SERVER_EXTRA_ARGS_HISTORY, array.toString()).apply();
     }
 
     boolean isRunning() {
@@ -60,9 +126,12 @@ final class VpnServerController {
     /** Reset transient state for a fresh launch. */
     void resetForFreshLaunch() {
         useUdp = false;
+        advancedExpanded = false;
+        extraArgs = "";
         passwordVisible = false;
         password = Passwords.generate();
         status = "Idle";
+        errorMessage = null;
         passwordVisibilityToken++;
         metrics.reset();
     }
@@ -79,13 +148,30 @@ final class VpnServerController {
         UiKit u = host.ui();
         LinearLayout card = u.card();
 
-        card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), false), u.blockParams(0));
+        if (session == null && errorMessage != null && !errorMessage.trim().isEmpty()) {
+            card.addView(errorBanner(string(R.string.vpn_server_exit_error) + "\n" + errorMessage), u.blockParams(0));
+        }
+
+        card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), false), u.blockParams(session == null && errorMessage != null && !errorMessage.trim().isEmpty() ? u.dp(10) : 0));
         TextView intro = u.text(string(R.string.vpn_server_intro), 13, u.muted(), Typeface.NORMAL);
         intro.setSingleLine(false);
         card.addView(intro, u.blockParams(u.dp(6)));
         card.addView(passwordField());
-        card.addView(u.sectionDivider(), u.dividerParams(u.dp(12)));
-        card.addView(protocolToggle());
+
+        Button advancedToggle = u.secondaryButton(advancedExpanded
+                ? string(R.string.vpn_advanced_settings_hide)
+                : string(R.string.vpn_advanced_settings));
+        advancedToggle.setOnClickListener(v -> {
+            advancedExpanded = !advancedExpanded;
+            host.requestRender();
+        });
+        card.addView(advancedToggle, u.blockParams(u.dp(12)));
+
+        if (advancedExpanded) {
+            card.addView(u.sectionDivider(), u.dividerParams(u.dp(12)));
+            card.addView(protocolToggle(), u.blockParams(u.dp(10)));
+            card.addView(extraArgsField(), u.blockParams(u.dp(10)));
+        }
 
         Button primary = session == null
                 ? u.primaryButton(string(R.string.start_vpn_server))
@@ -182,6 +268,114 @@ final class VpnServerController {
         return box;
     }
 
+    private View errorBanner(String message) {
+        UiKit u = host.ui();
+        TextView view = u.text(message, 13, Color.rgb(176, 42, 42), Typeface.BOLD);
+        view.setSingleLine(false);
+        view.setPadding(u.dp(10), u.dp(8), u.dp(10), u.dp(8));
+        view.setBackground(u.rounded(Color.rgb(253, 242, 242), u.dp(8), Color.rgb(201, 63, 63), 1));
+        return view;
+    }
+
+    private View extraArgsField() {
+        UiKit u = host.ui();
+        boolean locked = session != null;
+        LinearLayout box = u.column();
+        box.addView(u.text(string(R.string.vpn_extra_args), 13, u.muted(), Typeface.BOLD));
+
+        LinearLayout line = u.row();
+        EditText input = new EditText(host.context());
+        input.setSingleLine(true);
+        input.setText(extraArgs);
+        input.setTextColor(u.ink());
+        input.setTextSize(15);
+        input.setHint(string(R.string.vpn_extra_args_hint));
+        input.setHintTextColor(Color.rgb(148, 163, 184));
+        input.setPadding(u.dp(12), 0, u.dp(12), 0);
+        input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
+        input.setEnabled(!locked);
+        input.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (session == null) {
+                    extraArgs = s == null ? "" : s.toString();
+                }
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+        line.addView(input, new LinearLayout.LayoutParams(0, u.dp(46), 1));
+
+        Button history = u.secondaryButton(string(R.string.vpn_extra_args_history));
+        u.setControlEnabled(history, !locked && !extraArgsHistory.isEmpty());
+        history.setOnClickListener(v -> showExtraArgsHistory());
+        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, u.dp(46));
+        historyParams.setMargins(u.dp(8), 0, 0, 0);
+        line.addView(history, historyParams);
+        box.addView(line, u.blockParams(u.dp(4)));
+
+        TextView desc = u.text(string(R.string.vpn_extra_args_desc), 12, u.muted(), Typeface.NORMAL);
+        desc.setPadding(u.dp(4), u.dp(4), 0, 0);
+        box.addView(desc);
+        return box;
+    }
+
+    private void showExtraArgsHistory() {
+        if (session != null || extraArgsHistory.isEmpty()) {
+            return;
+        }
+        UiKit u = host.ui();
+        LinearLayout content = u.column();
+        content.setPadding(u.dp(18), u.dp(8), u.dp(10), u.dp(8));
+        AlertDialog dialog = new AlertDialog.Builder(host.context())
+                .setTitle(string(R.string.vpn_extra_args_history))
+                .setView(content)
+                .setNegativeButton(string(R.string.close), null)
+                .create();
+        populateHistoryRows(content, dialog);
+        dialog.show();
+    }
+
+    private void populateHistoryRows(LinearLayout content, AlertDialog dialog) {
+        UiKit u = host.ui();
+        content.removeAllViews();
+        if (extraArgsHistory.isEmpty()) {
+            dialog.dismiss();
+            host.requestRender();
+            return;
+        }
+        for (String value : new ArrayList<>(extraArgsHistory)) {
+            LinearLayout row = u.row();
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView label = u.text(value, 14, u.ink(), Typeface.NORMAL);
+            label.setSingleLine(true);
+            label.setPadding(u.dp(2), u.dp(10), u.dp(8), u.dp(10));
+            label.setOnClickListener(v -> {
+                if (session == null) {
+                    extraArgs = value;
+                    host.requestRender();
+                }
+                dialog.dismiss();
+            });
+            row.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+            Button delete = u.ghostButton(string(R.string.vpn_profile_delete));
+            delete.setOnClickListener(v -> {
+                removeFromHistory(value);
+                populateHistoryRows(content, dialog);
+            });
+            row.addView(delete, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(40)));
+            content.addView(row);
+        }
+    }
+
     private void applyPasswordVisibility(EditText input) {
         input.setTransformationMethod(passwordVisible ? null : PasswordTransformationMethod.getInstance());
         input.setSelection(input.getText().length());
@@ -261,11 +455,13 @@ final class VpnServerController {
             return;
         }
         hidePassword();
+        errorMessage = null;
+        addToHistory(extraArgs);
         metrics.reset();
         status = "Preparing";
         host.log("info", "Start VPN server requested");
         long id = ++runId;
-        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, callback(id));
+        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, extraArgs, callback(id));
         host.updateKeepScreenOn();
         host.requestRender();
     }
@@ -332,6 +528,7 @@ final class VpnServerController {
                     host.updateKeepScreenOn();
                     host.log("warn", "Session stopped");
                     host.requestRender();
+                    // note: a clean stop leaves no errorMessage to clear (set only on onError)
                 });
             }
 
@@ -344,8 +541,9 @@ final class VpnServerController {
                     session = null;
                     status = "Error";
                     metrics.p2pStatus = "error";
+                    errorMessage = error.getMessage() == null ? error.toString() : error.getMessage();
                     host.updateKeepScreenOn();
-                    host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                    host.log("error", errorMessage);
                     host.requestRender();
                 });
             }

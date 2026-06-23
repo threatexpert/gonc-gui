@@ -23,7 +23,7 @@ final class MobileGoncBridge implements GoncBridge {
                 }
 
                 callback.onEvent("info", "Starting gonc mobile share engine with " + snapshot.size() + " Android item(s)");
-                mobilegonc.Session goSession = Mobilegonc.startP2PShareSource(source, password, useUdp, bridgeCallback(callback));
+                mobilegonc.Session goSession = Mobilegonc.startP2PShareSource(source, password, useUdp, bridgeCallback(callback, session, false));
                 session.attach(goSession);
             } catch (Throwable error) {
                 if (!session.isStopped()) {
@@ -41,7 +41,7 @@ final class MobileGoncBridge implements GoncBridge {
         Thread worker = new Thread(() -> {
             try {
                 callback.onEvent("info", "Starting gonc mobile receive engine");
-                mobilegonc.Session goSession = Mobilegonc.startP2PReceive(password, useUdp, bridgeCallback(callback));
+                mobilegonc.Session goSession = Mobilegonc.startP2PReceive(password, useUdp, bridgeCallback(callback, session, false));
                 session.attach(goSession);
             } catch (Throwable error) {
                 if (!session.isStopped()) {
@@ -54,12 +54,12 @@ final class MobileGoncBridge implements GoncBridge {
     }
 
     @Override
-    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, EventCallback callback) {
+    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, String extraArgs, EventCallback callback) {
         BridgeSession session = new BridgeSession();
         Thread worker = new Thread(() -> {
             try {
                 callback.onEvent("info", "Starting gonc mobile linkagent (VPN server) engine");
-                mobilegonc.Session goSession = Mobilegonc.startP2PLinkAgent(password, useUdp, bridgeCallback(callback));
+                mobilegonc.Session goSession = Mobilegonc.startP2PLinkAgent(password, useUdp, extraArgs == null ? "" : extraArgs, bridgeCallback(callback, session, true));
                 session.attach(goSession);
             } catch (Throwable error) {
                 if (!session.isStopped()) {
@@ -71,11 +71,16 @@ final class MobileGoncBridge implements GoncBridge {
         return session;
     }
 
-    private static Callback bridgeCallback(EventCallback callback) {
+    private static Callback bridgeCallback(EventCallback callback, BridgeSession session, boolean reportExitErrors) {
         return new Callback() {
+            private volatile String lastMessage = "";
+
             @Override
             public void event(String level, String message) {
                 callback.onEvent(level, message);
+                if (message != null && !message.trim().isEmpty()) {
+                    lastMessage = message.trim();
+                }
             }
 
             @Override
@@ -90,6 +95,19 @@ final class MobileGoncBridge implements GoncBridge {
 
             @Override
             public void stopped(long exitCode) {
+                // A non-zero exit that the user did not trigger is a real failure
+                // (e.g. gonc rejected bad extra args). Surface it as an error rather
+                // than a silent stop, when the caller opted in (the VPN server).
+                if (reportExitErrors && exitCode != 0 && !session.isStopped()) {
+                    callback.onEvent("error", "gonc exited with code " + exitCode);
+                    String detail = lastMessage;
+                    if (detail != null && detail.length() > 300) {
+                        detail = detail.substring(0, 300) + "...";
+                    }
+                    String message = "exit code " + exitCode + (detail == null || detail.isEmpty() ? "" : ": " + detail);
+                    callback.onError(new RuntimeException(message));
+                    return;
+                }
                 callback.onEvent(exitCode == 0 ? "info" : "error", "gonc stopped with code " + exitCode);
                 callback.onStopped();
             }

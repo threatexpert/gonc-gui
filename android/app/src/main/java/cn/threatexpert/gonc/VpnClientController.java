@@ -157,19 +157,24 @@ final class VpnClientController {
         UiKit u = host.ui();
         LinearLayout card = u.card();
         boolean running = GoncVpnState.isRunning();
+        String error = GoncVpnState.error().trim();
         if (running) {
             card.addView(sessionBarView());
-            if (!GoncVpnState.error().trim().isEmpty()) {
-                TextView error = u.text(GoncVpnState.error(), 13, Color.rgb(201, 63, 63), Typeface.BOLD);
-                error.setSingleLine(false);
-                card.addView(error, u.blockParams(u.dp(8)));
+            if (!error.isEmpty()) {
+                card.addView(errorBanner(error), u.blockParams(u.dp(8)));
             }
             return card;
         }
 
-        card.addView(profileSelector(), u.blockParams(0));
+        // Surface the last failure (e.g. a quick exit from a bad link/extra-args
+        // config) above the form — otherwise the UI just flashes back here silently.
+        if (!error.isEmpty()) {
+            card.addView(errorBanner(error), u.blockParams(0));
+        }
+
+        card.addView(profileSelector(), u.blockParams(error.isEmpty() ? 0 : u.dp(10)));
         card.addView(passphraseField(), u.blockParams(u.dp(8)));
-        Button primary = u.primaryButton(string(R.string.start_vpn));
+        Button primary = u.primaryButton(string(R.string.vpn_connect));
         primary.setOnClickListener(v -> host.startVpnClient());
         card.addView(primary, u.blockParams(u.dp(12)));
 
@@ -185,6 +190,8 @@ final class VpnClientController {
         if (advancedExpanded) {
             card.addView(profileNameField(), u.blockParams(u.dp(10)));
             card.addView(options(), u.blockParams(u.dp(10)));
+            card.addView(linkConfigField(), u.blockParams(u.dp(10)));
+            card.addView(extraArgsField(), u.blockParams(u.dp(10)));
             card.addView(multilineField(
                     string(R.string.vpn_dns_servers),
                     string(R.string.vpn_dns_hint),
@@ -374,6 +381,52 @@ final class VpnClientController {
         TextView hint = u.text(string(R.string.vpn_route_ipv6_hint), 12, u.muted(), Typeface.NORMAL);
         hint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(hint);
+
+        CheckBox tunnelOnly = new CheckBox(host.context());
+        tunnelOnly.setText(string(R.string.vpn_tunnel_only));
+        tunnelOnly.setTextColor(Color.rgb(64, 81, 105));
+        tunnelOnly.setTextSize(14);
+        tunnelOnly.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        tunnelOnly.setChecked(currentProfile().tunnelOnly);
+        u.setControlEnabled(tunnelOnly, !running);
+        tunnelOnly.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (!GoncVpnState.isRunning()) {
+                currentProfile().tunnelOnly = isChecked;
+            }
+        });
+        LinearLayout.LayoutParams tunnelOnlyParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tunnelOnlyParams.setMargins(0, u.dp(6), 0, 0);
+        box.addView(tunnelOnly, tunnelOnlyParams);
+        TextView tunnelOnlyHint = u.text(string(R.string.vpn_tunnel_only_hint), 12, u.muted(), Typeface.NORMAL);
+        tunnelOnlyHint.setPadding(u.dp(4), 0, 0, 0);
+        box.addView(tunnelOnlyHint);
+        return box;
+    }
+
+    private View linkConfigField() {
+        UiKit u = host.ui();
+        LinearLayout box = (LinearLayout) labeledSingleLineField(
+                string(R.string.vpn_link_config),
+                currentProfile().linkConfig,
+                string(R.string.vpn_link_config_hint),
+                value -> currentProfile().linkConfig = value);
+        TextView desc = u.text(string(R.string.vpn_link_config_desc), 12, u.muted(), Typeface.NORMAL);
+        desc.setPadding(u.dp(4), u.dp(4), 0, 0);
+        box.addView(desc);
+        return box;
+    }
+
+    private View extraArgsField() {
+        UiKit u = host.ui();
+        LinearLayout box = (LinearLayout) labeledSingleLineField(
+                string(R.string.vpn_extra_args),
+                currentProfile().extraArgs,
+                string(R.string.vpn_extra_args_hint),
+                value -> currentProfile().extraArgs = value);
+        TextView desc = u.text(string(R.string.vpn_extra_args_desc), 12, u.muted(), Typeface.NORMAL);
+        desc.setPadding(u.dp(4), u.dp(4), 0, 0);
+        box.addView(desc);
         return box;
     }
 
@@ -444,6 +497,15 @@ final class VpnClientController {
         disconnectParams.setMargins(u.dp(8), 0, 0, 0);
         row.addView(disconnect, disconnectParams);
         return row;
+    }
+
+    private View errorBanner(String message) {
+        UiKit u = host.ui();
+        TextView view = u.text(message, 13, Color.rgb(176, 42, 42), Typeface.BOLD);
+        view.setSingleLine(false);
+        view.setPadding(u.dp(10), u.dp(8), u.dp(10), u.dp(8));
+        view.setBackground(u.rounded(Color.rgb(253, 242, 242), u.dp(8), Color.rgb(201, 63, 63), 1));
+        return view;
     }
 
     private String connectionLabel() {
@@ -638,6 +700,8 @@ final class VpnClientController {
             profile.name = profile.name.trim();
         }
         profile.passphrase = profile.passphrase == null ? "" : profile.passphrase.trim();
+        profile.linkConfig = profile.linkConfig == null ? "" : profile.linkConfig.trim();
+        profile.extraArgs = profile.extraArgs == null ? "" : profile.extraArgs.trim();
         profile.dnsServers = normalizeLines(profile.dnsServers);
         profile.routeCidrs = normalizeLines(profile.routeCidrs);
     }
