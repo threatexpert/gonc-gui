@@ -66,6 +66,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class MainActivity extends Activity implements ModuleHost {
+    private static final String GONC_URL = "https://github.com/threatexpert/gonc";
     private static final String SOURCE_URL = "https://github.com/threatexpert/gonc-gui";
     private static final int REQUEST_OPEN_DOCUMENT = 1001;
     private static final int REQUEST_SCAN_QR = 1002;
@@ -83,13 +84,12 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final UiKit ui = new UiKit(this);
-    private final List<ShareItem> shareItems = new ArrayList<>();
     private final List<String> logs = new ArrayList<>();
     private final GoncBridge bridge = new MobileGoncBridge();
-    private final TransferMetrics sendMetrics = new TransferMetrics();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
     private final VpnServerController vpnServer = new VpnServerController(this);
     private final VpnClientController vpnClient = new VpnClientController(this);
+    private final SendController sendController = new SendController(this);
     private java.util.function.Consumer<String> pendingScanCallback;
     private boolean pendingScanIsProfile;
     private final Object downloadProgressLock = new Object();
@@ -98,16 +98,11 @@ public final class MainActivity extends Activity implements ModuleHost {
     private boolean sendMode = true;
     private boolean vpnMode;
     private boolean vpnServerMode;
-    private boolean sendUseUdp;
     private boolean receiveUseUdp;
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
-    private boolean scanningForSendMode;
-    private boolean sendPasswordVisible;
     private boolean receivePasswordVisible;
-    private int sendPasswordVisibilityToken;
     private int receivePasswordVisibilityToken;
-    private String sendPassword = Passwords.generate();
     private String receivePassword = "";
     private Uri saveTreeUri;
     private String saveLocationLabel;
@@ -132,13 +127,10 @@ public final class MainActivity extends Activity implements ModuleHost {
     private int downloadResumedFiles;
     private long downloadStartedAtMs;
     private long downloadFinishedAtMs;
-    private String sendStatus = "Idle";
     private String receiveStatus = "Idle";
-    private GoncBridge.Session sendSession;
     private GoncBridge.Session receiveSession;
     private HttpReceiver.Session remoteListSession;
     private HttpReceiver.Session receiveDownload;
-    private long sendRunId;
     private long receiveRunId;
     private long pauseAutoRenderUntilMs;
     private long lastLogRenderMs;
@@ -257,15 +249,7 @@ public final class MainActivity extends Activity implements ModuleHost {
                     java.util.function.Consumer<String> callback = pendingScanCallback;
                     pendingScanCallback = null;
                     callback.accept(result.trim());
-                    return;
                 }
-                if (isPasswordLocked(scanningForSendMode)) {
-                    return;
-                }
-                setPassword(scanningForSendMode, result.trim());
-                revealPasswordTemporarily(scanningForSendMode);
-                appendLog("info", "Passphrase scanned");
-                render();
             }
             return;
         }
@@ -322,9 +306,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     @Override
     protected void onDestroy() {
         vpnClient.unregister();
-        if (sendSession != null) {
-            sendSession.stop();
-        }
+        sendController.shutdown();
         if (receiveSession != null) {
             receiveSession.stop();
         }
@@ -369,7 +351,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         } else if (vpnMode) {
             root.addView(vpnClient.panel());
         } else if (sendMode) {
-            root.addView(sendPanel());
+            root.addView(sendController.panel());
         } else {
             root.addView(receivePanel());
             if (!receiveEndpoint.trim().isEmpty() || !remoteFiles.isEmpty() || !"Idle".equals(remoteListStatus)) {
@@ -550,48 +532,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         return box;
     }
 
-    private View sendPanel() {
-        LinearLayout card = card();
-
-        card.addView(sectionBoundaryTitle(getString(R.string.share_files_config), false), blockParams(0));
-        if (shareItems.isEmpty()) {
-            TextView empty = text(getString(R.string.no_files_selected), 14, muted(), Typeface.NORMAL);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(dp(12), dp(22), dp(12), dp(22));
-            empty.setBackground(rounded(Color.rgb(248, 251, 255), dp(8), Color.rgb(143, 168, 195), 1));
-            card.addView(empty, blockParams());
-        } else {
-            for (ShareItem item : shareItems) {
-                card.addView(fileRow(item));
-            }
-        }
-
-        LinearLayout actions = row();
-        Button add = secondaryButton(getString(R.string.add_files));
-        add.setOnClickListener(v -> openDocumentPicker());
-        Button addFolder = secondaryButton(getString(R.string.add_folder));
-        addFolder.setOnClickListener(v -> openSendFolderPicker());
-        actions.addView(add, new LinearLayout.LayoutParams(0, dp(42), 1));
-        actions.addView(addFolder, new LinearLayout.LayoutParams(0, dp(42), 1));
-        card.addView(actions, blockParams());
-
-        card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), true), blockParams(dp(14)));
-        card.addView(passwordField(true));
-        card.addView(sectionDivider(), dividerParams(dp(12)));
-        card.addView(protocolToggle(true));
-
-        Button primary = sendSession == null ? primaryButton(getString(R.string.start_sharing)) : dangerButton(getString(R.string.stop_sharing));
-        primary.setOnClickListener(v -> {
-            if (sendSession == null) {
-                startP2PShare();
-            } else {
-                stopSession(true);
-            }
-        });
-        card.addView(primary, blockParams(dp(12)));
-        return card;
-    }
-
     private View receivePanel() {
         LinearLayout card = card();
         if (receiveSession != null) {
@@ -610,16 +550,16 @@ public final class MainActivity extends Activity implements ModuleHost {
         save.addView(choose, chooseParams);
         card.addView(save, blockParams());
         card.addView(sectionBoundaryTitle(getString(R.string.passphrase_config), true), blockParams(dp(14)));
-        card.addView(passwordField(false));
+        card.addView(passwordField());
         card.addView(sectionDivider(), dividerParams(dp(12)));
-        card.addView(protocolToggle(false));
+        card.addView(protocolToggle());
 
         Button primary = receiveSession == null ? primaryButton(getString(R.string.connect)) : dangerButton(getString(R.string.disconnect));
         primary.setOnClickListener(v -> {
             if (receiveSession == null) {
                 startP2PReceive();
             } else {
-                stopSession(false);
+                stopSession();
             }
         });
         card.addView(primary, blockParams(dp(12)));
@@ -645,12 +585,12 @@ public final class MainActivity extends Activity implements ModuleHost {
         row.addView(label, labelParams);
 
         Button passphrase = secondaryButton(getString(R.string.passphrase));
-        passphrase.setOnClickListener(v -> showPasswordQr(false));
+        passphrase.setOnClickListener(v -> showPasswordQr());
         row.addView(passphrase, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
 
         Button disconnect = dangerButton(getString(R.string.disconnect));
         disconnect.setTextSize(14);
-        disconnect.setOnClickListener(v -> stopSession(false));
+        disconnect.setOnClickListener(v -> stopSession());
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
         disconnectParams.setMargins(dp(8), 0, 0, 0);
         row.addView(disconnect, disconnectParams);
@@ -1363,15 +1303,15 @@ public final class MainActivity extends Activity implements ModuleHost {
         return ".".equals(clean) ? "" : clean;
     }
 
-    private View passwordField(boolean sender) {
-        boolean locked = isPasswordLocked(sender);
+    private View passwordField() {
+        boolean locked = receiveSession != null;
         LinearLayout box = column();
         box.addView(text(getString(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
 
         LinearLayout line = row();
         EditText input = new EditText(this);
         input.setSingleLine(true);
-        input.setText(passwordFor(sender));
+        input.setText(receivePassword);
         input.setTextColor(ink());
         input.setTextSize(15);
         input.setHint(getString(R.string.passphrase_input_hint));
@@ -1380,7 +1320,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
         input.setEnabled(!locked);
         input.setTextColor(ink());
-        applyPasswordVisibility(input, sender);
+        applyPasswordVisibility(input);
         input.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
@@ -1388,11 +1328,11 @@ public final class MainActivity extends Activity implements ModuleHost {
 
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (isPasswordLocked(sender)) {
+                if (receiveSession != null) {
                     return;
                 }
-                setPassword(sender, s.toString());
-                revealPasswordTemporarily(sender, input);
+                receivePassword = s.toString();
+                revealPasswordTemporarily(input);
             }
 
             @Override
@@ -1404,183 +1344,88 @@ public final class MainActivity extends Activity implements ModuleHost {
         box.addView(line, blockParams(dp(8)));
 
         LinearLayout actions = row();
-        if (sender) {
-            Button change = secondaryButton(getString(R.string.random_passphrase));
-            setControlEnabled(change, !locked);
-            change.setOnClickListener(v -> {
-                randomizePassword(true);
-            });
-            Button copy = secondaryButton(getString(R.string.copy));
-            copy.setOnClickListener(v -> copyPassword(true));
-            Button scan = secondaryButton(getString(R.string.scan));
-            setControlEnabled(scan, !locked);
-            scan.setOnClickListener(v -> scanPassword(true));
-            Button qr = secondaryButton(getString(R.string.qr));
-            qr.setOnClickListener(v -> showPasswordQr(true));
-            actions.addView(change, new LinearLayout.LayoutParams(0, dp(40), 1));
-            actions.addView(copy, actionParams());
-            actions.addView(scan, actionParams());
-            actions.addView(qr, actionParams());
-        } else {
-            Button random = secondaryButton(getString(R.string.random_passphrase));
-            setControlEnabled(random, !locked);
-            random.setOnClickListener(v -> randomizePassword(false));
-            Button paste = secondaryButton(getString(R.string.paste));
-            setControlEnabled(paste, !locked);
-            paste.setOnClickListener(v -> pastePassword(false));
-            Button scan = secondaryButton(getString(R.string.scan));
-            setControlEnabled(scan, !locked);
-            scan.setOnClickListener(v -> scanPassword(false));
-            Button qr = secondaryButton(getString(R.string.qr));
-            qr.setOnClickListener(v -> showPasswordQr(false));
-            actions.addView(random, new LinearLayout.LayoutParams(0, dp(40), 1));
-            actions.addView(paste, actionParams());
-            actions.addView(scan, actionParams());
-            actions.addView(qr, actionParams());
-        }
+        Button random = secondaryButton(getString(R.string.random_passphrase));
+        setControlEnabled(random, !locked);
+        random.setOnClickListener(v -> randomizePassword());
+        Button paste = secondaryButton(getString(R.string.paste));
+        setControlEnabled(paste, !locked);
+        paste.setOnClickListener(v -> pastePassword());
+        Button scan = secondaryButton(getString(R.string.scan));
+        setControlEnabled(scan, !locked);
+        scan.setOnClickListener(v -> scanPassword());
+        Button qr = secondaryButton(getString(R.string.qr));
+        qr.setOnClickListener(v -> showPasswordQr());
+        actions.addView(random, new LinearLayout.LayoutParams(0, dp(40), 1));
+        actions.addView(paste, actionParams());
+        actions.addView(scan, actionParams());
+        actions.addView(qr, actionParams());
         box.addView(actions, blockParams(dp(6)));
         return box;
     }
 
-    private String passwordFor(boolean sender) {
-        return sender ? sendPassword : receivePassword;
-    }
-
-    private boolean isPasswordLocked(boolean sender) {
-        return sender ? sendSession != null : receiveSession != null;
-    }
-
-    private void setPassword(boolean sender, String value) {
-        if (sender) {
-            sendPassword = value == null ? "" : value;
-        } else {
-            receivePassword = value == null ? "" : value;
-        }
-    }
-
-    private boolean isPasswordVisible(boolean sender) {
-        return sender ? sendPasswordVisible : receivePasswordVisible;
-    }
-
-    private void setPasswordVisible(boolean sender, boolean visible) {
-        if (sender) {
-            sendPasswordVisible = visible;
-        } else {
-            receivePasswordVisible = visible;
-        }
-    }
-
-    private int bumpPasswordVisibilityToken(boolean sender) {
-        if (sender) {
-            return ++sendPasswordVisibilityToken;
-        }
-        return ++receivePasswordVisibilityToken;
-    }
-
-    private boolean isPasswordVisibilityTokenCurrent(boolean sender, int token) {
-        return sender ? sendPasswordVisibilityToken == token : receivePasswordVisibilityToken == token;
-    }
-
-    private void applyPasswordVisibility(EditText input, boolean sender) {
-        input.setTransformationMethod(isPasswordVisible(sender) ? null : PasswordTransformationMethod.getInstance());
+    private void applyPasswordVisibility(EditText input) {
+        input.setTransformationMethod(receivePasswordVisible ? null : PasswordTransformationMethod.getInstance());
         input.setSelection(input.getText().length());
     }
 
-    private void revealPasswordTemporarily(boolean sender) {
-        revealPasswordTemporarily(sender, null);
+    private void revealPasswordTemporarily() {
+        revealPasswordTemporarily(null);
     }
 
-    private void revealPasswordTemporarily(boolean sender, EditText input) {
-        setPasswordVisible(sender, true);
-        int token = bumpPasswordVisibilityToken(sender);
+    private void revealPasswordTemporarily(EditText input) {
+        receivePasswordVisible = true;
+        int token = ++receivePasswordVisibilityToken;
         if (input != null) {
-            applyPasswordVisibility(input, sender);
+            applyPasswordVisibility(input);
         }
         mainHandler.postDelayed(() -> {
-            if (!isPasswordVisibilityTokenCurrent(sender, token)) {
+            if (receivePasswordVisibilityToken != token) {
                 return;
             }
-            setPasswordVisible(sender, false);
+            receivePasswordVisible = false;
             if (input != null && input.isAttachedToWindow()) {
-                applyPasswordVisibility(input, sender);
+                applyPasswordVisibility(input);
             } else {
                 render();
             }
         }, 5000);
     }
 
-    private void hidePassword(boolean sender) {
-        setPasswordVisible(sender, false);
-        bumpPasswordVisibilityToken(sender);
+    private void hidePassword() {
+        receivePasswordVisible = false;
+        receivePasswordVisibilityToken++;
     }
 
-    private void randomizePassword(boolean sender) {
-        if (isPasswordLocked(sender)) {
+    private void randomizePassword() {
+        if (receiveSession != null) {
             return;
         }
-        setPassword(sender, Passwords.generate());
-        revealPasswordTemporarily(sender);
+        receivePassword = Passwords.generate();
+        revealPasswordTemporarily();
         appendLog("info", "Passphrase randomized");
         render();
     }
 
-    private View protocolToggle(boolean sender) {
+    private View protocolToggle() {
         LinearLayout box = column();
         CheckBox checkBox = new CheckBox(this);
         checkBox.setText(getString(R.string.use_udp_protocol));
         checkBox.setTextColor(Color.rgb(64, 81, 105));
         checkBox.setTextSize(14);
         checkBox.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        checkBox.setChecked(sender ? sendUseUdp : receiveUseUdp);
-        setControlEnabled(checkBox, !isPasswordLocked(sender));
+        checkBox.setChecked(receiveUseUdp);
+        setControlEnabled(checkBox, receiveSession == null);
         checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (isPasswordLocked(sender)) {
+            if (receiveSession != null) {
                 return;
             }
-            if (sender) {
-                sendUseUdp = isChecked;
-            } else {
-                receiveUseUdp = isChecked;
-            }
+            receiveUseUdp = isChecked;
         });
         box.addView(checkBox);
         TextView hint = text(getString(R.string.use_udp_protocol_hint), 12, muted(), Typeface.NORMAL);
         hint.setPadding(dp(4), 0, 0, 0);
         box.addView(hint);
         return box;
-    }
-
-    private View fileRow(ShareItem item) {
-        LinearLayout row = row();
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(12), dp(9), dp(12), dp(9));
-        row.setBackground(rounded(Color.rgb(251, 253, 255), dp(7), Color.rgb(226, 232, 240), 1));
-
-        LinearLayout labels = column();
-        TextView name = text(item.displayName(), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
-        name.setSingleLine(true);
-        labels.addView(name);
-
-        String detail;
-        if (item.isDirectory()) {
-            detail = getString(R.string.folder);
-        } else {
-            String size = item.size() >= 0 ? formatBytes(item.size()) : getString(R.string.unknown_size);
-            detail = size + "  " + item.mimeType();
-        }
-        labels.addView(text(detail, 12, muted(), Typeface.NORMAL));
-        row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-
-        Button remove = ghostButton(getString(R.string.remove));
-        remove.setOnClickListener(v -> {
-            shareItems.remove(item);
-            syncShareSource();
-            appendLog("info", "Removed shared item: " + item.displayName());
-            render();
-        });
-        row.addView(remove, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
-        row.setLayoutParams(blockParams(dp(8)));
-        return row;
     }
 
     private View logPanel() {
@@ -1791,30 +1636,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         startActivityForResult(intent, REQUEST_OPEN_SAVE_TREE);
     }
 
-    private void startP2PShare() {
-        if (shareItems.isEmpty()) {
-            Toast.makeText(this, R.string.toast_select_file_first, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        String passphrase = sendPassword.trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_required, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (Passwords.isWeak(passphrase)) {
-            Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        hidePassword(true);
-        sendMetrics.reset();
-        sendStatus = "Preparing";
-        appendLog("info", "Start sharing requested");
-        long runId = ++sendRunId;
-        sendSession = bridge.startP2PShare(this, shareItems, passphrase, sendUseUdp, callback(true, runId));
-        updateKeepScreenOn();
-        render();
-    }
-
     private void startP2PReceive() {
         String passphrase = receivePassword.trim();
         if (passphrase.isEmpty()) {
@@ -1825,7 +1646,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             Toast.makeText(this, R.string.toast_passphrase_weak, Toast.LENGTH_SHORT).show();
             return;
         }
-        hidePassword(false);
+        hidePassword();
         receiveMetrics.reset();
         remoteListStatus = "Waiting for peer";
         downloadStatus = "Idle";
@@ -1850,20 +1671,20 @@ public final class MainActivity extends Activity implements ModuleHost {
         receiveStatus = "Preparing";
         appendLog("info", "Start receiving requested");
         long runId = ++receiveRunId;
-        receiveSession = bridge.startP2PReceive(this, passphrase, receiveUseUdp, callback(false, runId));
+        receiveSession = bridge.startP2PReceive(this, passphrase, receiveUseUdp, callback(runId));
         updateKeepScreenOn();
         render();
     }
 
-    private GoncBridge.EventCallback callback(boolean forSendMode, long runId) {
+    private GoncBridge.EventCallback callback(long runId) {
         return new GoncBridge.EventCallback() {
             @Override
             public void onEvent(String level, String message) {
                 mainHandler.post(() -> {
-                    if (!isActiveRun(forSendMode, runId)) {
+                    if (!isActiveRun(runId)) {
                         return;
                     }
-                    updateMetricsFromLog(forSendMode, message);
+                    updateMetricsFromLog(receiveMetrics, message);
                     appendLog(level, message);
                     renderAfterBackgroundUpdate();
                 });
@@ -1872,10 +1693,10 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
                 mainHandler.post(() -> {
-                    if (!isActiveRun(forSendMode, runId)) {
+                    if (!isActiveRun(runId)) {
                         return;
                     }
-                    updateMetricsFromReport(forSendMode, topic, status, network, mode, peer);
+                    updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
                     renderAfterBackgroundUpdate();
                 });
             }
@@ -1883,15 +1704,13 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onReady(String endpoint) {
                 mainHandler.post(() -> {
-                    if (!isActiveRun(forSendMode, runId)) {
+                    if (!isActiveRun(runId)) {
                         return;
                     }
-                    setStatus(forSendMode, "Ready");
-                    updateMetricsReady(forSendMode, endpoint);
+                    receiveStatus = "Ready";
+                    receiveMetrics.p2pStatus = "connected";
                     appendLog("info", "Ready: " + endpoint);
-                    if (!forSendMode) {
-                        loadRemoteFiles(endpoint, runId);
-                    }
+                    loadRemoteFiles(endpoint, runId);
                     render();
                 });
             }
@@ -1899,15 +1718,13 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onStopped() {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(forSendMode, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
-                    clearSession(forSendMode);
-                    setStatus(forSendMode, "Idle");
-                    if (!forSendMode) {
-                        stopReceiveWorkers();
-                    }
-                    currentMetrics(forSendMode).markStopped();
+                    receiveSession = null;
+                    receiveStatus = "Idle";
+                    stopReceiveWorkers();
+                    receiveMetrics.markStopped();
                     updateKeepScreenOn();
                     appendLog("warn", "Session stopped");
                     render();
@@ -1917,16 +1734,14 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onError(Throwable error) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(forSendMode, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
-                    clearSession(forSendMode);
-                    setStatus(forSendMode, "Error");
-                    if (!forSendMode) {
-                        stopReceiveWorkers();
-                        remoteListStatus = "Failed";
-                    }
-                    currentMetrics(forSendMode).p2pStatus = "error";
+                    receiveSession = null;
+                    receiveStatus = "Error";
+                    stopReceiveWorkers();
+                    remoteListStatus = "Failed";
+                    receiveMetrics.p2pStatus = "error";
                     updateKeepScreenOn();
                     appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     render();
@@ -1935,52 +1750,45 @@ public final class MainActivity extends Activity implements ModuleHost {
         };
     }
 
-    private void stopSession(boolean forSendMode) {
-        GoncBridge.Session current = forSendMode ? sendSession : receiveSession;
+    private void stopSession() {
+        GoncBridge.Session current = receiveSession;
         if (current != null) {
             current.stop();
-            clearSession(forSendMode);
+            receiveSession = null;
         }
-        if (!forSendMode && receiveDownload != null) {
+        if (receiveDownload != null) {
             receiveDownload.stop();
             receiveDownload = null;
         }
-        if (!forSendMode && remoteListSession != null) {
+        if (remoteListSession != null) {
             remoteListSession.stop();
             remoteListSession = null;
         }
-        if (!forSendMode) {
-            remoteListStatus = "Stopped";
-            downloadStatus = "Stopped";
-            downloadBytesPerSecond = 0;
-            receiveMetrics.inBps = 0;
-            receiveMetrics.outBps = 0;
-            receiveMetrics.lastTrafficMs = 0;
-        }
-        setStatus(forSendMode, "Idle");
-        currentMetrics(forSendMode).markStopped();
+        remoteListStatus = "Stopped";
+        downloadStatus = "Stopped";
+        downloadBytesPerSecond = 0;
+        receiveMetrics.inBps = 0;
+        receiveMetrics.outBps = 0;
+        receiveMetrics.lastTrafficMs = 0;
+        receiveStatus = "Idle";
+        receiveMetrics.markStopped();
         updateKeepScreenOn();
-        appendLog("warn", (forSendMode ? "Send" : "Receive") + " stop requested");
+        appendLog("warn", "Receive stop requested");
         render();
     }
 
     private void endAllTasksAndExit() {
-        sendRunId++;
         receiveRunId++;
 
-        GoncBridge.Session send = sendSession;
         GoncBridge.Session receive = receiveSession;
         HttpReceiver.Session listSession = remoteListSession;
         HttpReceiver.Session download = receiveDownload;
 
-        sendSession = null;
         receiveSession = null;
         remoteListSession = null;
         receiveDownload = null;
 
-        if (send != null) {
-            send.stop();
-        }
+        sendController.endTask();
         if (receive != null) {
             receive.stop();
         }
@@ -2001,21 +1809,17 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void resetTransientStateForFreshLaunch() {
-        shareItems.clear();
         logs.clear();
 
         sendMode = true;
         vpnMode = false;
         vpnServerMode = false;
-        sendUseUdp = false;
         receiveUseUdp = false;
         vpnClient.resetForFreshLaunch();
+        sendController.resetForFreshLaunch();
         activityExpanded = false;
-        sendPassword = Passwords.generate();
         receivePassword = "";
-        sendPasswordVisible = false;
         receivePasswordVisible = false;
-        sendPasswordVisibilityToken++;
         receivePasswordVisibilityToken++;
         vpnServer.resetForFreshLaunch();
 
@@ -2044,9 +1848,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         downloadStartedAtMs = 0;
         downloadFinishedAtMs = 0;
 
-        sendStatus = "Idle";
         receiveStatus = "Idle";
-        sendMetrics.reset();
         receiveMetrics.reset();
     }
 
@@ -2095,7 +1897,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
                     remoteListSession = null;
@@ -2123,7 +1925,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onError(Throwable error) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
                     remoteListSession = null;
@@ -2222,7 +2024,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onList(List<HttpReceiver.RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, receiveRunId)) {
+                    if (!isCurrentRun(receiveRunId)) {
                         return;
                     }
                     remoteListSession = null;
@@ -2246,7 +2048,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onError(Throwable error) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, receiveRunId)) {
+                    if (!isCurrentRun(receiveRunId)) {
                         return;
                     }
                     remoteListSession = null;
@@ -2298,7 +2100,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onComplete(int totalFiles, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
                     if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
@@ -2327,7 +2129,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             @Override
             public void onError(Throwable error) {
                 mainHandler.post(() -> {
-                    if (!isCurrentRun(false, runId)) {
+                    if (!isCurrentRun(runId)) {
                         return;
                     }
                     if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
@@ -2366,7 +2168,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             pendingDownloadProgress = null;
             downloadProgressApplyPending = false;
         }
-        if (progress == null || !isCurrentRun(false, progress.runId) || receiveDownload == null) {
+        if (progress == null || !isCurrentRun(progress.runId) || receiveDownload == null) {
             return;
         }
         downloadDoneFiles = progress.doneFiles;
@@ -2552,20 +2354,8 @@ public final class MainActivity extends Activity implements ModuleHost {
         render();
     }
 
-    private void copyPassword(boolean sender) {
-        String passphrase = passwordFor(sender).trim();
-        if (passphrase.isEmpty()) {
-            Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        copyText("Gonc passphrase", passphrase);
-        appendLog("info", "Passphrase copied");
-        Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
-        render();
-    }
-
-    private void pastePassword(boolean sender) {
-        if (isPasswordLocked(sender)) {
+    private void pastePassword() {
+        if (receiveSession != null) {
             return;
         }
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -2580,15 +2370,15 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         CharSequence value = clip.getItemAt(0).coerceToText(this);
         if (value != null) {
-            setPassword(sender, value.toString().trim());
-            revealPasswordTemporarily(sender);
+            receivePassword = value.toString().trim();
+            revealPasswordTemporarily();
             appendLog("info", "Passphrase pasted");
             render();
         }
     }
 
-    private void showPasswordQr(boolean sender) {
-        showPassphraseQr(passwordFor(sender).trim());
+    private void showPasswordQr() {
+        showPassphraseQr(receivePassword.trim());
     }
 
     @Override
@@ -2659,6 +2449,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private void showSourceDialog() {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setCanceledOnTouchOutside(true);
         LinearLayout box = column();
         box.setPadding(dp(18), dp(18), dp(18), dp(18));
         box.setBackground(rounded(Color.WHITE, dp(8), 0, 0));
@@ -2667,56 +2458,66 @@ public final class MainActivity extends Activity implements ModuleHost {
         title.setGravity(Gravity.CENTER);
         box.addView(title);
 
+        TextView version = text(getString(R.string.app_name) + " v" + appVersionName(), 12, muted(), Typeface.NORMAL);
+        version.setGravity(Gravity.CENTER);
+        box.addView(version, blockParams(dp(2)));
+
         TextView desc = text(getString(R.string.source_description), 13, muted(), Typeface.NORMAL);
         desc.setSingleLine(false);
         box.addView(desc, blockParams(dp(10)));
 
-        TextView url = text(SOURCE_URL, 13, Color.rgb(32, 101, 165), Typeface.BOLD);
-        url.setTextIsSelectable(true);
-        url.setSingleLine(false);
-        url.setPadding(dp(10), dp(8), dp(10), dp(8));
-        url.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
-        box.addView(url, blockParams(dp(8)));
-
-        LinearLayout actions = row();
-        Button open = secondaryButton(getString(R.string.open));
-        open.setOnClickListener(v -> {
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(SOURCE_URL)));
-            } catch (RuntimeException error) {
-                copySourceUrl();
-            }
-        });
-        Button copy = secondaryButton(getString(R.string.copy));
-        copy.setOnClickListener(v -> copySourceUrl());
-        Button close = secondaryButton(getString(R.string.close));
-        close.setOnClickListener(v -> dialog.dismiss());
-        actions.addView(open, new LinearLayout.LayoutParams(0, dp(42), 1));
-        actions.addView(copy, actionParams(dp(42)));
-        actions.addView(close, actionParams(dp(42)));
-        box.addView(actions, blockParams(dp(12)));
+        box.addView(sourceLinkView(GONC_URL), blockParams(dp(8)));
+        box.addView(sourceLinkView(SOURCE_URL), blockParams(dp(6)));
 
         dialog.setContentView(box);
         dialog.show();
     }
 
-    private void copySourceUrl() {
-        copyText(getString(R.string.source_title), SOURCE_URL);
-        Toast.makeText(this, R.string.toast_source_copied, Toast.LENGTH_SHORT).show();
+    private TextView sourceLinkView(String url) {
+        TextView view = text(url, 13, Color.rgb(32, 101, 165), Typeface.BOLD);
+        view.setSingleLine(false);
+        view.setPadding(dp(10), dp(8), dp(10), dp(8));
+        view.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
+        view.setOnClickListener(v -> openSourceUrl(url));
+        view.setOnLongClickListener(v -> {
+            copyText(getString(R.string.source_title), url);
+            Toast.makeText(this, R.string.toast_source_copied, Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        return view;
     }
 
-    private void scanPassword(boolean sender) {
-        if (isPasswordLocked(sender)) {
+    private void openSourceUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (RuntimeException error) {
+            copyText(getString(R.string.source_title), url);
+            Toast.makeText(this, R.string.toast_source_copied, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private String appVersionName() {
+        try {
+            String name = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return name == null ? "" : name;
+        } catch (Exception error) {
+            return "";
+        }
+    }
+
+    private void scanPassword() {
+        if (receiveSession != null) {
             return;
         }
-        pendingScanCallback = null;
-        pendingScanIsProfile = false;
-        scanningForSendMode = sender;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
-            return;
-        }
-        launchQrScanner();
+        scanPassphrase(result -> {
+            if (receiveSession != null) {
+                return;
+            }
+            receivePassword = result.trim();
+            revealPasswordTemporarily();
+            appendLog("info", "Passphrase scanned");
+            render();
+        });
     }
 
     private void launchQrScanner() {
@@ -2790,7 +2591,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (vpnServerMode) {
             return vpnServer.status();
         }
-        return sendMode ? sendStatus : receiveStatus;
+        return sendMode ? sendController.status() : receiveStatus;
     }
 
     private String statusSummary() {
@@ -2847,35 +2648,16 @@ public final class MainActivity extends Activity implements ModuleHost {
         return displayStatusLabel(clean);
     }
 
-    private void setStatus(boolean forSendMode, String nextStatus) {
-        if (forSendMode) {
-            sendStatus = nextStatus;
-        } else {
-            receiveStatus = nextStatus;
-        }
+    private boolean isCurrentRun(long runId) {
+        return receiveRunId == runId;
     }
 
-    private void clearSession(boolean forSendMode) {
-        if (forSendMode) {
-            sendSession = null;
-        } else {
-            receiveSession = null;
-        }
-    }
-
-    private boolean isCurrentRun(boolean forSendMode, long runId) {
-        return forSendMode ? sendRunId == runId : receiveRunId == runId;
-    }
-
-    private boolean isActiveRun(boolean forSendMode, long runId) {
-        if (!isCurrentRun(forSendMode, runId)) {
-            return false;
-        }
-        return forSendMode ? sendSession != null : receiveSession != null;
+    private boolean isActiveRun(long runId) {
+        return receiveRunId == runId && receiveSession != null;
     }
 
     private boolean isAnySessionRunning() {
-        return sendSession != null || receiveSession != null || vpnServer.isRunning() || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
+        return sendController.isRunning() || receiveSession != null || vpnServer.isRunning() || remoteListSession != null || receiveDownload != null || GoncVpnState.isRunning();
     }
 
     private TransferMetrics currentMetrics() {
@@ -2885,20 +2667,10 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (vpnServerMode) {
             return vpnServer.metrics();
         }
-        return currentMetrics(sendMode);
-    }
-
-    private TransferMetrics currentMetrics(boolean forSendMode) {
-        return forSendMode ? sendMetrics : receiveMetrics;
-    }
-
-    private void updateMetricsReady(boolean forSendMode, String endpoint) {
-        TransferMetrics metrics = currentMetrics(forSendMode);
-        metrics.p2pStatus = "connected";
-    }
-
-    private void updateMetricsFromReport(boolean forSendMode, String topic, String status, String network, String mode, String peer) {
-        updateMetricsFromReport(currentMetrics(forSendMode), topic, status, network, mode, peer);
+        if (sendMode) {
+            return sendController.metrics();
+        }
+        return receiveMetrics;
     }
 
     @Override
@@ -2936,10 +2708,6 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private String normalizeMetricStatus(String status) {
         return ui.normalizeMetricStatus(status);
-    }
-
-    private void updateMetricsFromLog(boolean forSendMode, String message) {
-        updateMetricsFromLog(currentMetrics(forSendMode), message);
     }
 
     @Override
@@ -3112,7 +2880,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void startScan(boolean profilePrompt, java.util.function.Consumer<String> onResult) {
-        scanningForSendMode = false;
         pendingScanCallback = onResult;
         pendingScanIsProfile = profilePrompt;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
@@ -3141,6 +2908,16 @@ public final class MainActivity extends Activity implements ModuleHost {
     @Override
     public void stopVpnClient() {
         stopVpnService();
+    }
+
+    @Override
+    public void pickSendFiles() {
+        openDocumentPicker();
+    }
+
+    @Override
+    public void pickSendFolder() {
+        openSendFolderPicker();
     }
 
     @Override
@@ -3208,36 +2985,17 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void addUris(List<Uri> uris, Intent sourceIntent) {
-        Map<String, ShareItem> existing = new LinkedHashMap<>();
-        for (ShareItem item : shareItems) {
-            existing.put(item.uri().toString(), item);
-        }
+        List<ShareItem> items = new ArrayList<>();
         for (Uri uri : uris) {
             takeReadPermission(uri, sourceIntent);
-            existing.put(uri.toString(), loadShareItem(uri));
+            items.add(loadShareItem(uri));
         }
-        shareItems.clear();
-        shareItems.addAll(existing.values());
-        syncShareSource();
+        sendController.addFiles(items);
     }
 
     private void addTreeUri(Uri uri, Intent sourceIntent) {
         takeReadPermission(uri, sourceIntent);
-        Map<String, ShareItem> existing = new LinkedHashMap<>();
-        for (ShareItem item : shareItems) {
-            existing.put(item.uri().toString(), item);
-        }
-        existing.put(uri.toString(), loadTreeShareItem(uri));
-        shareItems.clear();
-        shareItems.addAll(existing.values());
-        syncShareSource();
-        appendLog("info", "Shared folder added: " + shareItems.get(shareItems.size() - 1).displayName());
-    }
-
-    private void syncShareSource() {
-        if (sendSession != null) {
-            sendSession.updateShareItems(shareItems);
-        }
+        sendController.addFolder(loadTreeShareItem(uri));
     }
 
     private ShareItem loadShareItem(Uri uri) {

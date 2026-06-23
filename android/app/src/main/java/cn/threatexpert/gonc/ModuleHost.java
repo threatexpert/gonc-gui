@@ -34,6 +34,11 @@ interface ModuleHost {
 
     void stopVpnClient();
 
+    /** Open the system file/folder picker for the send module; results flow back via SendController.addFiles/addFolder. */
+    void pickSendFiles();
+
+    void pickSendFolder();
+
     /** Full rebuild of the visible screen. */
     void requestRender();
 
