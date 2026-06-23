@@ -26,7 +26,7 @@ import java.util.Map;
  * {@link #addFiles}/{@link #addFolder}.
  */
 final class SendController {
-    private final ModuleHost host;
+    private ModuleHost host;
     private final List<ShareItem> shareItems = new ArrayList<>();
     private final TransferMetrics metrics = new TransferMetrics();
 
@@ -39,6 +39,11 @@ final class SendController {
     private long runId;
 
     SendController(ModuleHost host) {
+        this.host = host;
+    }
+
+    /** Rebind to the current host after an Activity recreation (config change). */
+    void attach(ModuleHost host) {
         this.host = host;
     }
 

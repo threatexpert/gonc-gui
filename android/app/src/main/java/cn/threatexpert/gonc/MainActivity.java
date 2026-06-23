@@ -87,9 +87,9 @@ public final class MainActivity extends Activity implements ModuleHost {
     private final List<String> logs = new ArrayList<>();
     private final GoncBridge bridge = new MobileGoncBridge();
     private final TransferMetrics receiveMetrics = new TransferMetrics();
-    private final VpnServerController vpnServer = new VpnServerController(this);
-    private final VpnClientController vpnClient = new VpnClientController(this);
-    private final SendController sendController = new SendController(this);
+    private VpnServerController vpnServer;
+    private VpnClientController vpnClient;
+    private SendController sendController;
     private java.util.function.Consumer<String> pendingScanCallback;
     private boolean pendingScanIsProfile;
     private final Object downloadProgressLock = new Object();
@@ -173,9 +173,25 @@ public final class MainActivity extends Activity implements ModuleHost {
         super.onCreate(savedInstanceState);
         GoncCrashReporter.install(this);
         saveLocationLabel = getString(R.string.default_save_location);
-        vpnClient.load();
+        RetainedModules retained = (RetainedModules) getLastNonConfigurationInstance();
+        boolean reusedModules = retained != null;
+        if (reusedModules) {
+            vpnServer = retained.vpnServer;
+            vpnClient = retained.vpnClient;
+            sendController = retained.sendController;
+            vpnServer.attach(this);
+            vpnClient.attach(this);
+            sendController.attach(this);
+        } else {
+            vpnServer = new VpnServerController(this);
+            vpnClient = new VpnClientController(this);
+            sendController = new SendController(this);
+            vpnClient.load();
+        }
         buildRoot();
-        vpnClient.register();
+        if (!reusedModules) {
+            vpnClient.register();
+        }
         String lastCrash = GoncCrashReporter.lastCrash(this);
         if (!lastCrash.trim().isEmpty()) {
             appendLog("error", "Previous crash:\n" + lastCrash);
@@ -304,13 +320,25 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     @Override
+    public Object onRetainNonConfigurationInstance() {
+        // Keep the extracted module controllers (and their live sessions)
+        // alive across a configuration-change recreation; the new Activity
+        // re-attaches itself via attach(). Receive state is not retained yet.
+        return new RetainedModules(vpnServer, vpnClient, sendController);
+    }
+
+    @Override
     protected void onDestroy() {
-        vpnClient.unregister();
-        sendController.shutdown();
+        // On a config change the controllers are retained, so leave them and
+        // their sessions running; only tear down on a real destroy.
+        if (!isChangingConfigurations()) {
+            vpnClient.unregister();
+            sendController.shutdown();
+            vpnServer.shutdown();
+        }
         if (receiveSession != null) {
             receiveSession.stop();
         }
-        vpnServer.shutdown();
         if (remoteListSession != null) {
             remoteListSession.stop();
         }
@@ -318,6 +346,18 @@ public final class MainActivity extends Activity implements ModuleHost {
             receiveDownload.stop();
         }
         super.onDestroy();
+    }
+
+    private static final class RetainedModules {
+        final VpnServerController vpnServer;
+        final VpnClientController vpnClient;
+        final SendController sendController;
+
+        RetainedModules(VpnServerController vpnServer, VpnClientController vpnClient, SendController sendController) {
+            this.vpnServer = vpnServer;
+            this.vpnClient = vpnClient;
+            this.sendController = sendController;
+        }
     }
 
     private void buildRoot() {

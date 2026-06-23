@@ -52,7 +52,7 @@ final class VpnClientController {
     private static final String KEY_SELECTED_VPN_PROFILE = "selected_vpn_profile";
     private static final String VPN_PROFILE_QR_TYPE = "gonc.vpn.profile";
 
-    private final ModuleHost host;
+    private ModuleHost host;
     private final List<VpnProfile> profiles = new ArrayList<>();
     private final TransferMetrics metrics = new TransferMetrics();
     private int selectedIndex;
@@ -63,6 +63,11 @@ final class VpnClientController {
     private GoncVpnState.Listener listener;
 
     VpnClientController(ModuleHost host) {
+        this.host = host;
+    }
+
+    /** Rebind to the current host after an Activity recreation (config change). */
+    void attach(ModuleHost host) {
         this.host = host;
     }
 

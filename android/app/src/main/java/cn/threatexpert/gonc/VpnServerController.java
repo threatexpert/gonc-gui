@@ -18,7 +18,7 @@ import android.widget.TextView;
  * (render, logging, QR, clipboard, metrics) through {@link ModuleHost}.
  */
 final class VpnServerController {
-    private final ModuleHost host;
+    private ModuleHost host;
     private final TransferMetrics metrics = new TransferMetrics();
 
     private boolean useUdp;
@@ -30,6 +30,11 @@ final class VpnServerController {
     private long runId;
 
     VpnServerController(ModuleHost host) {
+        this.host = host;
+    }
+
+    /** Rebind to the current host after an Activity recreation (config change). */
+    void attach(ModuleHost host) {
         this.host = host;
     }
 
