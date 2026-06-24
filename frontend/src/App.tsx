@@ -1,7 +1,9 @@
-﻿import {useEffect, useMemo, useRef, useState} from 'react';
+﻿import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent} from 'react';
 import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 import './App.css';
 import {
+  CaptureScreen,
   GeneratePassword,
   RemoteFiles,
   SelectFiles,
@@ -86,7 +88,7 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.0.3';
+const appVersion = 'v1.0.4';
 
 const text = {
   zh: {
@@ -128,12 +130,19 @@ const text = {
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
-    senderPasswordHint: '口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
-    receiverPasswordHint: '口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
+    senderPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
+    receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     generate: '更换',
     copy: '复制',
     copyLogs: '复制日志',
     qr: '二维码',
+    scan: '截图扫码',
+    scanTitle: '框选屏幕上的二维码',
+    scanHint: '拖动鼠标框选二维码区域，或点击「识别整张」。多显示器会一并截取。',
+    scanWhole: '识别整张',
+    scanAgain: '重新截图',
+    scanNotFound: '未识别到二维码，请重新框选或重新截图。',
+    scanSuccess: '已从二维码识别口令',
     paste: '粘贴',
     copied: '口令已复制',
     logsCopied: '日志已复制',
@@ -216,12 +225,19 @@ const text = {
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
-    senderPasswordHint: 'Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
-    receiverPasswordHint: 'The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
+    senderPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
+    receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     generate: 'Change',
     copy: 'Copy',
     copyLogs: 'Copy Logs',
     qr: 'QR',
+    scan: 'Scan',
+    scanTitle: 'Select the QR code on screen',
+    scanHint: 'Drag to select the QR area, or click "Whole image". All monitors are captured.',
+    scanWhole: 'Whole image',
+    scanAgain: 'Recapture',
+    scanNotFound: 'No QR code found. Try selecting again or recapture.',
+    scanSuccess: 'Passphrase read from QR code',
     paste: 'Paste',
     copied: 'Passphrase copied',
     logsCopied: 'Activity copied',
@@ -296,6 +312,12 @@ function App() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrPassword, setQrPassword] = useState('');
+  const [scanImage, setScanImage] = useState('');
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanRect, setScanRect] = useState<{x: number; y: number; w: number; h: number} | null>(null);
+  const scanImgRef = useRef<HTMLImageElement | null>(null);
+  const scanDragStart = useRef<{x: number; y: number} | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : receivePassword;
@@ -525,6 +547,117 @@ function App() {
     setQrPassword('');
   }
 
+  async function startScreenScan() {
+    setError('');
+    setScanError('');
+    setScanRect(null);
+    setScanBusy(true);
+    try {
+      const dataUrl = await CaptureScreen();
+      setScanImage(dataUrl);
+    } catch (err) {
+      setError(localizeError(String(err)));
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  function closeScreenScan() {
+    setScanImage('');
+    setScanRect(null);
+    setScanError('');
+    scanDragStart.current = null;
+  }
+
+  async function decodeScanRegion(sx: number, sy: number, sw: number, sh: number) {
+    const img = scanImgRef.current;
+    if (!img || sw < 2 || sh < 2) {
+      return;
+    }
+    setScanBusy(true);
+    setScanError('');
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw);
+      canvas.height = Math.round(sh);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('canvas is unavailable');
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const result = jsQR(data.data, data.width, data.height);
+      if (result && result.data) {
+        const decoded = result.data.trim();
+        if (mode === 'send') {
+          setSendPassword(decoded);
+        } else {
+          setReceivePassword(decoded);
+        }
+        revealPasswordTemporarily();
+        closeScreenScan();
+        appendLog('status', 'info', t.scanSuccess);
+      } else {
+        setScanError(t.scanNotFound);
+      }
+    } catch (err) {
+      setScanError(localizeError(String(err)));
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  function decodeWholeScan() {
+    const img = scanImgRef.current;
+    if (!img) {
+      return;
+    }
+    setScanRect(null);
+    decodeScanRegion(0, 0, img.naturalWidth, img.naturalHeight);
+  }
+
+  function scanPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const img = scanImgRef.current;
+    if (!img) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = img.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    scanDragStart.current = {x, y};
+    setScanRect({x, y, w: 0, h: 0});
+    setScanError('');
+  }
+
+  function scanPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const img = scanImgRef.current;
+    const start = scanDragStart.current;
+    if (!img || !start) {
+      return;
+    }
+    const rect = img.getBoundingClientRect();
+    const cx = Math.max(0, Math.min(event.clientX - rect.left, rect.width));
+    const cy = Math.max(0, Math.min(event.clientY - rect.top, rect.height));
+    setScanRect({
+      x: Math.min(start.x, cx),
+      y: Math.min(start.y, cy),
+      w: Math.abs(cx - start.x),
+      h: Math.abs(cy - start.y),
+    });
+  }
+
+  function scanPointerUp() {
+    const img = scanImgRef.current;
+    const rect = scanRect;
+    scanDragStart.current = null;
+    if (!img || !rect || rect.w < 4 || rect.h < 4) {
+      return;
+    }
+    const scale = img.naturalWidth / img.getBoundingClientRect().width;
+    decodeScanRegion(rect.x * scale, rect.y * scale, rect.w * scale, rect.h * scale);
+  }
+
   async function start() {
     setError('');
     const passphrase = activePassword.trim();
@@ -750,12 +883,14 @@ function App() {
                   <>
                     <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
                     {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
+                    {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
                     <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : (
                   <>
                     {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
+                    {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
                     <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 )}
@@ -902,6 +1037,34 @@ function App() {
             <img src={qrDataUrl} alt={t.qr} />
             <div className="qr-password">{qrPassword}</div>
             <button className="primary" onClick={closePasswordQr}>{t.close}</button>
+          </section>
+        </div>
+      )}
+      {scanImage && (
+        <div className="qr-backdrop" role="presentation" onClick={closeScreenScan}>
+          <section className="scan-dialog" role="dialog" aria-modal="true" aria-label={t.scan} onClick={(event) => event.stopPropagation()}>
+            <h2>{t.scanTitle}</h2>
+            <p className="scan-hint">{t.scanHint}</p>
+            <div
+              className="scan-stage"
+              onPointerDown={scanPointerDown}
+              onPointerMove={scanPointerMove}
+              onPointerUp={scanPointerUp}
+            >
+              <img ref={scanImgRef} src={scanImage} alt={t.scan} draggable={false} />
+              {scanRect && (
+                <div
+                  className="scan-selection"
+                  style={{left: scanRect.x, top: scanRect.y, width: scanRect.w, height: scanRect.h}}
+                />
+              )}
+            </div>
+            {scanError && <div className="scan-error">{scanError}</div>}
+            <div className="scan-actions">
+              <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scanAgain}</button>
+              <button className="secondary" disabled={scanBusy} onClick={decodeWholeScan}>{t.scanWhole}</button>
+              <button className="primary" onClick={closeScreenScan}>{t.close}</button>
+            </div>
           </section>
         </div>
       )}

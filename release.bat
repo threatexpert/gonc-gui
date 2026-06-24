@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=v1.0.3"
+if "%VERSION%"=="" set "VERSION=v1.0.4"
 
 set "PLATFORM=windows-amd64"
 set "ANDROID_PLATFORM=android-arm64"

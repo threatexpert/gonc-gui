@@ -690,6 +690,68 @@ progress {
   user-select: text;
 }
 
+.scan-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(90vw, 1000px);
+  border: 1px solid #d8e2ee;
+  border-radius: 8px;
+  padding: 18px;
+  background: #ffffff;
+  box-shadow: 0 20px 50px rgba(23, 32, 51, 0.22);
+}
+
+.scan-dialog h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 16px;
+}
+
+.scan-hint {
+  margin: 0;
+  color: #5a6b85;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.scan-stage {
+  position: relative;
+  display: inline-block;
+  justify-self: center;
+  max-width: 100%;
+  line-height: 0;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.scan-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 65vh;
+  border: 1px solid #e1e8f0;
+  border-radius: 6px;
+  -webkit-user-drag: none;
+}
+
+.scan-selection {
+  position: absolute;
+  border: 2px dashed #2f6df6;
+  background: rgba(47, 109, 246, 0.16);
+  pointer-events: none;
+}
+
+.scan-error {
+  color: #c0392b;
+  font-size: 13px;
+}
+
+.scan-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 720px) {
   .workspace {
     width: min(100vw - 28px, 960px);
