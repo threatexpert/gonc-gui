@@ -108,6 +108,17 @@ final class VpnServerController {
         return session != null;
     }
 
+    /** Foreground-service contribution: null when idle; dot is green once a client is connected. */
+    GoncForegroundService.State foregroundState() {
+        if (session == null) {
+            return null;
+        }
+        GoncForegroundService.Dot dot = metrics.connectedCount > 0
+                ? GoncForegroundService.Dot.GREEN
+                : GoncForegroundService.Dot.YELLOW;
+        return new GoncForegroundService.State(dot, -1);
+    }
+
     /** Stop the session quietly (no UI/log), e.g. on Activity destroy. */
     void shutdown() {
         GoncBridge.Session current = session;
@@ -462,7 +473,7 @@ final class VpnServerController {
         host.log("info", "Start VPN server requested");
         long id = ++runId;
         session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, extraArgs, callback(id));
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.requestRender();
     }
 
@@ -474,7 +485,7 @@ final class VpnServerController {
         }
         status = "Idle";
         metrics.markStopped();
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.log("warn", "VPN server stop requested");
         host.requestRender();
     }
@@ -490,6 +501,7 @@ final class VpnServerController {
                     host.updateMetricsFromLog(metrics, message);
                     host.log(level, message);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -501,6 +513,7 @@ final class VpnServerController {
                     }
                     host.updateMetricsFromReport(metrics, topic, reportStatus, network, mode, peer);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -525,7 +538,7 @@ final class VpnServerController {
                     session = null;
                     status = "Idle";
                     metrics.markStopped();
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("warn", "Session stopped");
                     host.requestRender();
                     // note: a clean stop leaves no errorMessage to clear (set only on onError)
@@ -542,7 +555,7 @@ final class VpnServerController {
                     status = "Error";
                     metrics.p2pStatus = "error";
                     errorMessage = error.getMessage() == null ? error.toString() : error.getMessage();
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", errorMessage);
                     host.requestRender();
                 });

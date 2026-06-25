@@ -127,6 +127,26 @@ final class ReceiveController {
         return receiveDownload != null;
     }
 
+    /**
+     * Foreground-service contribution: null when no receive worker is live. The
+     * dot mirrors the in-app connection chip (red/green/yellow); progress is a
+     * 0..100 bar while downloading with a known total, otherwise -1 (so the
+     * notification just shows the connection status).
+     */
+    GoncForegroundService.State foregroundState() {
+        if (!isBusy()) {
+            return null;
+        }
+        GoncForegroundService.Dot dot =
+                GoncForegroundService.dotForState(host.ui().connectionState(receiveMetrics));
+        int progress = -1;
+        if (receiveDownload != null && downloadTotalBytes > 0) {
+            long pct = downloadDoneBytes * 100 / downloadTotalBytes;
+            progress = (int) Math.max(0, Math.min(100, pct));
+        }
+        return new GoncForegroundService.State(dot, progress);
+    }
+
     double currentDownloadSpeed() {
         return receiveDownload == null ? 0 : downloadBytesPerSecond;
     }
@@ -1109,7 +1129,7 @@ final class ReceiveController {
         host.log("info", "Start receiving requested");
         long runId = ++receiveRunId;
         receiveSession = host.bridge().startP2PReceive(context(), passphrase, receiveUseUdp, callback(runId));
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.requestRender();
     }
 
@@ -1124,6 +1144,7 @@ final class ReceiveController {
                     host.updateMetricsFromLog(receiveMetrics, message);
                     host.log(level, message);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -1135,6 +1156,7 @@ final class ReceiveController {
                     }
                     host.updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -1149,6 +1171,7 @@ final class ReceiveController {
                     host.log("info", "Ready: " + endpoint);
                     loadRemoteFiles(endpoint, runId);
                     host.requestRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -1162,7 +1185,7 @@ final class ReceiveController {
                     receiveStatus = "Idle";
                     stopReceiveWorkers();
                     receiveMetrics.markStopped();
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("warn", "Session stopped");
                     host.requestRender();
                 });
@@ -1179,7 +1202,7 @@ final class ReceiveController {
                     stopReceiveWorkers();
                     remoteListStatus = "Failed";
                     receiveMetrics.p2pStatus = "error";
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.requestRender();
                 });
@@ -1209,7 +1232,7 @@ final class ReceiveController {
         receiveMetrics.lastTrafficMs = 0;
         receiveStatus = "Idle";
         receiveMetrics.markStopped();
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.log("warn", "Receive stop requested");
         host.requestRender();
     }
@@ -1274,7 +1297,7 @@ final class ReceiveController {
                     }
                     recalculateRemoteFileSummary();
                     remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : (replaceAll ? "Remote list ready" : "Remote list refreshed"));
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     if (remoteCurrentPathMissing) {
                         host.log("warn", "Remote path missing " + displayRemotePath(targetPath));
                     } else {
@@ -1292,14 +1315,14 @@ final class ReceiveController {
                     }
                     remoteListSession = null;
                     remoteListStatus = "Remote list failed";
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.toast(R.string.toast_remote_refresh_failed);
                     host.requestRender();
                 });
             }
         });
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.requestRender();
     }
 
@@ -1394,7 +1417,7 @@ final class ReceiveController {
                     recalculateRemoteFileSummary();
                     remoteCurrentPathMissing = missing && normalizedPaths.size() == 1 && normalizeRemotePath(remoteCurrentPath).equals(normalizedPaths.get(0)) && !remoteCurrentPath.isEmpty();
                     remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : "Remote list refreshed");
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     if (files.isEmpty()) {
                         downloadStatus = "Idle";
                         host.toast(R.string.toast_no_remote_files);
@@ -1416,14 +1439,14 @@ final class ReceiveController {
                     remoteListSession = null;
                     remoteListStatus = "Remote refresh failed";
                     downloadStatus = "Idle";
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.toast(R.string.toast_remote_refresh_failed);
                     host.requestRender();
                 });
             }
         });
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.requestRender();
     }
 
@@ -1482,7 +1505,7 @@ final class ReceiveController {
                     receiveMetrics.outBps = 0;
                     receiveMetrics.lastTrafficMs = 0;
                     downloadStatus = "Receive complete";
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("info", "Receive complete: " + totalFiles + " file(s), " + HttpReceiver.formatBytes(totalBytes) + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
                     host.requestRender();
                 });
@@ -1503,13 +1526,13 @@ final class ReceiveController {
                     receiveMetrics.inBps = 0;
                     receiveMetrics.outBps = 0;
                     receiveMetrics.lastTrafficMs = 0;
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.requestRender();
                 });
             }
         });
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
     }
 
     private void queueDownloadProgress(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
@@ -1543,6 +1566,7 @@ final class ReceiveController {
         receiveMetrics.lastTrafficMs = System.currentTimeMillis();
         downloadStatus = progress.current == null || progress.current.trim().isEmpty() ? "Preparing download" : "Receiving " + progress.current;
         renderDownloadProgress();
+        host.refreshForegroundService();
     }
 
     private boolean ensureDefaultSavePermission() {
@@ -1567,7 +1591,7 @@ final class ReceiveController {
         receiveMetrics.inBps = 0;
         receiveMetrics.outBps = 0;
         receiveMetrics.lastTrafficMs = 0;
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.log("warn", "Receive download stop requested");
         host.requestRender();
     }

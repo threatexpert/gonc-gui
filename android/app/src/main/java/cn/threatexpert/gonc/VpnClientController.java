@@ -59,7 +59,6 @@ final class VpnClientController {
     private boolean passwordVisible;
     private boolean advancedExpanded;
     private long lastLogId;
-    private long lastLogRenderMs;
     private GoncVpnState.Listener listener;
 
     VpnClientController(ModuleHost host) {
@@ -83,7 +82,7 @@ final class VpnClientController {
             @Override
             public void onVpnStateChanged() {
                 host.mainHandler().post(() -> {
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.requestRender();
                 });
             }
@@ -92,11 +91,8 @@ final class VpnClientController {
             public void onVpnLog(GoncVpnState.LogEntry entry) {
                 host.mainHandler().post(() -> {
                     appendLog(entry);
-                    long now = System.currentTimeMillis();
-                    if (now - lastLogRenderMs >= 200) {
-                        lastLogRenderMs = now;
-                        host.requestBackgroundRender();
-                    }
+                    // Throttling/coalescing now lives in the host's requestBackgroundRender().
+                    host.requestBackgroundRender();
                 });
             }
         };

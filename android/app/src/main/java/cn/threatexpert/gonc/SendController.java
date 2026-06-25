@@ -51,6 +51,17 @@ final class SendController {
         return session != null;
     }
 
+    /** Foreground-service contribution: null when idle; dot is green once a peer is connected. */
+    GoncForegroundService.State foregroundState() {
+        if (session == null) {
+            return null;
+        }
+        GoncForegroundService.Dot dot = metrics.connectedCount > 0
+                ? GoncForegroundService.Dot.GREEN
+                : GoncForegroundService.Dot.YELLOW;
+        return new GoncForegroundService.State(dot, -1);
+    }
+
     TransferMetrics metrics() {
         return metrics;
     }
@@ -352,7 +363,7 @@ final class SendController {
         host.log("info", "Start sharing requested");
         long id = ++runId;
         session = host.bridge().startP2PShare(host.context(), shareItems, passphrase, useUdp, callback(id));
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.requestRender();
     }
 
@@ -364,7 +375,7 @@ final class SendController {
         }
         status = "Idle";
         metrics.markStopped();
-        host.updateKeepScreenOn();
+        host.refreshForegroundService();
         host.log("warn", "Send stop requested");
         host.requestRender();
     }
@@ -403,6 +414,7 @@ final class SendController {
                     host.updateMetricsFromLog(metrics, message);
                     host.log(level, message);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -414,6 +426,7 @@ final class SendController {
                     }
                     host.updateMetricsFromReport(metrics, topic, reportStatus, network, mode, peer);
                     host.requestBackgroundRender();
+                    host.refreshForegroundService();
                 });
             }
 
@@ -439,7 +452,7 @@ final class SendController {
                     session = null;
                     status = "Idle";
                     metrics.markStopped();
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("warn", "Session stopped");
                     host.requestRender();
                 });
@@ -454,7 +467,7 @@ final class SendController {
                     session = null;
                     status = "Error";
                     metrics.p2pStatus = "error";
-                    host.updateKeepScreenOn();
+                    host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.requestRender();
                 });

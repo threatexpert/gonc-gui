@@ -63,7 +63,7 @@ public final class GoncVpnService extends VpnService {
         if (ACTION_START.equals(action)) {
             try {
                 GoncCrashReporter.stage(this, "startForeground");
-                startForeground(NOTIFICATION_ID, notification(getString(R.string.vpn_status_connecting)));
+                startForeground(NOTIFICATION_ID, notification(connectingText()));
             } catch (RuntimeException error) {
                 GoncCrashReporter.recordNonFatal(this, "Cannot start foreground service", error);
                 GoncVpnState.setError(error.getMessage() == null ? error.toString() : error.getMessage());
@@ -237,21 +237,59 @@ public final class GoncVpnService extends VpnService {
         return true;
     }
 
-    /** Best-effort "host:port" of the SOCKS5 listener from a link like {@code x://127.0.0.1:3080;...} or a bare port. */
+    /**
+     * Best-effort local SOCKS5 endpoint ("host:port" tun2socks dials) derived from
+     * the LEFT side of a gonc -link config "L;R" (',' is an alias for ';'). The left
+     * side is gonc's local listener. Mirrors gonc's normalizeLinkConf/parseLinkConfig:
+     * <ul>
+     *   <li>a bare port ("3081") means {@code x://0.0.0.0:3081}, reached via loopback;</li>
+     *   <li>an explicit scheme/host (x://, x+tls://, f://, optional user@ and ?query)
+     *       is taken as-is, with a 0.0.0.0 / empty bind address mapped to 127.0.0.1
+     *       since that is what tun2socks must connect to.</li>
+     * </ul>
+     */
     private static String socks5AddressFromLink(String link) {
-        String value = link == null ? "" : link.trim();
-        if (isAllDigits(value)) {
-            return "127.0.0.1:" + value; // gonc binds a bare port on the loopback
-        }
-        int scheme = value.indexOf("://");
-        if (scheme >= 0) {
-            value = value.substring(scheme + 3);
-        }
-        int semi = value.indexOf(';');
+        String left = link == null ? "" : link.trim();
+        // gonc treats ',' and ';' as the L/R separator; keep the local (left) side.
+        int sep = left.length();
+        int semi = left.indexOf(';');
         if (semi >= 0) {
-            value = value.substring(0, semi);
+            sep = Math.min(sep, semi);
         }
-        return value.trim();
+        int comma = left.indexOf(',');
+        if (comma >= 0) {
+            sep = Math.min(sep, comma);
+        }
+        left = left.substring(0, sep).trim();
+
+        if (left.isEmpty()) {
+            return "127.0.0.1:1080";
+        }
+        if (isAllDigits(left)) {
+            return "127.0.0.1:" + left; // x://0.0.0.0:<port>, dialed via loopback
+        }
+        // Strip scheme (x://, x+tls://, f://, …), then credentials and query.
+        int scheme = left.indexOf("://");
+        if (scheme >= 0) {
+            left = left.substring(scheme + 3);
+        }
+        int query = left.indexOf('?');
+        if (query >= 0) {
+            left = left.substring(0, query);
+        }
+        int at = left.indexOf('@');
+        if (at >= 0) {
+            left = left.substring(at + 1);
+        }
+        left = left.trim();
+        // A 0.0.0.0 / empty bind host is reached on the loopback by tun2socks.
+        if (left.startsWith("0.0.0.0:")) {
+            return "127.0.0.1:" + left.substring("0.0.0.0:".length());
+        }
+        if (left.startsWith(":")) {
+            return "127.0.0.1" + left;
+        }
+        return left;
     }
 
     private int findAvailableLocalPort() throws IOException {
@@ -409,6 +447,9 @@ public final class GoncVpnService extends VpnService {
                 log("info", "P2P " + emptyDash(status) + " " + emptyDash(network) + " " + emptyDash(mode) + " " + emptyDash(peer));
                 if ("connected".equalsIgnoreCase(status)) {
                     markConnected();
+                } else {
+                    // P2P link is not (yet) up: show "connecting" with a yellow dot.
+                    updateNotification(connectingText());
                 }
             }
 
@@ -468,7 +509,17 @@ public final class GoncVpnService extends VpnService {
             }
         }
         GoncVpnState.setStatus(GoncVpnState.CONNECTED);
-        updateNotification(getString(R.string.vpn_status_connected));
+        updateNotification(connectedText());
+    }
+
+    private String connectingText() {
+        // yellow circle U+1F7E1
+        return new String(Character.toChars(0x1F7E1)) + " " + getString(R.string.vpn_status_connecting);
+    }
+
+    private String connectedText() {
+        // green circle U+1F7E2
+        return new String(Character.toChars(0x1F7E2)) + " " + getString(R.string.vpn_status_connected);
     }
 
     private void stopVpn() {

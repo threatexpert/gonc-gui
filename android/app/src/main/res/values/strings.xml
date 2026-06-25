@@ -4,7 +4,11 @@
     <string name="send_files">Send Files</string>
     <string name="receive_files">Receive Files</string>
     <string name="vpn_tunnel">VPN 客户端</string>
-    <string name="screen_stays_on">Screen stays on during transfer</string>
+    <string name="fg_notification_channel">Background transfer</string>
+    <string name="fg_sharing">Sharing files</string>
+    <string name="fg_receiving">Receiving files</string>
+    <string name="fg_receiving_progress">Receiving files %1$d%%</string>
+    <string name="fg_vpn_server_running">VPN server running</string>
     <string name="send_files_title">Send files</string>
     <string name="receive_files_title">Receive files</string>
     <string name="no_files_selected">No files selected. Share from another app or add files and folders here.</string>
@@ -179,11 +183,11 @@
     <string name="toast_select_file_first">Select at least one file first</string>
     <string name="toast_passphrase_required">Passphrase is required</string>
     <string name="toast_passphrase_weak">Passphrase is too weak. Use at least 8 characters with both letters and numbers.</string>
-    <string name="toast_transfer_kept_running">Transfer remains running in the background</string>
+    <string name="toast_transfer_kept_running">gonc remains running in the background</string>
     <string name="running_task_back_title">Leave Gonc?</string>
     <string name="running_task_back_message">A sharing or receiving task is still running. You can keep it running in the background, or end it and clear this session.</string>
-    <string name="run_in_background">Run in background</string>
-    <string name="end_tasks">End tasks</string>
+    <string name="run_in_background">🟢 Run in background</string>
+    <string name="end_tasks">🔴 End tasks</string>
     <string name="toast_choose_save_location">Choose a save location first</string>
     <string name="toast_select_download_files">Select files to download first</string>
     <string name="toast_no_remote_files">No remote files to download</string>

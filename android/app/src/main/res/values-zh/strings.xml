@@ -3,7 +3,11 @@
     <string name="app_subtitle">点对点安全传输工具</string>
     <string name="send_files">发送文件</string>
     <string name="receive_files">接收文件</string>
-    <string name="screen_stays_on">传输期间保持屏幕常亮</string>
+    <string name="fg_notification_channel">后台传输</string>
+    <string name="fg_sharing">正在分享文件</string>
+    <string name="fg_receiving">接收文件</string>
+    <string name="fg_receiving_progress">接收文件 %1$d%%</string>
+    <string name="fg_vpn_server_running">VPN 服务端运行中</string>
     <string name="send_files_title">发送文件</string>
     <string name="receive_files_title">接收文件</string>
     <string name="no_files_selected">还没有选择文件。可以从其他应用分享，或在这里添加文件和目录。</string>
@@ -59,7 +63,7 @@
     <string name="vpn_status">VPN 状态</string>
     <string name="vpn_session_name">Gonc VPN</string>
     <string name="vpn_notification_channel">Gonc VPN</string>
-    <string name="vpn_status_connecting">正在连接 VPN</string>
+    <string name="vpn_status_connecting">VPN 连接中</string>
     <string name="vpn_status_connected">VPN 已连接</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
     <string name="vpn_route_ipv6_hint">开启后允许 IPv6 地址和 IPv6 路由生效。网络 IPv6 或 DNS 异常时可以关闭。</string>
@@ -176,11 +180,11 @@
     <string name="toast_select_file_first">请先选择至少一个文件</string>
     <string name="toast_passphrase_required">需要填写口令</string>
     <string name="toast_passphrase_weak">口令强度不足。请使用至少 8 位，并同时包含字母和数字。</string>
-    <string name="toast_transfer_kept_running">传输已保持在后台运行</string>
+    <string name="toast_transfer_kept_running">gonc 已保持在后台运行</string>
     <string name="running_task_back_title">离开 Gonc？</string>
     <string name="running_task_back_message">当前还有分享或接收任务在运行。可以让它继续在后台运行，也可以结束任务并清空本次会话。</string>
-    <string name="run_in_background">后台运行</string>
-    <string name="end_tasks">结束任务</string>
+    <string name="run_in_background">🟢 后台运行</string>
+    <string name="end_tasks">🔴 结束任务</string>
     <string name="toast_choose_save_location">请先选择保存位置</string>
     <string name="toast_select_download_files">请先选择要下载的文件</string>
     <string name="toast_no_remote_files">没有可下载的远程文件</string>

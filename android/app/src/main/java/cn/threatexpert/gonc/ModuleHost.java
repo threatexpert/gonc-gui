@@ -59,7 +59,12 @@ interface ModuleHost {
     /** Throttled rebuild for high-frequency background updates (logs/metrics). */
     void requestBackgroundRender();
 
-    void updateKeepScreenOn();
+    /**
+     * Recompute which in-process modules (send/receive/VPN server) are active and
+     * start/update/stop the shared {@link GoncForegroundService} accordingly. Call
+     * after any change to a module's running state or download progress.
+     */
+    void refreshForegroundService();
 
     void copyText(String label, String value);
 

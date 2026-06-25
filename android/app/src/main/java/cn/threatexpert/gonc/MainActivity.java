@@ -34,7 +34,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -49,6 +48,10 @@ import android.widget.AdapterView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -75,8 +78,12 @@ public final class MainActivity extends Activity implements ModuleHost {
     private static final int REQUEST_OPEN_SEND_TREE = 1005;
     private static final int REQUEST_STORAGE_PERMISSION = 1006;
     private static final int REQUEST_VPN_PERMISSION = 1007;
+    private static final int REQUEST_NOTIFICATION_PERMISSION = 1008;
+    private boolean notificationPermissionRequested;
     private static final int MAX_ACTIVITY_LOGS = 500;
     private static final int MAX_VISIBLE_ACTIVITY_LOGS = 80;
+    /** Coalescing window for high-frequency background (log/metric) re-renders. */
+    private static final long BACKGROUND_RENDER_INTERVAL_MS = 200;
     private static final String PREFS = "gonc_main";
     private static final String KEY_VPN_PROFILES = "vpn_profiles";
     private static final String KEY_SELECTED_VPN_PROFILE = "selected_vpn_profile";
@@ -100,7 +107,8 @@ public final class MainActivity extends Activity implements ModuleHost {
     private boolean pendingVpnStartAfterBatterySettings;
     private boolean activityExpanded;
     private long pauseAutoRenderUntilMs;
-    private long lastLogRenderMs;
+    private long lastBackgroundRenderMs;
+    private boolean backgroundRenderPending;
     private TextView activitySummaryTextView;
     private LinearLayout activityLogContentView;
     private TextView activityP2PStatusValueView;
@@ -272,6 +280,11 @@ public final class MainActivity extends Activity implements ModuleHost {
             if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, R.string.toast_storage_permission, Toast.LENGTH_SHORT).show();
             }
+        } else if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
+            // Re-render so the ongoing notification appears now that it's allowed.
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                refreshForegroundService();
+            }
         }
     }
 
@@ -319,17 +332,59 @@ public final class MainActivity extends Activity implements ModuleHost {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(Color.rgb(246, 248, 251));
-        scrollView.setFitsSystemWindows(true);
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setFitsSystemWindows(true);
         root.setPadding(dp(18), dp(22), dp(18), dp(24));
         scrollView.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
         setContentView(scrollView);
+
+        // Pad for the status/navigation bars and, crucially, the IME. When the
+        // soft keyboard appears, its inset is added to the bottom padding so the
+        // ScrollView shrinks and (together with windowSoftInputMode=adjustResize)
+        // scrolls the focused field above the keyboard instead of being covered.
+        ViewCompat.setOnApplyWindowInsetsListener(scrollView, (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            int imeBottom = ime.bottom;
+            // Bottom padding = keyboard height gives the ScrollView extra scroll
+            // range so content can move fully above the keyboard.
+            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, imeBottom));
+            if (imeBottom > 0) {
+                // In edge-to-edge the window isn't resized, so ScrollView's own
+                // "is it visible" math (which uses full height) won't scroll the
+                // focused field up. Do it explicitly by the actual overlap.
+                v.post(() -> revealFocusedAboveKeyboard((ScrollView) v, imeBottom));
+            }
+            return insets;
+        });
+    }
+
+    /**
+     * Scroll the currently focused field up by however much the keyboard overlaps
+     * it. Window-coordinate math (not ScrollView's visibility heuristics) so it
+     * works under edge-to-edge where the window is not resized for the IME.
+     */
+    private void revealFocusedAboveKeyboard(ScrollView scrollView, int imeBottom) {
+        View focused = scrollView.findFocus();
+        if (focused == null) {
+            return;
+        }
+        int[] focusedLoc = new int[2];
+        focused.getLocationInWindow(focusedLoc);
+        int focusedBottom = focusedLoc[1] + focused.getHeight();
+
+        int[] scrollLoc = new int[2];
+        scrollView.getLocationInWindow(scrollLoc);
+        int keyboardTop = scrollLoc[1] + scrollView.getHeight() - imeBottom;
+
+        int overlap = focusedBottom - keyboardTop + dp(12);
+        if (overlap > 0) {
+            scrollView.smoothScrollBy(0, overlap);
+        }
     }
 
     private void render() {
@@ -393,13 +448,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         titles.addView(text(getString(R.string.app_subtitle), 13, muted(), Typeface.NORMAL));
         header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
-        if (isAnySessionRunning()) {
-            View keepAwake = keepScreenIndicator();
-            LinearLayout.LayoutParams indicatorParams = new LinearLayout.LayoutParams(dp(38), dp(38));
-            indicatorParams.setMargins(0, 0, dp(6), 0);
-            header.addView(keepAwake, indicatorParams);
-        }
-
         Button source = ghostButton(getString(R.string.source));
         source.setOnClickListener(v -> showSourceDialog());
         header.addView(source, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
@@ -452,16 +500,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         box.addView(bottomRow, bottomParams);
         box.setLayoutParams(blockParams());
         return box;
-    }
-
-    private View keepScreenIndicator() {
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_keep_screen_on);
-        icon.setPadding(dp(7), dp(7), dp(7), dp(7));
-        icon.setBackground(rounded(Color.rgb(223, 243, 236), dp(8), Color.rgb(143, 211, 189), 1));
-        icon.setContentDescription(getString(R.string.screen_stays_on));
-        icon.setOnClickListener(v -> Toast.makeText(this, R.string.screen_stays_on, Toast.LENGTH_SHORT).show());
-        return icon;
     }
 
     private View metricBox(String label, String value) {
@@ -715,7 +753,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
 
         resetTransientStateForFreshLaunch();
-        updateKeepScreenOn();
+        refreshForegroundService();
         finish();
     }
 
@@ -847,7 +885,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         } else {
             startService(intent);
         }
-        updateKeepScreenOn();
+        refreshForegroundService();
         render();
     }
 
@@ -862,7 +900,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         appendLog("warn", "VPN stop requested");
         GoncVpnState.setStatus(GoncVpnState.STOPPING);
         startService(intent);
-        updateKeepScreenOn();
+        refreshForegroundService();
         render();
     }
 
@@ -1325,7 +1363,26 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void requestBackgroundRender() {
-        renderAfterBackgroundUpdate();
+        // Single coalescing throttle for all modules' high-frequency log/metric
+        // updates: render immediately if the window has elapsed, otherwise schedule
+        // one trailing flush so the last burst of updates still paints (no "stuck
+        // until the next log" gaps). Mirrors ReceiveController#renderDownloadProgress.
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastBackgroundRenderMs;
+        if (elapsed >= BACKGROUND_RENDER_INTERVAL_MS) {
+            lastBackgroundRenderMs = now;
+            renderAfterBackgroundUpdate();
+            return;
+        }
+        if (backgroundRenderPending) {
+            return;
+        }
+        backgroundRenderPending = true;
+        mainHandler.postDelayed(() -> {
+            backgroundRenderPending = false;
+            lastBackgroundRenderMs = System.currentTimeMillis();
+            renderAfterBackgroundUpdate();
+        }, Math.max(50, BACKGROUND_RENDER_INTERVAL_MS - elapsed));
     }
 
     @Override
@@ -1407,12 +1464,43 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     @Override
-    public void updateKeepScreenOn() {
-        if (isAnySessionRunning()) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        } else {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    public void refreshForegroundService() {
+        // The VPN client is excluded on purpose: it has its own GoncVpnService.
+        java.util.EnumMap<GoncForegroundService.Module, GoncForegroundService.State> active =
+                new java.util.EnumMap<>(GoncForegroundService.Module.class);
+        GoncForegroundService.State state;
+        if ((state = sendController.foregroundState()) != null) {
+            active.put(GoncForegroundService.Module.SEND, state);
         }
+        if ((state = receiveController.foregroundState()) != null) {
+            active.put(GoncForegroundService.Module.RECEIVE, state);
+        }
+        if ((state = vpnServer.foregroundState()) != null) {
+            active.put(GoncForegroundService.Module.VPN_SERVER, state);
+        }
+        if (!active.isEmpty()) {
+            ensureNotificationPermission();
+        }
+        GoncForegroundService.apply(this, active);
+    }
+
+    /**
+     * Ask for POST_NOTIFICATIONS (Android 13+) the first time a foreground module
+     * starts, so the ongoing notification is actually visible. The service runs
+     * either way; when the grant arrives we re-render so the notification appears.
+     */
+    private void ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        if (notificationPermissionRequested) {
+            return;
+        }
+        notificationPermissionRequested = true;
+        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATION_PERMISSION);
     }
 
     private void handleIncomingIntent(Intent intent) {
