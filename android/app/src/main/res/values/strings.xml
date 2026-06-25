@@ -3,7 +3,7 @@
     <string name="app_subtitle">P2P secure transfer tool</string>
     <string name="send_files">Send Files</string>
     <string name="receive_files">Receive Files</string>
-    <string name="vpn_tunnel">VPN 客户端</string>
+    <string name="vpn_tunnel">VPN Client</string>
     <string name="fg_notification_channel">Background transfer</string>
     <string name="fg_sharing">Sharing files</string>
     <string name="fg_receiving">Receiving files</string>
@@ -111,7 +111,7 @@
     <string name="vpn_advanced_settings">Advanced settings</string>
     <string name="vpn_advanced_settings_hide">Hide advanced settings</string>
     <string name="stop_vpn">Stop VPN</string>
-    <string name="vpn_server">VPN 服务端</string>
+    <string name="vpn_server">VPN Server</string>
     <string name="vpn_server_intro">Runs as a linkagent server; multiple clients can connect.</string>
     <string name="start_vpn_server">Start VPN server</string>
     <string name="stop_vpn_server">Stop VPN server</string>

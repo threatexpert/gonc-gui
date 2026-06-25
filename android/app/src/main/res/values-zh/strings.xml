@@ -3,6 +3,8 @@
     <string name="app_subtitle">点对点安全传输工具</string>
     <string name="send_files">发送文件</string>
     <string name="receive_files">接收文件</string>
+    <string name="vpn_tunnel">VPN 客户端</string>
+    <string name="vpn_server">VPN 服务端</string>
     <string name="fg_notification_channel">后台传输</string>
     <string name="fg_sharing">正在分享文件</string>
     <string name="fg_receiving">接收文件</string>
