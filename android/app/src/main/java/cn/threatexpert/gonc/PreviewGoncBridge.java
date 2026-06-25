@@ -52,7 +52,7 @@ final class PreviewGoncBridge implements GoncBridge {
     }
 
     @Override
-    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, String extraArgs, EventCallback callback) {
+    public Session startP2PLinkAgent(Context context, String password, boolean useUdp, String upstream, String dnsForward, String extraArgs, EventCallback callback) {
         PreviewSession session = new PreviewSession();
         executor.execute(() -> {
             if (session.isStopped()) {

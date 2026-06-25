@@ -93,6 +93,10 @@
     <string name="vpn_link_config">link 配置</string>
     <string name="vpn_link_config_hint">端口号，例如 3080</string>
     <string name="vpn_link_config_desc">留空则自动分配本地端口。完整配置格式参见 gonc 的 mux link。</string>
+    <string name="vpn_server_upstream">上游代理</string>
+    <string name="vpn_server_upstream_hint">socks5://host:port 或 http://host:port</string>
+    <string name="vpn_server_dns">UDP2TCP DNS</string>
+    <string name="vpn_server_dns_hint">8.8.8.8</string>
     <string name="vpn_extra_args">高级命令行参数</string>
     <string name="vpn_extra_args_hint">空格分隔的附加参数</string>
     <string name="vpn_extra_args_desc">原样追加到 gonc 命令行,空格分隔,详见 gonc 文档。</string>

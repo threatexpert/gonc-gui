@@ -28,14 +28,20 @@ import java.util.List;
  */
 final class VpnServerController {
     private static final String KEY_SERVER_EXTRA_ARGS_HISTORY = "vpn_server_extra_args_history";
+    private static final String KEY_SERVER_UPSTREAM_HISTORY = "vpn_server_upstream_history";
+    private static final String KEY_SERVER_DNS_HISTORY = "vpn_server_dns_history";
     private static final int MAX_EXTRA_ARGS_HISTORY = 5;
 
     private ModuleHost host;
     private final TransferMetrics metrics = new TransferMetrics();
-    private final List<String> extraArgsHistory = new ArrayList<>();
+    private final HistoryStore extraArgsHistory = new HistoryStore(KEY_SERVER_EXTRA_ARGS_HISTORY);
+    private final HistoryStore upstreamHistory = new HistoryStore(KEY_SERVER_UPSTREAM_HISTORY);
+    private final HistoryStore dnsHistory = new HistoryStore(KEY_SERVER_DNS_HISTORY);
 
     private boolean useUdp;
     private boolean advancedExpanded;
+    private String upstream = "";
+    private String dnsForward = "";
     private String extraArgs = "";
     private boolean passwordVisible;
     private int passwordVisibilityToken;
@@ -55,53 +61,77 @@ final class VpnServerController {
     }
 
     /**
-     * Load the extra-args history. Must be called from onCreate (needs a ready Context).
-     * The current value is intentionally NOT restored — only the picker history is.
+     * Load the per-field histories. Must be called from onCreate (needs a ready
+     * Context). The current values are intentionally NOT restored — only history.
      */
     void load() {
-        extraArgsHistory.clear();
-        String raw = host.prefs().getString(KEY_SERVER_EXTRA_ARGS_HISTORY, "");
-        if (raw == null || raw.trim().isEmpty()) {
-            return;
+        extraArgsHistory.load();
+        upstreamHistory.load();
+        dnsHistory.load();
+    }
+
+    /** A small persisted MRU list of values for one advanced field. */
+    private final class HistoryStore {
+        private final String prefsKey;
+        private final List<String> items = new ArrayList<>();
+
+        HistoryStore(String prefsKey) {
+            this.prefsKey = prefsKey;
         }
-        try {
-            JSONArray array = new JSONArray(raw);
-            for (int i = 0; i < array.length() && extraArgsHistory.size() < MAX_EXTRA_ARGS_HISTORY; i++) {
-                String value = array.optString(i, "").trim();
-                if (!value.isEmpty() && !extraArgsHistory.contains(value)) {
-                    extraArgsHistory.add(value);
-                }
+
+        void load() {
+            items.clear();
+            String raw = host.prefs().getString(prefsKey, "");
+            if (raw == null || raw.trim().isEmpty()) {
+                return;
             }
-        } catch (JSONException ignored) {
+            try {
+                JSONArray array = new JSONArray(raw);
+                for (int i = 0; i < array.length() && items.size() < MAX_EXTRA_ARGS_HISTORY; i++) {
+                    String value = array.optString(i, "").trim();
+                    if (!value.isEmpty() && !items.contains(value)) {
+                        items.add(value);
+                    }
+                }
+            } catch (JSONException ignored) {
+            }
         }
-    }
 
-    /** Record a used value as the most recent history entry (deduped, capped). */
-    private void addToHistory(String value) {
-        String clean = value == null ? "" : value.trim();
-        if (clean.isEmpty()) {
-            return;
+        boolean isEmpty() {
+            return items.isEmpty();
         }
-        extraArgsHistory.remove(clean);
-        extraArgsHistory.add(0, clean);
-        while (extraArgsHistory.size() > MAX_EXTRA_ARGS_HISTORY) {
-            extraArgsHistory.remove(extraArgsHistory.size() - 1);
-        }
-        saveHistory();
-    }
 
-    private void removeFromHistory(String value) {
-        if (extraArgsHistory.remove(value)) {
-            saveHistory();
+        List<String> snapshot() {
+            return new ArrayList<>(items);
         }
-    }
 
-    private void saveHistory() {
-        JSONArray array = new JSONArray();
-        for (String item : extraArgsHistory) {
-            array.put(item);
+        /** Record a used value as the most recent entry (deduped, capped). */
+        void add(String value) {
+            String clean = value == null ? "" : value.trim();
+            if (clean.isEmpty()) {
+                return;
+            }
+            items.remove(clean);
+            items.add(0, clean);
+            while (items.size() > MAX_EXTRA_ARGS_HISTORY) {
+                items.remove(items.size() - 1);
+            }
+            save();
         }
-        host.prefs().edit().putString(KEY_SERVER_EXTRA_ARGS_HISTORY, array.toString()).apply();
+
+        void remove(String value) {
+            if (items.remove(value)) {
+                save();
+            }
+        }
+
+        private void save() {
+            JSONArray array = new JSONArray();
+            for (String item : items) {
+                array.put(item);
+            }
+            host.prefs().edit().putString(prefsKey, array.toString()).apply();
+        }
     }
 
     boolean isRunning() {
@@ -138,6 +168,8 @@ final class VpnServerController {
     void resetForFreshLaunch() {
         useUdp = false;
         advancedExpanded = false;
+        upstream = "";
+        dnsForward = "";
         extraArgs = "";
         passwordVisible = false;
         password = Passwords.generate();
@@ -181,7 +213,15 @@ final class VpnServerController {
         if (advancedExpanded) {
             card.addView(u.sectionDivider(), u.dividerParams(u.dp(12)));
             card.addView(protocolToggle(), u.blockParams(u.dp(10)));
-            card.addView(extraArgsField(), u.blockParams(u.dp(10)));
+            card.addView(configField(string(R.string.vpn_server_upstream),
+                    string(R.string.vpn_server_upstream_hint), null, upstream,
+                    value -> upstream = value, upstreamHistory), u.blockParams(u.dp(10)));
+            card.addView(configField(string(R.string.vpn_server_dns),
+                    string(R.string.vpn_server_dns_hint), null, dnsForward,
+                    value -> dnsForward = value, dnsHistory), u.blockParams(u.dp(10)));
+            card.addView(configField(string(R.string.vpn_extra_args),
+                    string(R.string.vpn_extra_args_hint), string(R.string.vpn_extra_args_desc), extraArgs,
+                    value -> extraArgs = value, extraArgsHistory), u.blockParams(u.dp(10)));
         }
 
         Button primary = session == null
@@ -279,28 +319,25 @@ final class VpnServerController {
         return box;
     }
 
-    private View errorBanner(String message) {
-        UiKit u = host.ui();
-        TextView view = u.text(message, 13, Color.rgb(176, 42, 42), Typeface.BOLD);
-        view.setSingleLine(false);
-        view.setPadding(u.dp(10), u.dp(8), u.dp(10), u.dp(8));
-        view.setBackground(u.rounded(Color.rgb(253, 242, 242), u.dp(8), Color.rgb(201, 63, 63), 1));
-        return view;
-    }
-
-    private View extraArgsField() {
+    /**
+     * A labelled, hinted text field bound to a string setter; disabled while
+     * running. Adds an optional description line and an optional History button
+     * (each field keeps its own persisted MRU list).
+     */
+    private View configField(String label, String hint, String desc, String value,
+                             java.util.function.Consumer<String> onChange, HistoryStore history) {
         UiKit u = host.ui();
         boolean locked = session != null;
         LinearLayout box = u.column();
-        box.addView(u.text(string(R.string.vpn_extra_args), 13, u.muted(), Typeface.BOLD));
+        box.addView(u.text(label, 13, u.muted(), Typeface.BOLD));
 
         LinearLayout line = u.row();
         EditText input = new EditText(host.context());
         input.setSingleLine(true);
-        input.setText(extraArgs);
+        input.setText(value);
         input.setTextColor(u.ink());
         input.setTextSize(15);
-        input.setHint(string(R.string.vpn_extra_args_hint));
+        input.setHint(hint);
         input.setHintTextColor(Color.rgb(148, 163, 184));
         input.setPadding(u.dp(12), 0, u.dp(12), 0);
         input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
@@ -313,7 +350,7 @@ final class VpnServerController {
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 if (session == null) {
-                    extraArgs = s == null ? "" : s.toString();
+                    onChange.accept(s == null ? "" : s.toString());
                 }
             }
 
@@ -323,22 +360,35 @@ final class VpnServerController {
         });
         line.addView(input, new LinearLayout.LayoutParams(0, u.dp(46), 1));
 
-        Button history = u.secondaryButton(string(R.string.vpn_extra_args_history));
-        u.setControlEnabled(history, !locked && !extraArgsHistory.isEmpty());
-        history.setOnClickListener(v -> showExtraArgsHistory());
-        LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, u.dp(46));
-        historyParams.setMargins(u.dp(8), 0, 0, 0);
-        line.addView(history, historyParams);
+        if (history != null) {
+            Button historyBtn = u.secondaryButton(string(R.string.vpn_extra_args_history));
+            u.setControlEnabled(historyBtn, !locked && !history.isEmpty());
+            historyBtn.setOnClickListener(v -> showHistory(history, onChange));
+            LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, u.dp(46));
+            historyParams.setMargins(u.dp(8), 0, 0, 0);
+            line.addView(historyBtn, historyParams);
+        }
         box.addView(line, u.blockParams(u.dp(4)));
 
-        TextView desc = u.text(string(R.string.vpn_extra_args_desc), 12, u.muted(), Typeface.NORMAL);
-        desc.setPadding(u.dp(4), u.dp(4), 0, 0);
-        box.addView(desc);
+        if (desc != null && !desc.isEmpty()) {
+            TextView descView = u.text(desc, 12, u.muted(), Typeface.NORMAL);
+            descView.setPadding(u.dp(4), u.dp(4), 0, 0);
+            box.addView(descView);
+        }
         return box;
     }
 
-    private void showExtraArgsHistory() {
-        if (session != null || extraArgsHistory.isEmpty()) {
+    private View errorBanner(String message) {
+        UiKit u = host.ui();
+        TextView view = u.text(message, 13, Color.rgb(176, 42, 42), Typeface.BOLD);
+        view.setSingleLine(false);
+        view.setPadding(u.dp(10), u.dp(8), u.dp(10), u.dp(8));
+        view.setBackground(u.rounded(Color.rgb(253, 242, 242), u.dp(8), Color.rgb(201, 63, 63), 1));
+        return view;
+    }
+
+    private void showHistory(HistoryStore history, java.util.function.Consumer<String> onPick) {
+        if (session != null || history.isEmpty()) {
             return;
         }
         UiKit u = host.ui();
@@ -349,19 +399,19 @@ final class VpnServerController {
                 .setView(content)
                 .setNegativeButton(string(R.string.close), null)
                 .create();
-        populateHistoryRows(content, dialog);
+        populateHistoryRows(history, onPick, content, dialog);
         dialog.show();
     }
 
-    private void populateHistoryRows(LinearLayout content, AlertDialog dialog) {
+    private void populateHistoryRows(HistoryStore history, java.util.function.Consumer<String> onPick, LinearLayout content, AlertDialog dialog) {
         UiKit u = host.ui();
         content.removeAllViews();
-        if (extraArgsHistory.isEmpty()) {
+        if (history.isEmpty()) {
             dialog.dismiss();
             host.requestRender();
             return;
         }
-        for (String value : new ArrayList<>(extraArgsHistory)) {
+        for (String value : history.snapshot()) {
             LinearLayout row = u.row();
             row.setGravity(Gravity.CENTER_VERTICAL);
 
@@ -370,7 +420,7 @@ final class VpnServerController {
             label.setPadding(u.dp(2), u.dp(10), u.dp(8), u.dp(10));
             label.setOnClickListener(v -> {
                 if (session == null) {
-                    extraArgs = value;
+                    onPick.accept(value);
                     host.requestRender();
                 }
                 dialog.dismiss();
@@ -379,8 +429,8 @@ final class VpnServerController {
 
             Button delete = u.ghostButton(string(R.string.vpn_profile_delete));
             delete.setOnClickListener(v -> {
-                removeFromHistory(value);
-                populateHistoryRows(content, dialog);
+                history.remove(value);
+                populateHistoryRows(history, onPick, content, dialog);
             });
             row.addView(delete, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(40)));
             content.addView(row);
@@ -467,12 +517,14 @@ final class VpnServerController {
         }
         hidePassword();
         errorMessage = null;
-        addToHistory(extraArgs);
+        upstreamHistory.add(upstream.trim());
+        dnsHistory.add(dnsForward.trim());
+        extraArgsHistory.add(extraArgs);
         metrics.reset();
         status = "Preparing";
         host.log("info", "Start VPN server requested");
         long id = ++runId;
-        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, extraArgs, callback(id));
+        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, upstream.trim(), dnsForward.trim(), extraArgs, callback(id));
         host.refreshForegroundService();
         host.requestRender();
     }

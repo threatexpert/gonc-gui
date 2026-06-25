@@ -9,7 +9,7 @@ interface GoncBridge {
 
     Session startP2PReceive(Context context, String password, boolean useUdp, EventCallback callback);
 
-    Session startP2PLinkAgent(Context context, String password, boolean useUdp, String extraArgs, EventCallback callback);
+    Session startP2PLinkAgent(Context context, String password, boolean useUdp, String upstream, String dnsForward, String extraArgs, EventCallback callback);
 
     interface Session {
         void stop();
