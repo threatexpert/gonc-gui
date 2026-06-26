@@ -6,6 +6,19 @@ The desktop app is a Wails wrapper around the `gonc` executable. The Android app
 uses a gomobile-generated `mobilegonc.aar` built from the sibling `gonetcat`
 checkout.
 
+## Screenshots
+
+### Desktop
+
+![Gonc desktop file sender](ui-pc1.jpg)
+
+### Android
+
+<p>
+  <img src="ui-android1.jpg" alt="Gonc Android file sender" width="360">
+  <img src="ui-android2.jpg" alt="Gonc Android VPN server" width="360">
+</p>
+
 ## Layout
 
 ```text
