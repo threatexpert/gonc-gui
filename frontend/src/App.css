@@ -141,9 +141,9 @@
 
 .mode-switch {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  max-width: 360px;
+  max-width: 540px;
   margin-bottom: 18px;
   border: 1px solid #d8e2ee;
   border-radius: 8px;
@@ -396,6 +396,22 @@ input:focus {
   width: 18px;
   min-height: 18px;
   padding: 0;
+}
+
+.advanced-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.advanced-toggle {
+  justify-self: start;
+}
+
+.advanced-fields {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #e1e8f0;
+  padding-top: 12px;
 }
 
 .remote-pane,

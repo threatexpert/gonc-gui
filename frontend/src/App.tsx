@@ -16,7 +16,7 @@ import {
 } from '../wailsjs/go/main/App';
 import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
 
-type Mode = 'send' | 'receive';
+type Mode = 'send' | 'receive' | 'vpnServer';
 type Lang = 'zh' | 'en';
 type DownloadMode = 'resume' | 'overwrite';
 
@@ -79,6 +79,7 @@ type AppStatus = {
   running: boolean;
   sendRunning: boolean;
   receiveRunning: boolean;
+  vpnServerRunning: boolean;
   localHTTPUrl: string;
   downloading: boolean;
   defaultSaveDir: string;
@@ -88,7 +89,7 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.0.5';
+const appVersion = 'v1.1.0';
 
 const text = {
   zh: {
@@ -96,16 +97,19 @@ const text = {
     subtitle: '点对点安全传输工具',
     send: '发送文件',
     receive: '接收文件',
+    vpnServer: 'VPN 服务端',
     running: '运行中',
     idle: '空闲',
     sender: '发送方',
     receiver: '接收方',
     sendTitle: '发送文件',
     receiveTitle: '接收文件',
+    vpnServerTitle: 'VPN 服务端',
     stop: '停止',
     start: '开始',
     startShare: '开始分享',
     startReceive: '连接对方',
+    startVpnServer: '启动 VPN 服务端',
     receiveAll: '接收全部',
     connectedReceivers: '已连接',
     connectingReceivers: '正在建立',
@@ -132,6 +136,7 @@ const text = {
     passPlaceholder: '两端使用相同口令',
     senderPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
+    vpnServerPasswordHint: '作为 linkagent 服务端运行，支持多个客户端同时连接。口令相同即可连接，建议随机生成并通过安全渠道分享给 VPN 客户端。',
     generate: '更换',
     copy: '复制',
     copyLogs: '复制日志',
@@ -158,6 +163,17 @@ const text = {
     currentDir: '当前目录',
     parent: '上级目录',
     useUDP: '使用 UDP 协议',
+    advancedSettings: '高级设置',
+    hideAdvancedSettings: '收起高级设置',
+    upstreamProxy: '上游代理节点',
+    upstreamProxyPlaceholder: '例如 socks5://127.0.0.1:1080',
+    upstreamProxyHint: '为空则直接使用本机网络出口；填写后代理客户端流量从该上游节点出口。',
+    dnsForward: 'DNS 转发',
+    dnsForwardPlaceholder: '例如 8.8.8.8:53',
+    dnsForwardHint: '为空则不改写 DNS；填写后客户端 UDP:53 会转为 TCP DNS 转发到该服务器。如果设置的上游代理不支持 UDP，这里必须填写，否则客户端将无法 DNS。',
+    extraArgs: '额外 gonc 参数',
+    extraArgsPlaceholder: '例如 -x socks5://host:port',
+    extraArgsHint: '追加到外层 gonc 命令，适合临时使用高级参数。',
     remoteFiles: '对方分享的文件',
     refresh: '刷新',
     stopDownload: '停止下载',
@@ -191,16 +207,19 @@ const text = {
     subtitle: 'Secure peer-to-peer transfer tool',
     send: 'Send Files',
     receive: 'Receive Files',
+    vpnServer: 'VPN Server',
     running: 'Running',
     idle: 'Idle',
     sender: 'Sender',
     receiver: 'Receiver',
     sendTitle: 'Send files',
     receiveTitle: 'Receive files',
+    vpnServerTitle: 'VPN Server',
     stop: 'Stop',
     start: 'Start',
     startShare: 'Start Sharing',
     startReceive: 'Connect',
+    startVpnServer: 'Start VPN Server',
     receiveAll: 'Receive All',
     connectedReceivers: 'Connected',
     connectingReceivers: 'Establishing',
@@ -227,6 +246,7 @@ const text = {
     passPlaceholder: 'Same passphrase on both sides',
     senderPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
+    vpnServerPasswordHint: 'Run as a linkagent server and allow multiple VPN clients to connect. Use the same passphrase on the client; generating a random one and sharing it securely is recommended.',
     generate: 'Change',
     copy: 'Copy',
     copyLogs: 'Copy Logs',
@@ -253,6 +273,17 @@ const text = {
     currentDir: 'Current directory',
     parent: 'Parent directory',
     useUDP: 'Use UDP protocol',
+    advancedSettings: 'Advanced Settings',
+    hideAdvancedSettings: 'Hide Advanced Settings',
+    upstreamProxy: 'Upstream Proxy',
+    upstreamProxyPlaceholder: 'e.g. socks5://127.0.0.1:1080',
+    upstreamProxyHint: 'Blank uses this machine as the network exit. Set one to route client traffic through the upstream proxy.',
+    dnsForward: 'DNS Forwarding',
+    dnsForwardPlaceholder: 'e.g. 8.8.8.8:53',
+    dnsForwardHint: 'Blank leaves DNS unchanged. Set one to forward client UDP:53 as TCP DNS to this server. If the upstream proxy does not support UDP, this must be set or clients will not be able to resolve DNS.',
+    extraArgs: 'Extra gonc Args',
+    extraArgsPlaceholder: 'e.g. -x socks5://host:port',
+    extraArgsHint: 'Appended to the outer gonc command for temporary advanced options.',
     remoteFiles: 'Peer Shared Files',
     refresh: 'Refresh',
     stopDownload: 'Stop Download',
@@ -294,21 +325,29 @@ function App() {
   const [mode, setMode] = useState<Mode>('send');
   const [sendPassword, setSendPassword] = useState('');
   const [receivePassword, setReceivePassword] = useState('');
+  const [vpnServerPassword, setVpnServerPassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
   const [saveDir, setSaveDir] = useState('');
   const [currentRemotePath, setCurrentRemotePath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
-  const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
+  const [vpnServerUseUDP, setVpnServerUseUDP] = useState(false);
+  const [vpnServerAdvanced, setVpnServerAdvanced] = useState(false);
+  const [vpnServerUpstream, setVpnServerUpstream] = useState('');
+  const [vpnServerDNSForward, setVpnServerDNSForward] = useState('');
+  const [vpnServerExtraArgs, setVpnServerExtraArgs] = useState('');
+  const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, vpnServerRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
   const [receiveP2PReport, setReceiveP2PReport] = useState<P2PReport | null>(null);
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
+  const [vpnServerP2PReports, setVpnServerP2PReports] = useState<Record<string, P2PReport>>({});
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
   const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
+  const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrPassword, setQrPassword] = useState('');
@@ -320,7 +359,7 @@ function App() {
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
-  const activePassword = mode === 'send' ? sendPassword : receivePassword;
+  const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : vpnServerPassword);
 
   const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
   const activeSpeed = Math.max(
@@ -330,20 +369,27 @@ function App() {
   );
   const sendRunning = status.sendRunning;
   const receiveRunning = status.receiveRunning;
-  const currentRunning = mode === 'send' ? sendRunning : receiveRunning;
-  const canStart = !currentRunning && activePassword.trim().length > 0 && (mode === 'receive' || sharePaths.length > 0);
+  const vpnServerRunning = status.vpnServerRunning;
+  const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : vpnServerRunning);
+  const canStart = !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
   const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !status.downloading);
-  const primaryLabel = mode === 'send' ? t.startShare : t.startReceive;
+  const primaryLabel = mode === 'send' ? t.startShare : (mode === 'receive' ? t.startReceive : t.startVpnServer);
   const p2pSessions = useMemo(() => Object.values(sendP2PReports), [sendP2PReports]);
+  const vpnServerSessions = useMemo(() => Object.values(vpnServerP2PReports), [vpnServerP2PReports]);
   const connectedCount = p2pSessions.filter((report) => report.topic && report.status === 'connected').length;
   const connectingCount = p2pSessions.filter((report) => report.topic && report.status === 'connecting').length;
   const transferSpeed = mode === 'send'
     ? freshSpeed(sendTraffic?.time, sendTraffic?.outBps, nowTick)
-    : activeSpeed;
+    : (mode === 'vpnServer' ? freshSpeed(vpnServerTraffic?.time, vpnServerTraffic?.outBps, nowTick) : activeSpeed);
   const sendStatusLabel = connectingCount > 0 ? t.newConnection : (sendRunning ? t.waitingConnection : t.idle);
   const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
-  const statusTone = mode === 'receive' ? receiveStatus.tone : (sendRunning ? 'running' : 'idle');
+  const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
+  const vpnServerStatusLabel = vpnServerConnectedCount > 0 ? t.connectedShort : (vpnServerRunning ? t.waitingConnection : t.idle);
+  const statusTone = mode === 'receive' ? receiveStatus.tone : (currentRunning ? 'running' : 'idle');
+  const activeP2PReport = mode === 'receive'
+    ? receiveP2PReport
+    : latestReport(mode === 'vpnServer' ? vpnServerSessions : p2pSessions);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -356,6 +402,7 @@ function App() {
       .then((value) => {
         if (!cancelled) {
           setSendPassword((current) => current || value);
+          setVpnServerPassword((current) => current || value);
         }
       })
       .catch((err) => setError(localizeError(String(err))));
@@ -372,6 +419,8 @@ function App() {
           setSendTraffic(event);
         } else if (event.mode === 'receive') {
           setReceiveTraffic(event);
+        } else if (event.mode === 'vpnServer') {
+          setVpnServerTraffic(event);
         }
         return;
       }
@@ -386,6 +435,14 @@ function App() {
         if (event.message.includes('stopped') || event.message.includes('finished')) {
           if (event.mode === 'receive') {
             setReceiveP2PReport((current) => current ? {...current, status: event.message.includes('stopped') ? 'stopped' : 'finished'} : null);
+          } else if (event.mode === 'vpnServer') {
+            setVpnServerP2PReports((current) => {
+              const next: Record<string, P2PReport> = {};
+              for (const [key, value] of Object.entries(current)) {
+                next[key] = {...value, status: event.message.includes('stopped') ? 'stopped' : 'finished'};
+              }
+              return next;
+            });
           }
         }
         refreshStatus();
@@ -396,6 +453,8 @@ function App() {
         setSendP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'receive') {
         setReceiveP2PReport(report);
+      } else if (report.side === 'vpnServer') {
+        setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
@@ -433,6 +492,7 @@ function App() {
         running: next.running,
         sendRunning: next.sendRunning,
         receiveRunning: next.receiveRunning,
+        vpnServerRunning: next.vpnServerRunning,
         localHTTPUrl: next.localHTTPUrl,
         downloading: next.downloading,
         defaultSaveDir: next.defaultSaveDir,
@@ -476,6 +536,12 @@ function App() {
     revealPasswordTemporarily();
   }
 
+  async function generateVpnServerPassword() {
+    setError('');
+    setVpnServerPassword(await GeneratePassword());
+    revealPasswordTemporarily();
+  }
+
   async function copyPassword() {
     if (activePassword) {
       await navigator.clipboard.writeText(activePassword);
@@ -499,12 +565,20 @@ function App() {
     setError('');
     try {
       const value = await ClipboardGetText();
-      setReceivePassword(value.trim());
+      if (mode === 'vpnServer') {
+        setVpnServerPassword(value.trim());
+      } else {
+        setReceivePassword(value.trim());
+      }
       revealPasswordTemporarily();
     } catch (err) {
       try {
         const value = await navigator.clipboard.readText();
-        setReceivePassword(value.trim());
+        if (mode === 'vpnServer') {
+          setVpnServerPassword(value.trim());
+        } else {
+          setReceivePassword(value.trim());
+        }
         revealPasswordTemporarily();
       } catch {
         setError(localizeError(String(err)));
@@ -591,6 +665,8 @@ function App() {
         const decoded = result.data.trim();
         if (mode === 'send') {
           setSendPassword(decoded);
+        } else if (mode === 'vpnServer') {
+          setVpnServerPassword(decoded);
         } else {
           setReceivePassword(decoded);
         }
@@ -664,13 +740,16 @@ function App() {
     if (mode === 'send') {
       setSendP2PReports({});
       setSendTraffic(null);
-    } else {
+    } else if (mode === 'receive') {
       setReceiveP2PReport(null);
       setRemoteList(null);
       setSelectedPaths(new Set());
       setDownloadProgress(null);
       setReceiveTraffic(null);
       setCurrentRemotePath('/');
+    } else {
+      setVpnServerP2PReports({});
+      setVpnServerTraffic(null);
     }
     try {
       await StartTransfer({
@@ -680,7 +759,10 @@ function App() {
         saveDir,
         goncPath: '',
         downloadSubPath: currentRemotePath,
-        useUDP
+        useUDP: mode === 'vpnServer' ? vpnServerUseUDP : useUDP,
+        upstream: vpnServerUpstream,
+        dnsForward: vpnServerDNSForward,
+        extraArgs: vpnServerExtraArgs
       });
       await refreshStatus();
     } catch (err) {
@@ -695,9 +777,18 @@ function App() {
       if (mode === 'send') {
         setSendP2PReports({});
         setSendTraffic(null);
-      } else {
+      } else if (mode === 'receive') {
         setReceiveP2PReport((current) => current ? {...current, status: 'stopped'} : null);
         setReceiveTraffic(null);
+      } else {
+        setVpnServerP2PReports((current) => {
+          const next: Record<string, P2PReport> = {};
+          for (const [key, value] of Object.entries(current)) {
+            next[key] = {...value, status: 'stopped'};
+          }
+          return next;
+        });
+        setVpnServerTraffic(null);
       }
       await refreshStatus();
     } catch (err) {
@@ -811,12 +902,12 @@ function App() {
             <p>{t.subtitle}</p>
           </div>
         </div>
-        {mode === 'send' && (
+        {(mode === 'send' || mode === 'vpnServer') && (
           <div className={`status-block ${statusTone}`}>
             <span className={`dot ${statusTone}`} />
-            <span>{sendStatusLabel}</span>
+            <span>{mode === 'send' ? sendStatusLabel : vpnServerStatusLabel}</span>
             <span className="status-divider" />
-            <span>{t.connectedShort} {connectedCount}</span>
+            <span>{t.connectedShort} {mode === 'send' ? connectedCount : vpnServerConnectedCount}</span>
             <span className="status-divider" />
             <span>{formatRate(transferSpeed)}</span>
           </div>
@@ -826,6 +917,7 @@ function App() {
         <div className="mode-switch" role="tablist" aria-label="Transfer mode">
           <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>{t.send}</button>
           <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>{t.receive}</button>
+          <button className={mode === 'vpnServer' ? 'active' : ''} onClick={() => setMode('vpnServer')}>{t.vpnServer}</button>
         </div>
 
         <section className="main-pane">
@@ -857,7 +949,7 @@ function App() {
                   </div>
                 </div>
               </>
-            ) : (
+            ) : mode === 'receive' ? (
               <>
                 <div className="field">
                   <label>{t.saveDir}</label>
@@ -867,7 +959,7 @@ function App() {
                   </div>
                 </div>
               </>
-            )}
+            ) : null}
 
             <div className="field">
               <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
@@ -875,7 +967,15 @@ function App() {
                 <input
                   type={passwordVisible ? 'text' : 'password'}
                   value={activePassword}
-                  onChange={(event) => mode === 'send' ? setSendPassword(event.target.value) : setReceivePassword(event.target.value)}
+                  onChange={(event) => {
+                    if (mode === 'send') {
+                      setSendPassword(event.target.value);
+                    } else if (mode === 'receive') {
+                      setReceivePassword(event.target.value);
+                    } else {
+                      setVpnServerPassword(event.target.value);
+                    }
+                  }}
                   placeholder={t.passPlaceholder}
                   disabled={currentRunning}
                 />
@@ -886,12 +986,20 @@ function App() {
                     {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
                     <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
-                ) : (
+                ) : mode === 'receive' ? (
                   <>
                     {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
                     {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
                     <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
+                  </>
+                ) : (
+                  <>
+                    {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
+                    <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
+                    {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
+                    {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
+                    <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 )}
               </div>
@@ -899,17 +1007,68 @@ function App() {
                 <div className="field-hint">
                   <p>{t.senderPasswordHint}</p>
                 </div>
-              ) : (
+              ) : mode === 'receive' ? (
                 <div className="field-hint">
                   <p>{t.receiverPasswordHint}</p>
+                </div>
+              ) : (
+                <div className="field-hint">
+                  <p>{t.vpnServerPasswordHint}</p>
                 </div>
               )}
             </div>
 
             <label className="check">
-              <input type="checkbox" checked={useUDP} onChange={(event) => setUseUDP(event.target.checked)} />
+              <input
+                type="checkbox"
+                checked={mode === 'vpnServer' ? vpnServerUseUDP : useUDP}
+                disabled={currentRunning}
+                onChange={(event) => mode === 'vpnServer' ? setVpnServerUseUDP(event.target.checked) : setUseUDP(event.target.checked)}
+              />
               <span>{t.useUDP}</span>
             </label>
+
+            {mode === 'vpnServer' && (
+              <section className="advanced-panel">
+                <button className="secondary advanced-toggle" disabled={vpnServerRunning} onClick={() => setVpnServerAdvanced((value) => !value)}>
+                  {vpnServerAdvanced ? t.hideAdvancedSettings : t.advancedSettings}
+                </button>
+                {vpnServerAdvanced && (
+                  <div className="advanced-fields">
+                    <div className="field">
+                      <label>{t.upstreamProxy}</label>
+                      <input
+                        value={vpnServerUpstream}
+                        disabled={vpnServerRunning}
+                        onChange={(event) => setVpnServerUpstream(event.target.value)}
+                        placeholder={t.upstreamProxyPlaceholder}
+                      />
+                      <div className="field-hint"><p>{t.upstreamProxyHint}</p></div>
+                    </div>
+                    <div className="field">
+                      <label>{t.dnsForward}</label>
+                      <input
+                        value={vpnServerDNSForward}
+                        disabled={vpnServerRunning}
+                        onChange={(event) => setVpnServerDNSForward(event.target.value)}
+                        placeholder={t.dnsForwardPlaceholder}
+                      />
+                      <div className="field-hint"><p>{t.dnsForwardHint}</p></div>
+                    </div>
+                    <div className="field">
+                      <label>{t.extraArgs}</label>
+                      <input
+                        value={vpnServerExtraArgs}
+                        disabled={vpnServerRunning}
+                        onChange={(event) => setVpnServerExtraArgs(event.target.value)}
+                        placeholder={t.extraArgsPlaceholder}
+                      />
+                      <div className="field-hint"><p>{t.extraArgsHint}</p></div>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
 
             <div className="primary-actions">
               {currentRunning ? (
@@ -1002,11 +1161,11 @@ function App() {
           <details className="diagnostics">
             <summary>{t.diagnostics}</summary>
             <section className="status-grid">
-              <Metric label={t.p2pStatus} value={(mode === 'receive' ? receiveP2PReport?.status : latestReport(p2pSessions)?.status) || (currentRunning ? 'starting' : 'idle')} />
-              <Metric label={t.peer} value={(mode === 'receive' ? receiveP2PReport?.peer : latestReport(p2pSessions)?.peer) || '-'} />
-              <Metric label={t.network} value={(mode === 'receive' ? receiveP2PReport?.network : latestReport(p2pSessions)?.network) || '-'} />
-              <Metric label={t.connectionRoute} value={routeLabel((mode === 'receive' ? receiveP2PReport?.mode : latestReport(p2pSessions)?.mode) || '', t)} />
-              <Metric label={t.speed} value={formatRate(activeSpeed)} />
+              <Metric label={t.p2pStatus} value={activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
+              <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
+              <Metric label={t.network} value={activeP2PReport?.network || '-'} />
+              <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
+              <Metric label={t.speed} value={formatRate(transferSpeed)} />
             </section>
             <section className="log-pane">
             <div className="log-header">

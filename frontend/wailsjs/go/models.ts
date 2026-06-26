@@ -48,6 +48,7 @@ export namespace main {
 	    running: boolean;
 	    sendRunning: boolean;
 	    receiveRunning: boolean;
+	    vpnServerRunning: boolean;
 	    goncPath: string;
 	    localHTTPUrl: string;
 	    downloading: boolean;
@@ -62,6 +63,7 @@ export namespace main {
 	        this.running = source["running"];
 	        this.sendRunning = source["sendRunning"];
 	        this.receiveRunning = source["receiveRunning"];
+	        this.vpnServerRunning = source["vpnServerRunning"];
 	        this.goncPath = source["goncPath"];
 	        this.localHTTPUrl = source["localHTTPUrl"];
 	        this.downloading = source["downloading"];
@@ -114,6 +116,9 @@ export namespace main {
 	    goncPath: string;
 	    downloadSubPath: string;
 	    useUDP: boolean;
+	    upstream: string;
+	    dnsForward: string;
+	    extraArgs: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new TransferRequest(source);
@@ -128,6 +133,9 @@ export namespace main {
 	        this.goncPath = source["goncPath"];
 	        this.downloadSubPath = source["downloadSubPath"];
 	        this.useUDP = source["useUDP"];
+	        this.upstream = source["upstream"];
+	        this.dnsForward = source["dnsForward"];
+	        this.extraArgs = source["extraArgs"];
 	    }
 	}
 

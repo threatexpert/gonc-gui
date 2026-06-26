@@ -16,8 +16,9 @@ import (
 type Mode string
 
 const (
-	ModeSend    Mode = "send"
-	ModeReceive Mode = "receive"
+	ModeSend      Mode = "send"
+	ModeReceive   Mode = "receive"
+	ModeVPNServer Mode = "vpnServer"
 )
 
 type Request struct {
@@ -28,6 +29,9 @@ type Request struct {
 	DownloadSubPath string
 	UseUDP          bool
 	ReportURL       string
+	Upstream        string
+	DNSForward      string
+	ExtraArgs       string
 }
 
 type Event struct {
@@ -182,10 +186,56 @@ func buildArgs(req Request) ([]string, error) {
 		args = append(args, req.SharePaths...)
 	case ModeReceive:
 		args = append(args, "-httplocal")
+	case ModeVPNServer:
+		args = append(args, "-k", "-W", "-P")
+		mux := ":mux linkagent"
+		if upstream := strings.TrimSpace(req.Upstream); upstream != "" {
+			mux += " -x " + upstream
+		}
+		if dnsForward := strings.TrimSpace(req.DNSForward); dnsForward != "" {
+			mux += " -dns " + dnsForward
+		}
+		args = append(args, "-e", mux)
+		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
+			args = append(args, splitExtraArgs(extraArgs)...)
+		}
 	default:
 		return nil, fmt.Errorf("unknown mode: %s", req.Mode)
 	}
 	return args, nil
+}
+
+func splitExtraArgs(extraArgs string) []string {
+	var args []string
+	var current strings.Builder
+	inToken := false
+	var quote rune
+	for _, r := range extraArgs {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote = r
+			inToken = true
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			if inToken {
+				args = append(args, current.String())
+				current.Reset()
+				inToken = false
+			}
+		default:
+			current.WriteRune(r)
+			inToken = true
+		}
+	}
+	if inToken {
+		args = append(args, current.String())
+	}
+	return args
 }
 
 var localHTTPPattern = regexp.MustCompile(`http://127\.0\.0\.1:\d+`)

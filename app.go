@@ -30,6 +30,7 @@ type App struct {
 	mu                  sync.Mutex
 	sendRunner          *goncrunner.Runner
 	receiveRunner       *goncrunner.Runner
+	vpnServerRunner     *goncrunner.Runner
 	reportServer        *http.Server
 	reportURL           string
 	receiveLocalHTTPURL string
@@ -45,16 +46,20 @@ type TransferRequest struct {
 	GoncPath        string   `json:"goncPath"`
 	DownloadSubPath string   `json:"downloadSubPath"`
 	UseUDP          bool     `json:"useUDP"`
+	Upstream        string   `json:"upstream"`
+	DNSForward      string   `json:"dnsForward"`
+	ExtraArgs       string   `json:"extraArgs"`
 }
 
 type AppStatus struct {
-	Running        bool   `json:"running"`
-	SendRunning    bool   `json:"sendRunning"`
-	ReceiveRunning bool   `json:"receiveRunning"`
-	GoncPath       string `json:"goncPath"`
-	LocalHTTPURL   string `json:"localHTTPUrl"`
-	Downloading    bool   `json:"downloading"`
-	DefaultSaveDir string `json:"defaultSaveDir"`
+	Running          bool   `json:"running"`
+	SendRunning      bool   `json:"sendRunning"`
+	ReceiveRunning   bool   `json:"receiveRunning"`
+	VPNServerRunning bool   `json:"vpnServerRunning"`
+	GoncPath         string `json:"goncPath"`
+	LocalHTTPURL     string `json:"localHTTPUrl"`
+	Downloading      bool   `json:"downloading"`
+	DefaultSaveDir   string `json:"defaultSaveDir"`
 }
 
 type P2PStatusReport struct {
@@ -78,8 +83,9 @@ type RemoteListResponse struct {
 
 func NewApp() *App {
 	return &App{
-		sendRunner:    goncrunner.New(),
-		receiveRunner: goncrunner.New(),
+		sendRunner:      goncrunner.New(),
+		receiveRunner:   goncrunner.New(),
+		vpnServerRunner: goncrunner.New(),
 	}
 }
 
@@ -114,18 +120,20 @@ func (a *App) Status() AppStatus {
 	path, _ := a.LocateGonc("")
 	sendRunning := a.sendRunner.IsRunning()
 	receiveRunning := a.receiveRunner.IsRunning()
+	vpnServerRunning := a.vpnServerRunner.IsRunning()
 	a.mu.Lock()
 	localURL := a.receiveLocalHTTPURL
 	downloading := a.downloadCancel != nil
 	a.mu.Unlock()
 	return AppStatus{
-		Running:        sendRunning || receiveRunning,
-		SendRunning:    sendRunning,
-		ReceiveRunning: receiveRunning,
-		GoncPath:       path,
-		LocalHTTPURL:   localURL,
-		Downloading:    downloading,
-		DefaultSaveDir: defaultSaveDir(),
+		Running:          sendRunning || receiveRunning || vpnServerRunning,
+		SendRunning:      sendRunning,
+		ReceiveRunning:   receiveRunning,
+		VPNServerRunning: vpnServerRunning,
+		GoncPath:         path,
+		LocalHTTPURL:     localURL,
+		Downloading:      downloading,
+		DefaultSaveDir:   defaultSaveDir(),
 	}
 }
 
@@ -172,6 +180,9 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		DownloadSubPath: req.DownloadSubPath,
 		UseUDP:          req.UseUDP,
 		ReportURL:       reportURL,
+		Upstream:        req.Upstream,
+		DNSForward:      req.DNSForward,
+		ExtraArgs:       req.ExtraArgs,
 	}, func(event goncrunner.Event) {
 		event.Mode = string(mode)
 		if mode == goncrunner.ModeReceive && event.Type == "local_http" && event.LocalURL != "" {
@@ -214,7 +225,7 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 
 func (a *App) stopAllTransfers(requireRunning bool) error {
 	var firstErr error
-	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive} {
+	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive, goncrunner.ModeVPNServer} {
 		if err := a.stopTransfer(mode, requireRunning); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -352,6 +363,8 @@ func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
 		return a.sendRunner, nil
 	case goncrunner.ModeReceive:
 		return a.receiveRunner, nil
+	case goncrunner.ModeVPNServer:
+		return a.vpnServerRunner, nil
 	default:
 		return nil, errors.New("unknown mode: " + string(mode))
 	}

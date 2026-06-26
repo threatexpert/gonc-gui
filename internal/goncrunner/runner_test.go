@@ -1,6 +1,9 @@
 package goncrunner
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseTrafficWithConnectionCount(t *testing.T) {
 	line := "IN: 74.1 KiB (75891 bytes), 0.0 B/s | OUT: 145.9 MiB (152976138 bytes), 64.0 KiB/s | 2 | 00:07:27"
@@ -32,5 +35,32 @@ func TestParseTrafficWithoutConnectionCount(t *testing.T) {
 	line := "IN: 74.1 KiB (75891 bytes), 0.0 B/s | OUT: 145.9 MiB (152976138 bytes), 64.0 KiB/s | 00:07:27"
 	if _, ok := parseTraffic(line); !ok {
 		t.Fatal("parseTraffic returned false")
+	}
+}
+
+func TestBuildArgsVPNServer(t *testing.T) {
+	args, err := buildArgs(Request{
+		Mode:       ModeVPNServer,
+		Password:   "pass1234",
+		UseUDP:     true,
+		ReportURL:  "http://127.0.0.1:1234/p2p-report?side=vpnServer",
+		Upstream:   "socks5://127.0.0.1:1080",
+		DNSForward: "8.8.8.8:53",
+		ExtraArgs:  `-plain -x "socks5://with space"`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-p2p", "pass1234",
+		"-u",
+		"-p2p-report-url", "http://127.0.0.1:1234/p2p-report?side=vpnServer",
+		"-k", "-W", "-P",
+		"-e", ":mux linkagent -x socks5://127.0.0.1:1080 -dns 8.8.8.8:53",
+		"-plain",
+		"-x", "socks5://with space",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }

@@ -491,6 +491,9 @@ public final class GoncVpnService extends VpnService {
             public void p2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid) {
                 GoncVpnState.setP2PReport(status, network, mode, peer);
                 log("info", "P2P " + emptyDash(status) + " " + emptyDash(network) + " " + emptyDash(mode) + " " + emptyDash(peer));
+                if (isStopRequested()) {
+                    return;
+                }
                 if ("connected".equalsIgnoreCase(status)) {
                     markConnected();
                 } else {
@@ -676,8 +679,16 @@ public final class GoncVpnService extends VpnService {
             }
         } catch (RuntimeException ignored) {
         }
+        cancelNotification();
         if (stopSelfWhenDone) {
             stopSelf();
+        }
+    }
+
+    private void cancelNotification() {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.cancel(NOTIFICATION_ID);
         }
     }
 
