@@ -195,13 +195,7 @@ final class VpnClientController {
                     2,
                     value -> currentProfile().dnsServers = value
             ), u.blockParams(u.dp(10)));
-            card.addView(multilineField(
-                    string(R.string.vpn_route_cidrs),
-                    string(R.string.vpn_route_cidrs_hint),
-                    currentProfile().routeCidrs,
-                    4,
-                    value -> currentProfile().routeCidrs = value
-            ), u.blockParams(u.dp(10)));
+            card.addView(routeCidrsField(), u.blockParams(u.dp(10)));
         }
         return card;
     }
@@ -423,6 +417,41 @@ final class VpnClientController {
         TextView desc = u.text(string(R.string.vpn_extra_args_desc), 12, u.muted(), Typeface.NORMAL);
         desc.setPadding(u.dp(4), u.dp(4), 0, 0);
         box.addView(desc);
+        return box;
+    }
+
+    private View routeCidrsField() {
+        UiKit u = host.ui();
+        LinearLayout box = u.column();
+        box.addView(multilineField(
+                string(R.string.vpn_route_cidrs),
+                string(R.string.vpn_route_cidrs_hint),
+                currentProfile().routeCidrs,
+                4,
+                value -> currentProfile().routeCidrs = value
+        ));
+
+        LinearLayout actions = u.row();
+        actions.setGravity(Gravity.RIGHT);
+        Button global = u.compactGhostButton(string(R.string.vpn_route_fill_global));
+        global.setTextColor(u.muted());
+        global.setOnClickListener(v -> {
+            currentProfile().routeCidrs = VpnProfile.DEFAULT_VPN_ROUTES;
+            host.requestRender();
+        });
+        actions.addView(global, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(32)));
+
+        Button privateLan = u.compactGhostButton(string(R.string.vpn_route_fill_private));
+        privateLan.setTextColor(u.muted());
+        privateLan.setOnClickListener(v -> {
+            currentProfile().routeCidrs = VpnProfile.PRIVATE_LAN_ROUTES;
+            host.requestRender();
+        });
+        LinearLayout.LayoutParams privateParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(32));
+        privateParams.setMargins(u.dp(6), 0, 0, 0);
+        actions.addView(privateLan, privateParams);
+
+        box.addView(actions, u.blockParams(u.dp(4)));
         return box;
     }
 

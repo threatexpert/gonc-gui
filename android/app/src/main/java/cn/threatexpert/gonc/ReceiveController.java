@@ -1149,7 +1149,7 @@ final class ReceiveController {
             }
 
             @Override
-            public void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
+            public void onP2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid) {
                 host.mainHandler().post(() -> {
                     if (!isActiveRun(runId)) {
                         return;

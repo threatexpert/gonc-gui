@@ -68,7 +68,7 @@
     <string name="vpn_status_connecting">VPN 连接中</string>
     <string name="vpn_status_connected">VPN 已连接</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
-    <string name="vpn_route_ipv6_hint">开启后允许 IPv6 地址和 IPv6 路由生效。网络 IPv6 或 DNS 异常时可以关闭。</string>
+    <string name="vpn_route_ipv6_hint">开启后先检测远程 IPv6，可用时才添加 IPv6 路由。</string>
     <string name="vpn_endpoint">SOCKS5 入口</string>
     <string name="vpn_profile_settings">VPN 配置</string>
     <string name="vpn_profile_default_name">默认配置</string>
@@ -87,9 +87,11 @@
     <string name="vpn_profile_name_hint">配置名称</string>
     <string name="vpn_active_profile">配置：%1$s</string>
     <string name="vpn_dns_servers">DNS</string>
-    <string name="vpn_dns_hint">每行一个 DNS 服务器</string>
+    <string name="vpn_dns_hint">每行一个 DNS 服务器；留空会使用 Google DNS。</string>
     <string name="vpn_route_cidrs">路由 CIDR</string>
-    <string name="vpn_route_cidrs_hint">每行一个 CIDR，例如 0.0.0.0/1</string>
+    <string name="vpn_route_cidrs_hint">每行一个 CIDR；留空会使用全局路由。</string>
+    <string name="vpn_route_fill_global">全局路由</string>
+    <string name="vpn_route_fill_private">常见内网</string>
     <string name="start_vpn">开始 VPN</string>
     <string name="vpn_connect">连接</string>
     <string name="vpn_link_config">link 配置</string>
@@ -143,6 +145,12 @@
     <string name="network">网络</string>
     <string name="connection_route">连接方式</string>
     <string name="peer">对端</string>
+    <string name="peer_ipv6">对端 IPv6 出口</string>
+    <string name="peer_ipv6_disabled">未启用</string>
+    <string name="peer_ipv6_waiting">等待 P2P</string>
+    <string name="peer_ipv6_checking">检测中</string>
+    <string name="peer_ipv6_available">可用</string>
+    <string name="peer_ipv6_unavailable">不可用</string>
     <string name="file_endpoint">文件服务入口</string>
     <string name="not_selected">未选择</string>
     <string name="default_save_location">下载/Gonc</string>

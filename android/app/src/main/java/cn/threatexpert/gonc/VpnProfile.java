@@ -9,6 +9,7 @@ import org.json.JSONObject;
 final class VpnProfile {
     static final String DEFAULT_VPN_DNS = "8.8.8.8\n2001:4860:4860::8888";
     static final String DEFAULT_VPN_ROUTES = "0.0.0.0/1\n128.0.0.0/1\n::/0";
+    static final String PRIVATE_LAN_ROUTES = "10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16";
 
     String name;
     String passphrase;

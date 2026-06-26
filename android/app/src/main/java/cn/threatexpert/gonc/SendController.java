@@ -419,7 +419,7 @@ final class SendController {
             }
 
             @Override
-            public void onP2PReport(String topic, String reportStatus, String network, String mode, String peer, long timestamp, long pid) {
+            public void onP2PReport(String topic, String side, String reportStatus, String network, String mode, String peer, long timestamp, long pid) {
                 host.mainHandler().post(() -> {
                     if (runId != id || session == null) {
                         return;

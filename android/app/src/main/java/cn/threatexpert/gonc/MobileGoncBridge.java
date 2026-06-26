@@ -88,8 +88,8 @@ final class MobileGoncBridge implements GoncBridge {
             }
 
             @Override
-            public void p2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
-                callback.onP2PReport(topic, status, network, mode, peer, timestamp, pid);
+            public void p2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid) {
+                callback.onP2PReport(topic, side, status, network, mode, peer, timestamp, pid);
             }
 
             @Override

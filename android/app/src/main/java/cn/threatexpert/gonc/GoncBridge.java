@@ -20,7 +20,7 @@ interface GoncBridge {
     interface EventCallback {
         void onEvent(String level, String message);
 
-        void onP2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid);
+        void onP2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid);
 
         void onReady(String endpoint);
 

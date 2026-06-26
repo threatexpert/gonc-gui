@@ -17,6 +17,8 @@ import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import mobilegonc.Callback;
 import mobilegonc.Mobilegonc;
@@ -95,29 +97,9 @@ public final class GoncVpnService extends VpnService {
         }
         lastGoncMessage = "";
         GoncVpnState.setStatus(GoncVpnState.CONNECTING);
+        GoncVpnState.setPeerIpv6(tunnelOnly ? "-" : (enableIpv6 ? "waiting" : "disabled"));
         log("info", tunnelOnly ? "Starting SOCKS5 tunnel (tunnel only)" : "Starting VPN tunnel");
 
-        ParcelFileDescriptor tun = null;
-        if (!tunnelOnly) {
-            try {
-                GoncCrashReporter.stage(this, "establish VPN interface");
-                tun = establishInterface(enableIpv6, dnsServers, routeCidrs);
-                if (tun == null) {
-                    throw new IllegalStateException("Could not establish VPN interface");
-                }
-                synchronized (lock) {
-                    vpnInterface = tun;
-                }
-            } catch (Throwable error) {
-                GoncCrashReporter.recordNonFatal(this, "VPN establish failed", error);
-                log("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                GoncVpnState.setError(error.getMessage() == null ? error.toString() : error.getMessage());
-                stopVpn();
-                return;
-            }
-        }
-
-        ParcelFileDescriptor establishedTun = tun;
         Thread worker = new Thread(() -> {
             try {
                 if (isStopRequested()) {
@@ -127,13 +109,13 @@ public final class GoncVpnService extends VpnService {
                 String effectiveLink = resolveLinkConfig(linkConfig);
                 String socks5Endpoint = "socks5://" + socks5AddressFromLink(effectiveLink);
                 log("info", "Using link config " + effectiveLink);
-                GoncVpnState.setEndpoint(socks5Endpoint);
 
                 if (isStopRequested()) {
                     return;
                 }
                 GoncCrashReporter.stage(this, "start gonc tunnel");
-                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback());
+                TunnelReadySignal tunnelReady = new TunnelReadySignal();
+                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback(tunnelReady));
                 boolean stopSessionNow = false;
                 synchronized (lock) {
                     if (stopRequested) {
@@ -155,8 +137,33 @@ public final class GoncVpnService extends VpnService {
 
                 if (tunnelOnly) {
                     // No system VPN interface / tun2socks: the SOCKS5 tunnel is the whole
-                    // job. We report "connected" once the P2P link is up (vpnCallback).
+                    // job. We report "connected" once gonc reports the SOCKS5 endpoint ready.
+                    GoncVpnState.setPeerIpv6("-");
                     return;
+                }
+
+                GoncCrashReporter.stage(this, "wait for SOCKS5 endpoint before VPN interface");
+                String readySocks5Endpoint = waitForSocks5Ready(tunnelReady);
+                if (readySocks5Endpoint.isEmpty()) {
+                    return;
+                }
+
+                boolean effectiveIpv6 = resolveEffectiveIpv6(enableIpv6, readySocks5Endpoint);
+                if (isStopRequested()) {
+                    return;
+                }
+
+                GoncCrashReporter.stage(this, "establish VPN interface");
+                ParcelFileDescriptor establishedTun = establishInterface(effectiveIpv6, dnsServers, routeCidrs);
+                if (establishedTun == null) {
+                    throw new IllegalStateException("Could not establish VPN interface");
+                }
+                synchronized (lock) {
+                    if (stopRequested) {
+                        closeParcelQuietly(establishedTun);
+                        return;
+                    }
+                    vpnInterface = establishedTun;
                 }
 
                 GoncCrashReporter.stage(this, "detach TUN fd for tun2socks");
@@ -176,7 +183,7 @@ public final class GoncVpnService extends VpnService {
                 boolean startedTun2Socks = false;
                 boolean shouldStopAfterStart = false;
                 try {
-                    Mobilegonc.startTun2Socks(tun2socksFd, socks5Endpoint, "tun0", MTU, "warn");
+                    Mobilegonc.startTun2Socks(tun2socksFd, readySocks5Endpoint, "tun0", MTU, "warn");
                     startedTun2Socks = true;
                     // Step 3: close the original low-numbered fd via bionic so Android's
                     // fdsan tables are properly updated. Go already cleared the PFD tag
@@ -204,6 +211,36 @@ public final class GoncVpnService extends VpnService {
             }
         }, "gonc-vpn-start");
         worker.start();
+    }
+
+    private String waitForSocks5Ready(TunnelReadySignal tunnelReady) throws InterruptedException {
+        log("info", "Waiting for SOCKS5 endpoint before starting system VPN");
+        while (!isStopRequested()) {
+            String endpoint = tunnelReady.awaitReadyEndpoint(250);
+            if (!endpoint.isEmpty()) {
+                log("info", "SOCKS5 endpoint ready; starting remote IPv6 check and system VPN");
+                return endpoint;
+            }
+        }
+        return "";
+    }
+
+    private boolean resolveEffectiveIpv6(boolean requestedIpv6, String socks5Endpoint) {
+        if (!requestedIpv6) {
+            GoncVpnState.setPeerIpv6("disabled");
+            return false;
+        }
+        GoncVpnState.setPeerIpv6("checking");
+        log("info", "Checking remote IPv6 availability");
+        RemoteIpv6Probe.Result result = RemoteIpv6Probe.check(socks5Endpoint, RemoteIpv6Probe.DEFAULT_TIMEOUT_MS);
+        if (result.available) {
+            GoncVpnState.setPeerIpv6("available");
+            log("info", "Remote IPv6 is available via " + result.detail + "; enabling IPv6 routes");
+            return true;
+        }
+        GoncVpnState.setPeerIpv6("unavailable");
+        log("warn", "Remote IPv6 is unavailable; IPv6 routes disabled (" + result.detail + ")");
+        return false;
     }
 
     private boolean isStopRequested() {
@@ -332,6 +369,15 @@ public final class GoncVpnService extends VpnService {
         }
     }
 
+    private void closeParcelQuietly(ParcelFileDescriptor descriptor) {
+        try {
+            if (descriptor != null) {
+                descriptor.close();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private ParcelFileDescriptor establishInterface(boolean enableIpv6, String dnsServers, String routeCidrs) throws Exception {
         GoncCrashReporter.stage(this, "vpn builder create");
         Builder builder = new Builder();
@@ -431,7 +477,7 @@ public final class GoncVpnService extends VpnService {
         return source.trim().split("\\r?\\n");
     }
 
-    private Callback vpnCallback() {
+    private Callback vpnCallback(TunnelReadySignal tunnelReady) {
         return new Callback() {
             @Override
             public void event(String level, String message) {
@@ -442,7 +488,7 @@ public final class GoncVpnService extends VpnService {
             }
 
             @Override
-            public void p2PReport(String topic, String status, String network, String mode, String peer, long timestamp, long pid) {
+            public void p2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid) {
                 GoncVpnState.setP2PReport(status, network, mode, peer);
                 log("info", "P2P " + emptyDash(status) + " " + emptyDash(network) + " " + emptyDash(mode) + " " + emptyDash(peer));
                 if ("connected".equalsIgnoreCase(status)) {
@@ -457,6 +503,7 @@ public final class GoncVpnService extends VpnService {
             public void ready(String endpoint) {
                 if (endpoint != null && endpoint.startsWith("socks5://")) {
                     GoncVpnState.setEndpoint(endpoint);
+                    tunnelReady.markReady(endpoint);
                     markConnected();
                 }
             }
@@ -479,6 +526,23 @@ public final class GoncVpnService extends VpnService {
                 stopVpn();
             }
         };
+    }
+
+    private static final class TunnelReadySignal {
+        private final CountDownLatch ready = new CountDownLatch(1);
+        private volatile String endpoint = "";
+
+        void markReady(String nextEndpoint) {
+            endpoint = nextEndpoint == null ? "" : nextEndpoint.trim();
+            ready.countDown();
+        }
+
+        String awaitReadyEndpoint(long timeoutMs) throws InterruptedException {
+            if (ready.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                return endpoint == null ? "" : endpoint;
+            }
+            return "";
+        }
     }
 
     private boolean hasActiveResourcesLocked() {

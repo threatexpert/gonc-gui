@@ -36,6 +36,7 @@ final class GoncVpnState {
     private static String network = "-";
     private static String route = "-";
     private static String peer = "-";
+    private static String peerIpv6 = "-";
     private static String profileName = "";
     private static Listener listener;
     private static long nextLogId;
@@ -89,6 +90,10 @@ final class GoncVpnState {
         return peer;
     }
 
+    static synchronized String peerIpv6() {
+        return peerIpv6;
+    }
+
     static synchronized String profileName() {
         return profileName;
     }
@@ -119,6 +124,7 @@ final class GoncVpnState {
             network = "-";
             route = "-";
             peer = "-";
+            peerIpv6 = "-";
             profileName = nextProfileName == null ? "" : nextProfileName.trim();
             snapshot = listener;
         }
@@ -140,6 +146,7 @@ final class GoncVpnState {
                 network = "-";
                 route = "-";
                 peer = "-";
+                peerIpv6 = "-";
                 profileName = "";
             }
             snapshot = listener;
@@ -177,6 +184,17 @@ final class GoncVpnState {
             if (nextPeer != null && !nextPeer.trim().isEmpty()) {
                 peer = nextPeer.trim();
             }
+            snapshot = listener;
+        }
+        if (snapshot != null) {
+            snapshot.onVpnStateChanged();
+        }
+    }
+
+    static void setPeerIpv6(String nextPeerIpv6) {
+        Listener snapshot;
+        synchronized (GoncVpnState.class) {
+            peerIpv6 = nextPeerIpv6 == null || nextPeerIpv6.trim().isEmpty() ? "-" : nextPeerIpv6.trim();
             snapshot = listener;
         }
         if (snapshot != null) {

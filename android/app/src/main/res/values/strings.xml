@@ -68,7 +68,7 @@
     <string name="vpn_status_connecting">Connecting VPN</string>
     <string name="vpn_status_connected">VPN connected</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
-    <string name="vpn_route_ipv6_hint">Adds fd00::2 and ::/0. Disable it if a network has broken IPv6 or DNS.</string>
+    <string name="vpn_route_ipv6_hint">When enabled, the app checks remote IPv6 first and only adds IPv6 routes if available.</string>
     <string name="vpn_endpoint">SOCKS5 endpoint</string>
     <string name="vpn_profile_settings">VPN profile</string>
     <string name="vpn_profile_default_name">Default</string>
@@ -87,9 +87,11 @@
     <string name="vpn_profile_name_hint">Profile name</string>
     <string name="vpn_active_profile">Profile: %1$s</string>
     <string name="vpn_dns_servers">DNS</string>
-    <string name="vpn_dns_hint">One DNS server per line</string>
+    <string name="vpn_dns_hint">One DNS server per line. Leave blank to use Google DNS.</string>
     <string name="vpn_route_cidrs">Route CIDR</string>
-    <string name="vpn_route_cidrs_hint">One CIDR per line, for example 0.0.0.0/1</string>
+    <string name="vpn_route_cidrs_hint">One CIDR per line. Leave blank to use global routing.</string>
+    <string name="vpn_route_fill_global">Global routes</string>
+    <string name="vpn_route_fill_private">Private LANs</string>
     <string name="start_vpn">Start VPN</string>
     <string name="vpn_connect">Connect</string>
     <string name="vpn_link_config">Link config</string>
@@ -144,6 +146,12 @@
     <string name="network">Network</string>
     <string name="connection_route">Route</string>
     <string name="peer">Peer</string>
+    <string name="peer_ipv6">Peer IPv6 exit</string>
+    <string name="peer_ipv6_disabled">Not enabled</string>
+    <string name="peer_ipv6_waiting">Waiting for P2P</string>
+    <string name="peer_ipv6_checking">Checking</string>
+    <string name="peer_ipv6_available">Available</string>
+    <string name="peer_ipv6_unavailable">Unavailable</string>
     <string name="file_endpoint">File service endpoint</string>
     <string name="not_selected">Not selected</string>
     <string name="default_save_location">Downloads/Gonc</string>

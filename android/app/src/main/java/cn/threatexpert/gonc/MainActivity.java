@@ -117,6 +117,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private TextView activityNetworkValueView;
     private TextView activityRouteValueView;
     private TextView activityPeerValueView;
+    private TextView activityPeerIpv6ValueView;
     private TextView activityEndpointValueView;
 
     private static final int METRIC_REF_NONE = 0;
@@ -127,6 +128,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private static final int METRIC_REF_PEER = 5;
     private static final int METRIC_REF_ENDPOINT = 6;
     private static final int METRIC_REF_ROUTE = 7;
+    private static final int METRIC_REF_PEER_IPV6 = 8;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -650,6 +652,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         box.addView(row2, blockParams(dp(8)));
         box.addView(metricBox(getString(R.string.peer), emptyDash(metrics.peer), METRIC_REF_PEER), blockParams(dp(8)));
+        if (vpnMode) {
+            box.addView(metricBox(getString(R.string.peer_ipv6), displayPeerIpv6(GoncVpnState.peerIpv6()), METRIC_REF_PEER_IPV6), blockParams(dp(8)));
+        }
         if (vpnMode && !GoncVpnState.endpoint().trim().isEmpty()) {
             box.addView(metricBox(getString(R.string.vpn_endpoint), GoncVpnState.endpoint(), METRIC_REF_ENDPOINT), blockParams(dp(8)));
         } else if (!receiveController.endpoint().trim().isEmpty()) {
@@ -671,6 +676,8 @@ public final class MainActivity extends Activity implements ModuleHost {
             activityRouteValueView = view;
         } else if (ref == METRIC_REF_PEER) {
             activityPeerValueView = view;
+        } else if (ref == METRIC_REF_PEER_IPV6) {
+            activityPeerIpv6ValueView = view;
         } else if (ref == METRIC_REF_ENDPOINT) {
             activityEndpointValueView = view;
         }
@@ -683,6 +690,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         activityNetworkValueView = null;
         activityRouteValueView = null;
         activityPeerValueView = null;
+        activityPeerIpv6ValueView = null;
         activityEndpointValueView = null;
     }
 
@@ -706,9 +714,32 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (activityPeerValueView != null) {
             activityPeerValueView.setText(emptyDash(metrics.peer));
         }
-        if (activityEndpointValueView != null) {
-            activityEndpointValueView.setText(receiveController.endpoint());
+        if (activityPeerIpv6ValueView != null) {
+            activityPeerIpv6ValueView.setText(displayPeerIpv6(GoncVpnState.peerIpv6()));
         }
+        if (activityEndpointValueView != null) {
+            activityEndpointValueView.setText(vpnMode ? GoncVpnState.endpoint() : receiveController.endpoint());
+        }
+    }
+
+    private String displayPeerIpv6(String value) {
+        String clean = value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("disabled".equals(clean)) {
+            return getString(R.string.peer_ipv6_disabled);
+        }
+        if ("waiting".equals(clean)) {
+            return getString(R.string.peer_ipv6_waiting);
+        }
+        if ("checking".equals(clean)) {
+            return getString(R.string.peer_ipv6_checking);
+        }
+        if ("available".equals(clean)) {
+            return getString(R.string.peer_ipv6_available);
+        }
+        if ("unavailable".equals(clean)) {
+            return getString(R.string.peer_ipv6_unavailable);
+        }
+        return emptyDash(value);
     }
 
     private TextView sectionTitle(String title) {
