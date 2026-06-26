@@ -214,10 +214,10 @@ final class VpnServerController {
             card.addView(u.sectionDivider(), u.dividerParams(u.dp(12)));
             card.addView(protocolToggle(), u.blockParams(u.dp(10)));
             card.addView(configField(string(R.string.vpn_server_upstream),
-                    string(R.string.vpn_server_upstream_hint), null, upstream,
+                    string(R.string.vpn_server_upstream_hint), string(R.string.vpn_server_upstream_desc), upstream,
                     value -> upstream = value, upstreamHistory), u.blockParams(u.dp(10)));
             card.addView(configField(string(R.string.vpn_server_dns),
-                    string(R.string.vpn_server_dns_hint), null, dnsForward,
+                    string(R.string.vpn_server_dns_hint), string(R.string.vpn_server_dns_desc), dnsForward,
                     value -> dnsForward = value, dnsHistory), u.blockParams(u.dp(10)));
             card.addView(configField(string(R.string.vpn_extra_args),
                     string(R.string.vpn_extra_args_hint), string(R.string.vpn_extra_args_desc), extraArgs,

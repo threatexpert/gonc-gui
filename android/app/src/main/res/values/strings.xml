@@ -97,8 +97,10 @@
     <string name="vpn_link_config_desc">Leave blank to auto-pick a local port. For the full format, see gonc\'s mux link.</string>
     <string name="vpn_server_upstream">Upstream proxy</string>
     <string name="vpn_server_upstream_hint">socks5://host:port or http://host:port</string>
+    <string name="vpn_server_upstream_desc">Sets the VPN traffic exit. When blank, this device is the exit.</string>
     <string name="vpn_server_dns">UDP2TCP DNS</string>
     <string name="vpn_server_dns_hint">8.8.8.8</string>
+    <string name="vpn_server_dns_desc">If the upstream proxy cannot proxy UDP, this must be set, otherwise clients cannot resolve DNS.</string>
     <string name="vpn_extra_args">Extra args</string>
     <string name="vpn_extra_args_hint">Space-separated extra args</string>
     <string name="vpn_extra_args_desc">Appended verbatim to the gonc command line, space-separated. See the gonc docs.</string>
