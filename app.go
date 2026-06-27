@@ -14,6 +14,7 @@ import (
 
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/taskbar"
 	"gonc-gui/internal/vpnprofile"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -117,6 +118,18 @@ func (a *App) LoadVPNProfiles() (VPNProfileStore, error) {
 
 func (a *App) SaveVPNProfiles(store VPNProfileStore) error {
 	return vpnprofile.Save(store)
+}
+
+func (a *App) SetTaskbarProgress(doneBytes, totalBytes int64) {
+	if doneBytes <= 0 || totalBytes <= 0 || doneBytes >= totalBytes {
+		taskbar.Clear()
+		return
+	}
+	taskbar.SetProgress(uint64(doneBytes), uint64(totalBytes))
+}
+
+func (a *App) ClearTaskbarProgress() {
+	taskbar.Clear()
 }
 
 func (a *App) Status() AppStatus {

@@ -12,6 +12,8 @@ final class TransferMetrics {
     String peer = "-";
     int connectedCount;
     int connectingCount;
+    long inBytes;
+    long outBytes;
     double inBps;
     double outBps;
     long lastTrafficMs;
@@ -24,6 +26,8 @@ final class TransferMetrics {
         peer = "-";
         connectedCount = 0;
         connectingCount = 0;
+        inBytes = 0;
+        outBytes = 0;
         inBps = 0;
         outBps = 0;
         lastTrafficMs = 0;
@@ -33,6 +37,8 @@ final class TransferMetrics {
         p2pStatus = "idle";
         connectedCount = 0;
         connectingCount = 0;
+        inBytes = 0;
+        outBytes = 0;
         inBps = 0;
         outBps = 0;
         lastTrafficMs = 0;

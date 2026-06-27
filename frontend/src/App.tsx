@@ -5,6 +5,7 @@ import './App.css';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
+  ClearTaskbarProgress,
   GeneratePassword,
   IsAdministrator,
   LoadVPNProfiles,
@@ -17,9 +18,10 @@ import {
   Status,
   StopHTTPDownload,
   StopTransfer,
+  SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
+import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
 type Lang = 'zh' | 'en';
@@ -31,6 +33,8 @@ type LogEvent = {
   message: string;
   time: string;
   mode?: string;
+  inBytes?: number;
+  outBytes?: number;
   localUrl?: string;
   inBps?: number;
   outBps?: number;
@@ -124,6 +128,7 @@ const appVersion = __APP_VERSION__;
 const vpnProfileQrType = 'gonc.vpn.profile';
 const defaultVpnDNS = '8.8.8.8\n2001:4860:4860::8888';
 const defaultVpnRoutes = '0.0.0.0/1\n128.0.0.0/1\n::/0';
+const privateLanRoutes = '10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16';
 
 const text = {
   zh: {
@@ -170,6 +175,7 @@ const text = {
     directRoute: '直连',
     relayRoute: '中继',
     speed: '速度',
+    sentTotal: '累计发送',
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
@@ -189,7 +195,7 @@ const text = {
     vpnProfileQrHint: '二维码包含完整 VPN 配置和口令。',
     vpnProfileInvalid: '这不是有效的 Gonc VPN 配置二维码。',
     vpnProfileImported: '已导入 VPN 配置',
-    generate: '更换',
+    generate: '随机',
     copy: '复制',
     copyLogs: '复制日志',
     qr: '二维码',
@@ -239,6 +245,8 @@ const text = {
     vpnDnsServersPlaceholder: '每行一个 DNS 服务器；留空会使用 Google DNS。',
     routeCidrs: '路由 CIDR',
     routeCidrsPlaceholder: '留空为全局：0.0.0.0/1 和 128.0.0.0/1',
+    routeFillGlobal: '全局路由',
+    routeFillPrivate: '常见内网',
     linkConfig: 'SOCKS5 入口',
     linkConfigPlaceholder: '留空自动选择本地端口',
     remoteFiles: '对方分享的文件',
@@ -268,6 +276,8 @@ const text = {
     file: '文件',
     dir: '目录',
     modifiedTime: '修改时间',
+    vpnTunnelPausedTitle: 'VPN 隧道已断开',
+    vpnTunnelPausedBody: '正在等待隧道重连，系统路由已临时暂停。',
     shareUpdateFailed: '更新分享列表失败。',
     weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
   },
@@ -315,6 +325,7 @@ const text = {
     directRoute: 'Direct',
     relayRoute: 'Relay',
     speed: 'Speed',
+    sentTotal: 'Sent total',
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
@@ -334,7 +345,7 @@ const text = {
     vpnProfileQrHint: 'The QR code contains the full VPN profile and passphrase.',
     vpnProfileInvalid: 'This is not a valid Gonc VPN profile QR code.',
     vpnProfileImported: 'Imported VPN profile',
-    generate: 'Change',
+    generate: 'Random',
     copy: 'Copy',
     copyLogs: 'Copy Logs',
     qr: 'QR',
@@ -384,6 +395,8 @@ const text = {
     vpnDnsServersPlaceholder: 'One DNS server per line. Leave blank to use Google DNS.',
     routeCidrs: 'Route CIDR',
     routeCidrsPlaceholder: 'Blank means global: 0.0.0.0/1 and 128.0.0.0/1',
+    routeFillGlobal: 'Global routes',
+    routeFillPrivate: 'Private LANs',
     linkConfig: 'SOCKS5 Entry',
     linkConfigPlaceholder: 'Blank picks a local port automatically',
     remoteFiles: 'Peer Shared Files',
@@ -413,6 +426,8 @@ const text = {
     file: 'FILE',
     dir: 'DIR',
     modifiedTime: 'Modified',
+    vpnTunnelPausedTitle: 'VPN tunnel disconnected',
+    vpnTunnelPausedBody: 'Waiting for the tunnel to reconnect. System routes are paused temporarily.',
     shareUpdateFailed: 'Failed to update shared list.',
     weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
   }
@@ -480,6 +495,8 @@ function App() {
   const [isAdministrator, setIsAdministrator] = useState(false);
   const scanImgRef = useRef<HTMLImageElement | null>(null);
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
+  const notificationsReady = useRef(false);
+  const vpnDisconnectNotified = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
@@ -509,6 +526,7 @@ function App() {
   const transferSpeed = mode === 'send'
     ? freshSpeed(sendTraffic?.time, sendTraffic?.outBps, nowTick)
     : (mode === 'vpnServer' ? freshSpeed(vpnServerTraffic?.time, vpnServerTraffic?.outBps, nowTick) : (mode === 'vpnClient' ? Math.max(freshSpeed(vpnClientTraffic?.time, vpnClientTraffic?.inBps, nowTick), freshSpeed(vpnClientTraffic?.time, vpnClientTraffic?.outBps, nowTick)) : activeSpeed));
+  const sendTotalBytes = sendTraffic?.outBytes || 0;
   const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
   const vpnClientStatus = receiveConnectionStatus(vpnClientP2PReport, vpnClientRunning, false, t);
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
@@ -563,6 +581,24 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    InitializeNotifications()
+      .then(() => IsNotificationAvailable())
+      .then(async (available) => {
+        if (!available || cancelled) {
+          return;
+        }
+        notificationsReady.current = await RequestNotificationAuthorization().catch(() => true);
+      })
+      .catch(() => {
+        notificationsReady.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     refreshStatus();
     EventsOn('gonc:event', (event: LogEvent) => {
       if (event.type === 'traffic') {
@@ -579,6 +615,13 @@ function App() {
       }
       if (event.type === 'peer_ipv6' && event.mode === 'vpnClient') {
         setVpnClientPeerIPv6(event.peerIpv6 || event.message || '');
+      }
+      if (event.mode === 'vpnClient') {
+        if (event.message.includes('pausing Windows VPN routes')) {
+          notifyVpnTunnelPaused();
+        } else if (event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
+          vpnDisconnectNotified.current = false;
+        }
       }
       setLogs((current) => [...current.slice(-399), event]);
       if (event.mode === 'receive' && event.localUrl) {
@@ -618,10 +661,14 @@ function App() {
     EventsOn('download:event', (event: DownloadEvent) => {
       if (event.type === 'progress') {
         setDownloadProgress(event);
+        SetTaskbarProgress(event.doneBytes || 0, event.totalBytes || 0).catch(() => undefined);
       } else {
         setLogs((current) => [...current.slice(-399), event]);
       }
       if (event.type === 'status') {
+        if (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error') {
+          ClearTaskbarProgress().catch(() => undefined);
+        }
         refreshStatus();
       }
     });
@@ -961,6 +1008,7 @@ function App() {
       setRemoteListLoading(false);
       setSelectedPaths(new Set());
       setDownloadProgress(null);
+      ClearTaskbarProgress().catch(() => undefined);
       setReceiveTraffic(null);
       setCurrentRemotePath('/');
     } else if (mode === 'vpnServer') {
@@ -970,6 +1018,7 @@ function App() {
       setVpnClientP2PReport(null);
       setVpnClientTraffic(null);
       setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
+      vpnDisconnectNotified.current = false;
     }
     try {
       await StartTransfer({
@@ -1010,6 +1059,7 @@ function App() {
         setReceiveP2PReport((current) => current ? {...current, status: 'stopped'} : null);
         setReceiveTraffic(null);
         setRemoteListLoading(false);
+        ClearTaskbarProgress().catch(() => undefined);
       } else {
         if (mode === 'vpnServer') {
           setVpnServerP2PReports((current) => {
@@ -1194,10 +1244,23 @@ function App() {
     setError('');
     try {
       await StopHTTPDownload();
+      await ClearTaskbarProgress();
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
     }
+  }
+
+  function notifyVpnTunnelPaused() {
+    if (vpnDisconnectNotified.current || !notificationsReady.current) {
+      return;
+    }
+    vpnDisconnectNotified.current = true;
+    SendNotification({
+      id: `vpn-tunnel-paused-${Date.now()}`,
+      title: t.vpnTunnelPausedTitle,
+      body: t.vpnTunnelPausedBody,
+    }).catch(() => undefined);
   }
 
   function appendSharePaths(paths: string[]) {
@@ -1361,31 +1424,31 @@ function App() {
                 />
                 {mode === 'send' ? (
                   <>
-                    <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
                     {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
+                    <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
                     {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : mode === 'receive' ? (
                   <>
-                    {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
+                    {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : mode === 'vpnServer' ? (
                   <>
+                    {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
                     {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
-                    {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
                     {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : (
                   <>
+                    {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
                     {!vpnClientRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     <button className="secondary" disabled={!vpnClientPassword} onClick={copyPassword}>{t.copy}</button>
-                    {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
                     {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!vpnClientPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
@@ -1468,6 +1531,15 @@ function App() {
                       <div className="field-hint"><p>{t.tunnelOnlyHint}</p></div>
                     </div>
                     <div className="field">
+                      <label>{t.linkConfig}</label>
+                      <input
+                        value={vpnClientLinkConfig}
+                        disabled={vpnClientRunning}
+                        onChange={(event) => setVpnProfileField('linkConfig', event.target.value)}
+                        placeholder={t.linkConfigPlaceholder}
+                      />
+                    </div>
+                    <div className="field">
                       <label>{t.vpnDnsServers}</label>
                       <textarea
                         value={vpnClientDNSServers}
@@ -1484,15 +1556,24 @@ function App() {
                         onChange={(event) => setVpnProfileField('routeCidrs', event.target.value)}
                         placeholder={t.routeCidrsPlaceholder}
                       />
-                    </div>
-                    <div className="field">
-                      <label>{t.linkConfig}</label>
-                      <input
-                        value={vpnClientLinkConfig}
-                        disabled={vpnClientRunning}
-                        onChange={(event) => setVpnProfileField('linkConfig', event.target.value)}
-                        placeholder={t.linkConfigPlaceholder}
-                      />
+                      <div className="quiet-actions">
+                        <button
+                          type="button"
+                          className="quiet-action"
+                          disabled={vpnClientRunning || vpnClientTunnelOnly}
+                          onClick={() => setVpnProfileField('routeCidrs', defaultVpnRoutes)}
+                        >
+                          {t.routeFillGlobal}
+                        </button>
+                        <button
+                          type="button"
+                          className="quiet-action"
+                          disabled={vpnClientRunning || vpnClientTunnelOnly}
+                          onClick={() => setVpnProfileField('routeCidrs', privateLanRoutes)}
+                        >
+                          {t.routeFillPrivate}
+                        </button>
+                      </div>
                     </div>
                     <div className="field">
                       <label>{t.extraArgs}</label>
@@ -1670,6 +1751,7 @@ function App() {
               <Metric label={t.network} value={activeP2PReport?.network || '-'} />
               <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
               <Metric label={t.speed} value={formatRate(transferSpeed)} />
+              {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
               {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
             </section>
             <section className="log-pane">

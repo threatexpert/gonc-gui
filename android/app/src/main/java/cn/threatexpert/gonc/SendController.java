@@ -436,7 +436,7 @@ final class SendController {
                     if (runId != id || session == null) {
                         return;
                     }
-                    host.updateMetricsFromTraffic(metrics, inBps, outBps);
+                    host.updateMetricsFromTraffic(metrics, inBytes, outBytes, inBps, outBps);
                     host.requestBackgroundRender();
                     host.refreshForegroundService();
                 });

@@ -137,11 +137,13 @@
     <string name="activity_state_connection_success">Connection established</string>
     <string name="activity_summary_connected">Connected %1$d</string>
     <string name="activity_summary_speed">Speed %1$s</string>
+    <string name="activity_summary_sent_total">Sent %1$s</string>
     <string name="hide">Hide</string>
     <string name="show">Show</string>
     <string name="events_will_appear">Events will appear here.</string>
     <string name="p2p_status">P2P status</string>
     <string name="speed">Speed</string>
+    <string name="sent_total">Sent total</string>
     <string name="connections">Connections</string>
     <string name="network">Network</string>
     <string name="connection_route">Route</string>

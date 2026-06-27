@@ -296,10 +296,23 @@ textarea:focus {
   gap: 10px;
 }
 
+.password-line {
+  flex-wrap: wrap;
+}
+
 .inline input,
 .inline select,
 .password-line input {
   min-width: 0;
+}
+
+.password-line input {
+  flex: 1 1 260px;
+}
+
+.password-line button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .profile-line {
@@ -323,6 +336,34 @@ textarea:focus {
 
 .field-hint p + p {
   margin-top: 2px;
+}
+
+.quiet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.quiet-action {
+  width: auto;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #5c6f87;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.quiet-action:hover:not(:disabled) {
+  background: #edf2f7;
+  color: #2870d8;
+}
+
+.quiet-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .primary {

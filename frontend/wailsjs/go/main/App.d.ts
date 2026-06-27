@@ -5,6 +5,8 @@ import {main} from '../models';
 
 export function CaptureScreen():Promise<string>;
 
+export function ClearTaskbarProgress():Promise<void>;
+
 export function GeneratePassword():Promise<string>;
 
 export function IsAdministrator():Promise<boolean>;
@@ -18,6 +20,8 @@ export function SaveVPNProfiles(arg1:vpnprofile.Store):Promise<void>;
 export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder(arg1:string):Promise<string>;
+
+export function SetTaskbarProgress(arg1:number,arg2:number):Promise<void>;
 
 export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>,arg4:boolean):Promise<void>;
 

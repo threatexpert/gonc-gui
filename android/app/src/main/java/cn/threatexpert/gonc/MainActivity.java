@@ -113,6 +113,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private LinearLayout activityLogContentView;
     private TextView activityP2PStatusValueView;
     private TextView activitySpeedValueView;
+    private TextView activitySentTotalValueView;
     private TextView activityConnectionsValueView;
     private TextView activityNetworkValueView;
     private TextView activityRouteValueView;
@@ -129,6 +130,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private static final int METRIC_REF_ENDPOINT = 6;
     private static final int METRIC_REF_ROUTE = 7;
     private static final int METRIC_REF_PEER_IPV6 = 8;
+    private static final int METRIC_REF_SENT_TOTAL = 9;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -641,6 +643,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         row1.addView(metricBox(getString(R.string.p2p_status), displayStatusLabel(displayStatus(metrics)), METRIC_REF_P2P_STATUS), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         row1.addView(metricBox(getString(R.string.speed), formatRate(currentSpeed(metrics)), METRIC_REF_SPEED), metricParams());
         box.addView(row1);
+        if (sendMode) {
+            box.addView(metricBox(getString(R.string.sent_total), formatBytes(metrics.outBytes), METRIC_REF_SENT_TOTAL), blockParams(dp(8)));
+        }
 
         LinearLayout row2 = row();
         if (!vpnMode && (sendMode || vpnServerMode)) {
@@ -668,6 +673,8 @@ public final class MainActivity extends Activity implements ModuleHost {
             activityP2PStatusValueView = view;
         } else if (ref == METRIC_REF_SPEED) {
             activitySpeedValueView = view;
+        } else if (ref == METRIC_REF_SENT_TOTAL) {
+            activitySentTotalValueView = view;
         } else if (ref == METRIC_REF_CONNECTIONS) {
             activityConnectionsValueView = view;
         } else if (ref == METRIC_REF_NETWORK) {
@@ -686,6 +693,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private void clearActivityMetricRefs() {
         activityP2PStatusValueView = null;
         activitySpeedValueView = null;
+        activitySentTotalValueView = null;
         activityConnectionsValueView = null;
         activityNetworkValueView = null;
         activityRouteValueView = null;
@@ -701,6 +709,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         if (activitySpeedValueView != null) {
             activitySpeedValueView.setText(formatRate(currentSpeed(metrics)));
+        }
+        if (activitySentTotalValueView != null) {
+            activitySentTotalValueView.setText(formatBytes(metrics.outBytes));
         }
         if (activityConnectionsValueView != null) {
             activityConnectionsValueView.setText(String.valueOf(metrics.connectedCount));
@@ -1168,6 +1179,15 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (vpnMode || (!sendMode && !vpnServerMode)) {
             return activityStateLabel(state, metrics) + " | " + speed;
         }
+        if (sendMode) {
+            return activityStateLabel(state, metrics)
+                    + " | "
+                    + getString(R.string.activity_summary_connected, metrics.connectedCount)
+                    + " | "
+                    + speed
+                    + " | "
+                    + getString(R.string.activity_summary_sent_total, formatBytes(metrics.outBytes));
+        }
         return activityStateLabel(state, metrics)
                 + " | "
                 + getString(R.string.activity_summary_connected, metrics.connectedCount)
@@ -1290,14 +1310,20 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (traffic == null) {
             return false;
         }
-        updateMetricsFromTraffic(metrics, traffic.inBps, traffic.outBps);
+        updateMetricsFromTraffic(metrics, -1, -1, traffic.inBps, traffic.outBps);
         return true;
     }
 
     @Override
-    public void updateMetricsFromTraffic(TransferMetrics metrics, double inBps, double outBps) {
+    public void updateMetricsFromTraffic(TransferMetrics metrics, long inBytes, long outBytes, double inBps, double outBps) {
         if (metrics == null) {
             return;
+        }
+        if (inBytes >= 0) {
+            metrics.inBytes = inBytes;
+        }
+        if (outBytes >= 0) {
+            metrics.outBytes = outBytes;
         }
         metrics.inBps = inBps;
         metrics.outBps = outBps;

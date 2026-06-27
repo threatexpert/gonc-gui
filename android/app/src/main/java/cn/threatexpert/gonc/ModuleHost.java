@@ -80,7 +80,7 @@ interface ModuleHost {
 
     void updateMetricsFromLog(TransferMetrics metrics, String message);
 
-    void updateMetricsFromTraffic(TransferMetrics metrics, double inBps, double outBps);
+    void updateMetricsFromTraffic(TransferMetrics metrics, long inBytes, long outBytes, double inBps, double outBps);
 
     void updateMetricsFromReport(TransferMetrics metrics, String topic, String status, String network, String mode, String peer);
 }

@@ -1166,7 +1166,7 @@ final class ReceiveController {
                     if (!isActiveRun(runId)) {
                         return;
                     }
-                    host.updateMetricsFromTraffic(receiveMetrics, inBps, outBps);
+                    host.updateMetricsFromTraffic(receiveMetrics, inBytes, outBytes, inBps, outBps);
                     host.requestBackgroundRender();
                     host.refreshForegroundService();
                 });

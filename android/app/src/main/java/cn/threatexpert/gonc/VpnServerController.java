@@ -575,7 +575,7 @@ final class VpnServerController {
                     if (runId != id || session == null) {
                         return;
                     }
-                    host.updateMetricsFromTraffic(metrics, inBps, outBps);
+                    host.updateMetricsFromTraffic(metrics, inBytes, outBytes, inBps, outBps);
                     host.requestBackgroundRender();
                     host.refreshForegroundService();
                 });

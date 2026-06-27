@@ -6,6 +6,10 @@ export function CaptureScreen() {
   return window['go']['main']['App']['CaptureScreen']();
 }
 
+export function ClearTaskbarProgress() {
+  return window['go']['main']['App']['ClearTaskbarProgress']();
+}
+
 export function GeneratePassword() {
   return window['go']['main']['App']['GeneratePassword']();
 }
@@ -32,6 +36,10 @@ export function SelectFiles() {
 
 export function SelectFolder(arg1) {
   return window['go']['main']['App']['SelectFolder'](arg1);
+}
+
+export function SetTaskbarProgress(arg1, arg2) {
+  return window['go']['main']['App']['SetTaskbarProgress'](arg1, arg2);
 }
 
 export function StartHTTPDownload(arg1, arg2, arg3, arg4) {
