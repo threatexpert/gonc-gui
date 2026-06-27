@@ -13,6 +13,12 @@ def releaseSigningConfigured = releaseKeystorePropertiesFile.exists()
         && requiredReleaseSigningKeys.every { releaseKeystoreProperties[it]?.trim() }
         && rootProject.file(releaseKeystoreProperties["storeFile"] ?: "").exists()
 
+def appVersionText = rootProject.file("../VERSION").text.trim()
+if (!appVersionText) {
+    throw new GradleException("VERSION file is empty.")
+}
+def androidVersionName = appVersionText.startsWith("v") ? appVersionText.substring(1) : appVersionText
+
 gradle.taskGraph.whenReady { graph ->
     def releaseRequested = graph.allTasks.any { it.name.toLowerCase().contains("release") }
     if (releaseRequested && !releaseSigningConfigured) {
@@ -32,7 +38,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 2
-        versionName "0.2.0"
+        versionName androidVersionName
         manifestPlaceholders = [appLabel: "Gonc"]
 
         ndk {

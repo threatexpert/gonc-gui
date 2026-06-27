@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
+	"io/fs"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/threatexpert/gonc/v2/goncembed"
+	"github.com/threatexpert/gonc/v2/httpfileshare"
 )
 
 type Mode string
@@ -28,7 +31,6 @@ type Request struct {
 	SaveDir         string
 	DownloadSubPath string
 	UseUDP          bool
-	ReportURL       string
 	Upstream        string
 	DNSForward      string
 	ExtraArgs       string
@@ -48,13 +50,26 @@ type Event struct {
 	Elapsed  string  `json:"elapsed,omitempty"`
 }
 
+type P2PStatusReport struct {
+	Topic     string `json:"topic"`
+	Status    string `json:"status"`
+	Network   string `json:"network"`
+	Mode      string `json:"mode"`
+	Side      string `json:"side"`
+	Peer      string `json:"peer"`
+	Timestamp int64  `json:"timestamp"`
+	PID       int    `json:"pid"`
+}
+
 type Sink func(Event)
 
+type ReportSink func(P2PStatusReport)
+
 type Runner struct {
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
-	done   chan struct{}
+	mu       sync.Mutex
+	session  *goncembed.Session
+	source   *dynamicFileSource
+	stopping bool
 }
 
 func New() *Runner {
@@ -64,52 +79,75 @@ func New() *Runner {
 func (r *Runner) IsRunning() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.cmd != nil
+	return r.session != nil
 }
 
-func (r *Runner) Start(parent context.Context, goncPath string, req Request, sink Sink) error {
-	args, err := buildArgs(req)
+func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSink ReportSink) error {
+	if err := validateRequest(req); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	if r.session != nil {
+		r.mu.Unlock()
+		return errors.New("a transfer task is already running")
+	}
+	r.mu.Unlock()
+
+	cb := &callback{
+		mode:       req.Mode,
+		sink:       sink,
+		reportSink: reportSink,
+	}
+
+	var (
+		session *goncembed.Session
+		source  *dynamicFileSource
+		err     error
+	)
+	switch req.Mode {
+	case ModeSend:
+		source, err = newDynamicFileSource(req.SharePaths)
+		if err != nil {
+			return err
+		}
+		session, err = goncembed.StartP2PShareSource(source, req.Password, req.UseUDP, cb)
+	case ModeReceive:
+		session, err = goncembed.StartP2PReceive(req.Password, req.UseUDP, cb)
+	case ModeVPNServer:
+		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, req.ExtraArgs, cb)
+	default:
+		err = fmt.Errorf("unknown mode: %s", req.Mode)
+	}
 	if err != nil {
 		return err
 	}
 
 	r.mu.Lock()
-	if r.cmd != nil {
+	if r.session != nil {
 		r.mu.Unlock()
+		session.Stop()
 		return errors.New("a transfer task is already running")
 	}
-
-	ctx, cancel := context.WithCancel(parent)
-	cmd := exec.CommandContext(ctx, goncPath, args...)
-	prepareCommand(cmd)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		r.mu.Unlock()
-		return err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		r.mu.Unlock()
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		cancel()
-		r.mu.Unlock()
-		return err
-	}
-
-	r.cmd = cmd
-	r.cancel = cancel
-	r.done = make(chan struct{})
+	r.session = session
+	r.source = source
+	r.stopping = false
 	r.mu.Unlock()
 
-	emit(sink, "status", "info", "gonc started: "+goncPath)
-	go scan(stdout, "stdout", sink)
-	go scan(stderr, "stderr", sink)
-	go r.wait(ctx, cmd, sink)
+	emit(sink, "status", "info", "gonc embedded session started")
+	go r.wait(parent, session, cb, sink)
 	return nil
+}
+
+func (r *Runner) UpdateSharePaths(paths []string) error {
+	r.mu.Lock()
+	source := r.source
+	running := r.session != nil
+	r.mu.Unlock()
+	if !running || source == nil {
+		return errors.New("no share session is running")
+	}
+	return source.UpdatePaths(paths)
 }
 
 func (r *Runner) Stop() error {
@@ -119,69 +157,79 @@ func (r *Runner) Stop() error {
 
 func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	r.mu.Lock()
-	cancel := r.cancel
-	done := r.done
+	session := r.session
+	if session != nil {
+		r.stopping = true
+	}
 	r.mu.Unlock()
-	if cancel == nil {
+	if session == nil {
 		return true, errors.New("no transfer task is running")
 	}
-	cancel()
-	if timeout <= 0 || done == nil {
+	session.Stop()
+	if timeout <= 0 {
 		return false, nil
 	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-done:
+	case <-session.Done():
 		return true, nil
 	case <-timer.C:
 		return false, nil
 	}
 }
 
-func (r *Runner) wait(ctx context.Context, cmd *exec.Cmd, sink Sink) {
-	err := cmd.Wait()
+func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *callback, sink Sink) {
+	<-session.Done()
 
 	r.mu.Lock()
-	if r.cmd == cmd {
-		r.cmd = nil
-		r.cancel = nil
-		if r.done != nil {
-			close(r.done)
-			r.done = nil
-		}
+	stopping := false
+	if r.session == session {
+		stopping = r.stopping
+		r.session = nil
+		r.source = nil
+		r.stopping = false
 	}
 	r.mu.Unlock()
 
-	if ctx.Err() != nil {
+	if stopping || (parent != nil && parent.Err() != nil) {
 		emit(sink, "status", "warn", "transfer stopped")
 		return
 	}
-	if err != nil {
-		emit(sink, "status", "error", "gonc exited with error: "+err.Error())
+	if cb.ExitCode() != 0 {
 		return
 	}
 	emit(sink, "status", "info", "transfer finished")
 }
 
-func buildArgs(req Request) ([]string, error) {
+func validateRequest(req Request) error {
 	if req.Password == "" {
-		return nil, errors.New("password is required")
+		return errors.New("password is required")
+	}
+	switch req.Mode {
+	case ModeSend:
+		if len(req.SharePaths) == 0 {
+			return errors.New("select at least one file or folder to send")
+		}
+	case ModeReceive, ModeVPNServer:
+	default:
+		return fmt.Errorf("unknown mode: %s", req.Mode)
+	}
+	return nil
+}
+
+func buildArgs(req Request) ([]string, error) {
+	if err := validateRequest(req); err != nil {
+		return nil, err
 	}
 
 	args := []string{"-p2p", req.Password}
 	if req.UseUDP {
 		args = append(args, "-u")
 	}
-	if req.ReportURL != "" {
-		args = append(args, "-p2p-report-url", req.ReportURL)
-	}
 	switch req.Mode {
 	case ModeSend:
-		if len(req.SharePaths) == 0 {
-			return nil, errors.New("select at least one file or folder to send")
-		}
 		args = append(args, "-httpserver")
 		args = append(args, req.SharePaths...)
 	case ModeReceive:
@@ -199,8 +247,6 @@ func buildArgs(req Request) ([]string, error) {
 		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
 			args = append(args, splitExtraArgs(extraArgs)...)
 		}
-	default:
-		return nil, fmt.Errorf("unknown mode: %s", req.Mode)
 	}
 	return args, nil
 }
@@ -238,59 +284,143 @@ func splitExtraArgs(extraArgs string) []string {
 	return args
 }
 
-var localHTTPPattern = regexp.MustCompile(`http://127\.0\.0\.1:\d+`)
-var trafficPattern = regexp.MustCompile(`IN:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+OUT:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s(?:\s+\|\s+\d+)?\s+\|\s+(\d{2}:\d{2}:\d{2})`)
+type callback struct {
+	mode       Mode
+	sink       Sink
+	reportSink ReportSink
+	mu         sync.Mutex
+	exitCode   int
+}
 
-func scan(reader io.Reader, stream string, sink Sink) {
-	if sink == nil {
-		_, _ = io.Copy(io.Discard, reader)
+func (c *callback) Event(level string, message string) {
+	flushLine(message, level, c.sink)
+}
+
+func (c *callback) P2PReport(topic string, side string, status string, network string, mode string, peer string, timestamp int64, pid int) {
+	if c.reportSink == nil {
 		return
 	}
-	level := "info"
-	if stream == "stderr" {
-		level = "warn"
-	}
+	c.reportSink(P2PStatusReport{
+		Topic:     topic,
+		Status:    status,
+		Network:   network,
+		Mode:      mode,
+		Side:      string(c.mode),
+		Peer:      peer,
+		Timestamp: timestamp,
+		PID:       pid,
+	})
+}
 
-	buf := make([]byte, 4096)
-	var line strings.Builder
-	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			for _, b := range buf[:n] {
-				switch b {
-				case '\r', '\n':
-					flushLine(line.String(), level, sink)
-					line.Reset()
-				default:
-					line.WriteByte(b)
-					if line.Len() > 4*1024*1024 {
-						flushLine(line.String(), level, sink)
-						line.Reset()
-					}
-				}
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				emit(sink, "log", "error", err.Error())
-			}
-			if text := line.String(); text != "" {
-				flushLine(text, level, sink)
-			}
-			return
-		}
+func (c *callback) Ready(endpoint string) {
+	if endpoint == "" {
+		return
+	}
+	event := newEvent("local_http", "info", "local HTTP endpoint is ready")
+	event.LocalURL = endpoint
+	if c.sink != nil {
+		c.sink(event)
 	}
 }
 
+func (c *callback) Stopped(exitCode int) {
+	c.mu.Lock()
+	c.exitCode = exitCode
+	c.mu.Unlock()
+	if exitCode != 0 {
+		emit(c.sink, "status", "error", fmt.Sprintf("gonc exited with code %d", exitCode))
+	}
+}
+
+func (c *callback) Error(message string) {
+	emit(c.sink, "status", "error", message)
+}
+
+func (c *callback) ExitCode() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.exitCode
+}
+
+type dynamicFileSource struct {
+	mu     sync.RWMutex
+	source *httpfileshare.OSFileSource
+}
+
+func newDynamicFileSource(paths []string) (*dynamicFileSource, error) {
+	source := &dynamicFileSource{}
+	if err := source.UpdatePaths(paths); err != nil {
+		return nil, err
+	}
+	return source, nil
+}
+
+func (s *dynamicFileSource) UpdatePaths(paths []string) error {
+	next, err := httpfileshare.NewOSFileSource(paths)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.source = next
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *dynamicFileSource) snapshot() *httpfileshare.OSFileSource {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.source
+}
+
+func (s *dynamicFileSource) Description() string {
+	source := s.snapshot()
+	if source == nil {
+		return "empty file source"
+	}
+	return source.Description()
+}
+
+func (s *dynamicFileSource) Stat(name string) (fs.FileInfo, error) {
+	source := s.snapshot()
+	if source == nil {
+		return nil, os.ErrNotExist
+	}
+	return source.Stat(name)
+}
+
+func (s *dynamicFileSource) Open(name string) (fs.File, error) {
+	source := s.snapshot()
+	if source == nil {
+		return nil, os.ErrNotExist
+	}
+	return source.Open(name)
+}
+
+func (s *dynamicFileSource) ReadDir(name string) ([]fs.FileInfo, error) {
+	source := s.snapshot()
+	if source == nil {
+		return nil, os.ErrNotExist
+	}
+	return source.ReadDir(name)
+}
+
+func (s *dynamicFileSource) Walk(name string, fn func(sourcePath string, info fs.FileInfo, err error) error) error {
+	source := s.snapshot()
+	if source == nil {
+		return os.ErrNotExist
+	}
+	return source.Walk(name, fn)
+}
+
+var trafficPattern = regexp.MustCompile(`IN:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s\s+\|\s+OUT:\s+.*?\((\d+)\s+bytes\),\s+([^|]+?)/s(?:\s+\|\s+\d+)?\s+\|\s+(\d{2}:\d{2}:\d{2})`)
+
 func flushLine(line, level string, sink Sink) {
+	if sink == nil {
+		return
+	}
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return
-	}
-	if localURL := localHTTPPattern.FindString(line); localURL != "" {
-		event := newEvent("local_http", "info", "local HTTP endpoint is ready")
-		event.LocalURL = localURL
-		sink(event)
 	}
 	if event, ok := parseTraffic(line); ok {
 		sink(event)

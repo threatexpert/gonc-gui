@@ -12,7 +12,8 @@ import {
   StartTransfer,
   Status,
   StopHTTPDownload,
-  StopTransfer
+  StopTransfer,
+  UpdateSharePaths
 } from '../wailsjs/go/main/App';
 import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff} from '../wailsjs/runtime/runtime';
 
@@ -89,7 +90,13 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
-const appVersion = 'v1.1.0';
+type StatusTone = 'idle' | 'waiting' | 'connecting' | 'connected' | 'error';
+type ConnectionStatus = {
+  label: string;
+  tone: StatusTone;
+};
+
+const appVersion = __APP_VERSION__;
 
 const text = {
   zh: {
@@ -115,8 +122,10 @@ const text = {
     connectingReceivers: '正在建立',
     connections: '连接',
     establishing: '建立中',
+    negotiatingConnection: '建立安全连接中',
     waitingConnection: '等待连接',
     newConnection: '有新连接',
+    connectionSuccess: '连接成功',
     connectedShort: '已连接',
     connectionFailed: '连接失败',
     disconnected: '已断开',
@@ -176,6 +185,7 @@ const text = {
     extraArgsHint: '追加到外层 gonc 命令，适合临时使用高级参数。',
     remoteFiles: '对方分享的文件',
     refresh: '刷新',
+    refreshing: '刷新中',
     stopDownload: '停止下载',
     downloadSelected: '下载选中',
     downloadMode: '下载方式',
@@ -183,6 +193,7 @@ const text = {
     overwriteDownload: '覆盖',
     noSelection: '请先勾选要下载的文件或目录。',
     noList: '尚未读取目录',
+    remoteListAutoLoadFailed: '自动读取文件列表失败：',
     files: '个文件',
     folders: '个目录',
     selected: '已选',
@@ -198,8 +209,8 @@ const text = {
     logHint: '传输开始后日志会显示在这里。',
     file: '文件',
     dir: '目录',
-    goncMissing: '未找到 gonc 可执行文件。请确认发布目录中包含 bundled/gonc/当前平台/gonc(.exe)，或已把 gonc 加入 PATH。',
-    senderLockedDrop: '发送任务运行中，不能修改分享列表。',
+    modifiedTime: '修改时间',
+    shareUpdateFailed: '更新分享列表失败。',
     weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
   },
   en: {
@@ -225,8 +236,10 @@ const text = {
     connectingReceivers: 'Establishing',
     connections: 'Connections',
     establishing: 'Establishing',
+    negotiatingConnection: 'Negotiating secure connection',
     waitingConnection: 'Waiting',
     newConnection: 'New Connection',
+    connectionSuccess: 'Connection established',
     connectedShort: 'Connected',
     connectionFailed: 'Failed',
     disconnected: 'Disconnected',
@@ -286,6 +299,7 @@ const text = {
     extraArgsHint: 'Appended to the outer gonc command for temporary advanced options.',
     remoteFiles: 'Peer Shared Files',
     refresh: 'Refresh',
+    refreshing: 'Refreshing',
     stopDownload: 'Stop Download',
     downloadSelected: 'Download Selected',
     downloadMode: 'Download Mode',
@@ -293,6 +307,7 @@ const text = {
     overwriteDownload: 'Overwrite',
     noSelection: 'Select files or folders to download first.',
     noList: 'No list loaded',
+    remoteListAutoLoadFailed: 'Automatic file list load failed:',
     files: 'files',
     folders: 'folders',
     selected: 'selected',
@@ -308,8 +323,8 @@ const text = {
     logHint: 'Logs will appear here after a transfer starts.',
     file: 'FILE',
     dir: 'DIR',
-    goncMissing: 'gonc executable was not found. Make sure bundled/gonc/current-platform/gonc(.exe) exists, or put gonc in PATH.',
-    senderLockedDrop: 'The sender is running. Stop it before changing the shared list.',
+    modifiedTime: 'Modified',
+    shareUpdateFailed: 'Failed to update shared list.',
     weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
   }
 };
@@ -342,6 +357,7 @@ function App() {
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
   const [vpnServerP2PReports, setVpnServerP2PReports] = useState<Record<string, P2PReport>>({});
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
+  const [remoteListLoading, setRemoteListLoading] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
@@ -377,19 +393,20 @@ function App() {
   const primaryLabel = mode === 'send' ? t.startShare : (mode === 'receive' ? t.startReceive : t.startVpnServer);
   const p2pSessions = useMemo(() => Object.values(sendP2PReports), [sendP2PReports]);
   const vpnServerSessions = useMemo(() => Object.values(vpnServerP2PReports), [vpnServerP2PReports]);
+  const latestSendReport = latestReport(p2pSessions);
+  const latestVpnServerReport = latestReport(vpnServerSessions);
   const connectedCount = p2pSessions.filter((report) => report.topic && report.status === 'connected').length;
-  const connectingCount = p2pSessions.filter((report) => report.topic && report.status === 'connecting').length;
+  const sendStatus = multiClientActivityStatus(latestSendReport, p2pSessions, sendRunning, t);
   const transferSpeed = mode === 'send'
     ? freshSpeed(sendTraffic?.time, sendTraffic?.outBps, nowTick)
     : (mode === 'vpnServer' ? freshSpeed(vpnServerTraffic?.time, vpnServerTraffic?.outBps, nowTick) : activeSpeed);
-  const sendStatusLabel = connectingCount > 0 ? t.newConnection : (sendRunning ? t.waitingConnection : t.idle);
   const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
-  const vpnServerStatusLabel = vpnServerConnectedCount > 0 ? t.connectedShort : (vpnServerRunning ? t.waitingConnection : t.idle);
-  const statusTone = mode === 'receive' ? receiveStatus.tone : (currentRunning ? 'running' : 'idle');
+  const vpnServerStatus = multiClientActivityStatus(latestVpnServerReport, vpnServerSessions, vpnServerRunning, t);
+  const statusTone = mode === 'receive' ? receiveStatus.tone : (mode === 'send' ? sendStatus.tone : vpnServerStatus.tone);
   const activeP2PReport = mode === 'receive'
     ? receiveP2PReport
-    : latestReport(mode === 'vpnServer' ? vpnServerSessions : p2pSessions);
+    : (mode === 'vpnServer' ? latestVpnServerReport : latestSendReport);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -398,11 +415,11 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    GeneratePassword()
-      .then((value) => {
+    Promise.all([GeneratePassword(), GeneratePassword()])
+      .then(([sendValue, vpnServerValue]) => {
         if (!cancelled) {
-          setSendPassword((current) => current || value);
-          setVpnServerPassword((current) => current || value);
+          setSendPassword((current) => current || sendValue);
+          setVpnServerPassword((current) => current || vpnServerValue);
         }
       })
       .catch((err) => setError(localizeError(String(err))));
@@ -427,9 +444,7 @@ function App() {
       setLogs((current) => [...current.slice(-399), event]);
       if (event.mode === 'receive' && event.localUrl) {
         setStatus((current) => ({...current, localHTTPUrl: event.localUrl || current.localHTTPUrl}));
-        if (mode === 'receive') {
-          window.setTimeout(() => loadRemoteFiles('/', true), 700);
-        }
+        window.setTimeout(() => loadRemoteFiles('/', true), 700);
       }
       if (event.type === 'status' || event.type === 'local_http') {
         if (event.message.includes('stopped') || event.message.includes('finished')) {
@@ -468,10 +483,8 @@ function App() {
       }
     });
     OnFileDrop((_x, _y, paths) => {
-      if (mode === 'send' && !sendRunning) {
+      if (mode === 'send') {
         appendSharePaths(paths);
-      } else if (mode === 'send' && sendRunning) {
-        setError(t.senderLockedDrop);
       }
     }, true);
     return () => {
@@ -483,7 +496,19 @@ function App() {
         window.clearTimeout(passwordTimer.current);
       }
     };
-  }, [mode, sendRunning, t.senderLockedDrop]);
+  }, [mode]);
+
+  useEffect(() => {
+    if (!sendRunning) {
+      return;
+    }
+    if (sharePaths.length === 0) {
+      return;
+    }
+    UpdateSharePaths(sharePaths).catch((err) => {
+      setError(`${t.shareUpdateFailed} ${localizeError(String(err))}`);
+    });
+  }, [sendRunning, sharePaths, t.shareUpdateFailed]);
 
   async function refreshStatus() {
     try {
@@ -743,6 +768,7 @@ function App() {
     } else if (mode === 'receive') {
       setReceiveP2PReport(null);
       setRemoteList(null);
+      setRemoteListLoading(false);
       setSelectedPaths(new Set());
       setDownloadProgress(null);
       setReceiveTraffic(null);
@@ -757,7 +783,6 @@ function App() {
         password: passphrase,
         sharePaths,
         saveDir,
-        goncPath: '',
         downloadSubPath: currentRemotePath,
         useUDP: mode === 'vpnServer' ? vpnServerUseUDP : useUDP,
         upstream: vpnServerUpstream,
@@ -780,6 +805,7 @@ function App() {
       } else if (mode === 'receive') {
         setReceiveP2PReport((current) => current ? {...current, status: 'stopped'} : null);
         setReceiveTraffic(null);
+        setRemoteListLoading(false);
       } else {
         setVpnServerP2PReports((current) => {
           const next: Record<string, P2PReport> = {};
@@ -800,6 +826,7 @@ function App() {
     if (!silent) {
       setError('');
     }
+    setRemoteListLoading(true);
     try {
       const normalized = normalizeRemotePath(path);
       const list = await RemoteFiles(normalized);
@@ -809,7 +836,11 @@ function App() {
     } catch (err) {
       if (!silent) {
         setError(localizeError(String(err)));
+      } else {
+        appendLog('status', 'warn', `${t.remoteListAutoLoadFailed} ${localizeError(String(err))}`);
       }
+    } finally {
+      setRemoteListLoading(false);
     }
   }
 
@@ -879,9 +910,6 @@ function App() {
   }
 
   function localizeError(message: string) {
-    if (message.includes('gonc executable was not found') || message.includes('selected gonc executable')) {
-      return t.goncMissing;
-    }
     if (message.includes('password is too weak')) {
       return t.weakPassword;
     }
@@ -905,7 +933,7 @@ function App() {
         {(mode === 'send' || mode === 'vpnServer') && (
           <div className={`status-block ${statusTone}`}>
             <span className={`dot ${statusTone}`} />
-            <span>{mode === 'send' ? sendStatusLabel : vpnServerStatusLabel}</span>
+            <span>{mode === 'send' ? sendStatus.label : vpnServerStatus.label}</span>
             <span className="status-divider" />
             <span>{t.connectedShort} {mode === 'send' ? connectedCount : vpnServerConnectedCount}</span>
             <span className="status-divider" />
@@ -932,8 +960,8 @@ function App() {
                     <span>{sharePaths.length} {t.files}</span>
                   </div>
                   <div className="file-actions">
-                    <button className="primary-light" disabled={sendRunning} onClick={addFiles}>{t.addFiles}</button>
-                    <button className="secondary" disabled={sendRunning} onClick={addFolder}>{t.addFolder}</button>
+                    <button className="primary-light" onClick={addFiles}>{t.addFiles}</button>
+                    <button className="secondary" onClick={addFolder}>{t.addFolder}</button>
                   </div>
                   <div className="drop-zone">
                     <div className="path-list">
@@ -942,7 +970,7 @@ function App() {
                       ) : sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
-                          <button disabled={sendRunning} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
+                          <button disabled={sendRunning && sharePaths.length <= 1} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
                         </div>
                       ))}
                     </div>
@@ -1088,7 +1116,10 @@ function App() {
                     <span className={`dot ${receiveStatus.tone}`} />
                     {receiveStatus.label}
                   </span>
-                  <button className="secondary" disabled={!status.localHTTPUrl} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
+                  <button className="secondary refresh-button" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles()}>
+                    {remoteListLoading && <span className="spinner-dot" aria-hidden="true" />}
+                    {remoteListLoading ? t.refreshing : t.refresh}
+                  </button>
                   <div className="compact-switch" aria-label={t.downloadMode}>
                     <button className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
                     <button className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
@@ -1125,6 +1156,12 @@ function App() {
                 </div>
               )}
               <div className="remote-list">
+                {remoteListLoading && (
+                  <div className="remote-loading">
+                    <span className="spinner-dot" aria-hidden="true" />
+                    <span>{t.refreshing}</span>
+                  </div>
+                )}
                 {!remoteList ? (
                   <p className="muted">{t.listHint}</p>
                 ) : (
@@ -1133,6 +1170,7 @@ function App() {
                       <div className="remote-row nav-row">
                         <span>{t.dir}</span>
                         <button className="folder-link" onClick={() => loadRemoteFiles(parentPath(currentRemotePath))}>{t.parent}</button>
+                        <em>-</em>
                         <em />
                       </div>
                     )}
@@ -1149,6 +1187,7 @@ function App() {
                         ) : (
                           <strong>{file.name}</strong>
                         )}
+                        <em>{formatModTime(file.mod_time)}</em>
                         <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
                       </div>
                     ))}
@@ -1264,12 +1303,16 @@ function routeLabel(modeValue: string, t: typeof text.zh) {
   return '-';
 }
 
-function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh) {
+function normalizeP2PStatus(status: string) {
+  return status.trim().toLowerCase();
+}
+
+function singleConnectionStatus(status: string, running: boolean, t: typeof text.zh): ConnectionStatus {
   if (!running) {
     return {label: t.idle, tone: 'idle'};
   }
-  const reportStatus = report?.status || '';
-  if (reportStatus.startsWith('error:')) {
+  const reportStatus = normalizeP2PStatus(status);
+  if (reportStatus.startsWith('error:') || reportStatus.startsWith('failed') || reportStatus === 'error') {
     return {label: t.connectionFailed, tone: 'error'};
   }
   if (reportStatus === 'disconnected' || reportStatus === 'stopped' || reportStatus === 'finished') {
@@ -1278,14 +1321,63 @@ function receiveConnectionStatus(report: P2PReport | null, running: boolean, loc
   if (reportStatus === 'connecting') {
     return {label: t.establishing, tone: 'connecting'};
   }
+  if (reportStatus === 'negotiating') {
+    return {label: t.negotiatingConnection, tone: 'connecting'};
+  }
   if (reportStatus === 'connected') {
     return {label: t.connectedShort, tone: 'connected'};
   }
-  if (reportStatus === 'wait') {
+  if (reportStatus === 'wait' || reportStatus === 'waiting' || reportStatus === 'ready' || reportStatus === 'idle') {
     return {label: t.waitingConnection, tone: 'waiting'};
   }
-  if (localHTTPReady && !reportStatus) {
+  return {label: t.establishing, tone: 'connecting'};
+}
+
+function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh): ConnectionStatus {
+  if (localHTTPReady && running && !report?.status) {
     return {label: t.connectedShort, tone: 'connected'};
+  }
+  return singleConnectionStatus(report?.status || '', running, t);
+}
+
+function multiClientActivityStatus(latest: P2PReport | null, reports: P2PReport[], running: boolean, t: typeof text.zh): ConnectionStatus {
+  if (!running) {
+    return {label: t.idle, tone: 'idle'};
+  }
+  const latestStatus = normalizeP2PStatus(latest?.status || '');
+  if (latestStatus) {
+    if (latestStatus.startsWith('error:') || latestStatus.startsWith('failed') || latestStatus === 'error') {
+      return {label: t.connectionFailed, tone: 'error'};
+    }
+    if (latestStatus === 'connecting') {
+      return {label: t.newConnection, tone: 'connecting'};
+    }
+    if (latestStatus === 'negotiating') {
+      return {label: t.negotiatingConnection, tone: 'connecting'};
+    }
+    if (latestStatus === 'connected') {
+      return {label: t.connectionSuccess, tone: 'connected'};
+    }
+    if (['wait', 'waiting', 'ready', 'idle', 'starting', 'preparing', 'disconnected', 'stopped', 'finished'].includes(latestStatus)) {
+      return {label: t.waitingConnection, tone: 'waiting'};
+    }
+    return {label: t.establishing, tone: 'connecting'};
+  }
+
+  const statuses = reports
+    .filter((report) => report.topic)
+    .map((report) => normalizeP2PStatus(report.status));
+  if (statuses.some((status) => status.startsWith('error:') || status.startsWith('failed') || status === 'error')) {
+    return {label: t.connectionFailed, tone: 'error'};
+  }
+  if (statuses.includes('negotiating')) {
+    return {label: t.negotiatingConnection, tone: 'connecting'};
+  }
+  if (statuses.includes('connecting')) {
+    return {label: t.newConnection, tone: 'connecting'};
+  }
+  if (statuses.some((status) => status && !['wait', 'waiting', 'ready', 'idle', 'disconnected', 'stopped', 'finished'].includes(status))) {
+    return {label: t.establishing, tone: 'connecting'};
   }
   return {label: t.waitingConnection, tone: 'waiting'};
 }
@@ -1373,6 +1465,23 @@ function formatBytes(value: number) {
 
 function formatRate(value: number) {
   return `${formatBytes(value)}/s`;
+}
+
+function formatModTime(value: string) {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatPercent(done: number, total: number) {

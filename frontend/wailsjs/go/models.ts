@@ -49,7 +49,6 @@ export namespace main {
 	    sendRunning: boolean;
 	    receiveRunning: boolean;
 	    vpnServerRunning: boolean;
-	    goncPath: string;
 	    localHTTPUrl: string;
 	    downloading: boolean;
 	    defaultSaveDir: string;
@@ -64,7 +63,6 @@ export namespace main {
 	        this.sendRunning = source["sendRunning"];
 	        this.receiveRunning = source["receiveRunning"];
 	        this.vpnServerRunning = source["vpnServerRunning"];
-	        this.goncPath = source["goncPath"];
 	        this.localHTTPUrl = source["localHTTPUrl"];
 	        this.downloading = source["downloading"];
 	        this.defaultSaveDir = source["defaultSaveDir"];
@@ -113,7 +111,6 @@ export namespace main {
 	    password: string;
 	    sharePaths: string[];
 	    saveDir: string;
-	    goncPath: string;
 	    downloadSubPath: string;
 	    useUDP: boolean;
 	    upstream: string;
@@ -130,7 +127,6 @@ export namespace main {
 	        this.password = source["password"];
 	        this.sharePaths = source["sharePaths"];
 	        this.saveDir = source["saveDir"];
-	        this.goncPath = source["goncPath"];
 	        this.downloadSubPath = source["downloadSubPath"];
 	        this.useUDP = source["useUDP"];
 	        this.upstream = source["upstream"];

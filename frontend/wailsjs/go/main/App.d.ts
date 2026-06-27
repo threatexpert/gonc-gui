@@ -6,8 +6,6 @@ export function CaptureScreen():Promise<string>;
 
 export function GeneratePassword():Promise<string>;
 
-export function LocateGonc(arg1:string):Promise<string>;
-
 export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 
 export function SelectFiles():Promise<Array<string>>;
@@ -23,3 +21,5 @@ export function Status():Promise<main.AppStatus>;
 export function StopHTTPDownload():Promise<void>;
 
 export function StopTransfer(arg1:string):Promise<void>;
+
+export function UpdateSharePaths(arg1:Array<string>):Promise<void>;

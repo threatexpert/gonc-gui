@@ -10,10 +10,6 @@ export function GeneratePassword() {
   return window['go']['main']['App']['GeneratePassword']();
 }
 
-export function LocateGonc(arg1) {
-  return window['go']['main']['App']['LocateGonc'](arg1);
-}
-
 export function RemoteFiles(arg1) {
   return window['go']['main']['App']['RemoteFiles'](arg1);
 }
@@ -44,4 +40,8 @@ export function StopHTTPDownload() {
 
 export function StopTransfer(arg1) {
   return window['go']['main']['App']['StopTransfer'](arg1);
+}
+
+export function UpdateSharePaths(arg1) {
+  return window['go']['main']['App']['UpdateSharePaths'](arg1);
 }

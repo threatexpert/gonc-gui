@@ -3,16 +3,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"math/big"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +25,6 @@ type App struct {
 	sendRunner          *goncrunner.Runner
 	receiveRunner       *goncrunner.Runner
 	vpnServerRunner     *goncrunner.Runner
-	reportServer        *http.Server
-	reportURL           string
 	receiveLocalHTTPURL string
 	downloadCancel      context.CancelFunc
 	downloadID          int64
@@ -43,7 +35,6 @@ type TransferRequest struct {
 	Password        string   `json:"password"`
 	SharePaths      []string `json:"sharePaths"`
 	SaveDir         string   `json:"saveDir"`
-	GoncPath        string   `json:"goncPath"`
 	DownloadSubPath string   `json:"downloadSubPath"`
 	UseUDP          bool     `json:"useUDP"`
 	Upstream        string   `json:"upstream"`
@@ -56,21 +47,9 @@ type AppStatus struct {
 	SendRunning      bool   `json:"sendRunning"`
 	ReceiveRunning   bool   `json:"receiveRunning"`
 	VPNServerRunning bool   `json:"vpnServerRunning"`
-	GoncPath         string `json:"goncPath"`
 	LocalHTTPURL     string `json:"localHTTPUrl"`
 	Downloading      bool   `json:"downloading"`
 	DefaultSaveDir   string `json:"defaultSaveDir"`
-}
-
-type P2PStatusReport struct {
-	Topic     string `json:"topic"`
-	Status    string `json:"status"`
-	Network   string `json:"network"`
-	Mode      string `json:"mode"`
-	Side      string `json:"side"`
-	Peer      string `json:"peer"`
-	Timestamp int64  `json:"timestamp"`
-	PID       int    `json:"pid"`
 }
 
 type RemoteListResponse struct {
@@ -117,7 +96,6 @@ func (a *App) GeneratePassword() (string, error) {
 }
 
 func (a *App) Status() AppStatus {
-	path, _ := a.LocateGonc("")
 	sendRunning := a.sendRunner.IsRunning()
 	receiveRunning := a.receiveRunner.IsRunning()
 	vpnServerRunning := a.vpnServerRunner.IsRunning()
@@ -130,15 +108,10 @@ func (a *App) Status() AppStatus {
 		SendRunning:      sendRunning,
 		ReceiveRunning:   receiveRunning,
 		VPNServerRunning: vpnServerRunning,
-		GoncPath:         path,
 		LocalHTTPURL:     localURL,
 		Downloading:      downloading,
 		DefaultSaveDir:   defaultSaveDir(),
 	}
-}
-
-func (a *App) LocateGonc(preferred string) (string, error) {
-	return findGonc(preferred)
 }
 
 func (a *App) StartTransfer(req TransferRequest) error {
@@ -148,16 +121,6 @@ func (a *App) StartTransfer(req TransferRequest) error {
 	req.Password = strings.TrimSpace(req.Password)
 	if isWeakPassword(req.Password) {
 		return errors.New("password is too weak; use at least 8 characters with letters and digits")
-	}
-
-	goncPath, err := findGonc(req.GoncPath)
-	if err != nil {
-		return err
-	}
-
-	reportURL, err := a.ensureReportServer(goncrunner.Mode(req.Mode))
-	if err != nil {
-		return err
 	}
 
 	mode := goncrunner.Mode(req.Mode)
@@ -172,14 +135,13 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		return err
 	}
 
-	err = runner.Start(a.ctx, goncPath, goncrunner.Request{
+	err = runner.Start(a.ctx, goncrunner.Request{
 		Mode:            mode,
 		Password:        req.Password,
 		SharePaths:      req.SharePaths,
 		SaveDir:         req.SaveDir,
 		DownloadSubPath: req.DownloadSubPath,
 		UseUDP:          req.UseUDP,
-		ReportURL:       reportURL,
 		Upstream:        req.Upstream,
 		DNSForward:      req.DNSForward,
 		ExtraArgs:       req.ExtraArgs,
@@ -191,12 +153,21 @@ func (a *App) StartTransfer(req TransferRequest) error {
 			a.mu.Unlock()
 		}
 		wailsruntime.EventsEmit(a.ctx, "gonc:event", event)
+	}, func(report goncrunner.P2PStatusReport) {
+		wailsruntime.EventsEmit(a.ctx, "p2p:report", report)
 	})
 	return err
 }
 
 func (a *App) StopTransfer(mode string) error {
 	return a.stopTransfer(goncrunner.Mode(mode), true)
+}
+
+func (a *App) UpdateSharePaths(paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("select at least one file or folder to send")
+	}
+	return a.sendRunner.UpdateSharePaths(paths)
 }
 
 func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
@@ -218,7 +189,7 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 		return nil
 	}
 	if !stopped {
-		return errors.New("gonc process did not exit within 5 seconds")
+		return errors.New("gonc embedded session did not exit within 5 seconds")
 	}
 	return nil
 }
@@ -229,14 +200,6 @@ func (a *App) stopAllTransfers(requireRunning bool) error {
 		if err := a.stopTransfer(mode, requireRunning); err != nil && firstErr == nil {
 			firstErr = err
 		}
-	}
-	a.mu.Lock()
-	reportServer := a.reportServer
-	a.reportServer = nil
-	a.reportURL = ""
-	a.mu.Unlock()
-	if reportServer != nil {
-		_ = reportServer.Close()
 	}
 	return firstErr
 }
@@ -252,7 +215,7 @@ func (a *App) cleanup(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(6 * time.Second):
-		return errors.New("timed out waiting for gonc process cleanup")
+		return errors.New("timed out waiting for gonc embedded session cleanup")
 	}
 }
 
@@ -368,111 +331,6 @@ func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
 	default:
 		return nil, errors.New("unknown mode: " + string(mode))
 	}
-}
-
-func (a *App) ensureReportServer(mode goncrunner.Mode) (string, error) {
-	a.mu.Lock()
-	if a.reportServer != nil && a.reportURL != "" {
-		reportURL := a.reportURL
-		a.mu.Unlock()
-		return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
-	}
-	a.mu.Unlock()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-
-	mux := http.NewServeMux()
-	server := &http.Server{Handler: mux}
-	mux.HandleFunc("/p2p-report", func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		var report P2PStatusReport
-		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if reportSide := r.URL.Query().Get("side"); reportSide != "" {
-			report.Side = reportSide
-		}
-		wailsruntime.EventsEmit(a.ctx, "p2p:report", report)
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	reportURL := "http://" + ln.Addr().String() + "/p2p-report"
-	a.mu.Lock()
-	if a.reportServer != nil && a.reportURL != "" {
-		_ = server.Close()
-		_ = ln.Close()
-		reportURL = a.reportURL
-		a.mu.Unlock()
-		return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
-	}
-	a.reportServer = server
-	a.reportURL = reportURL
-	a.mu.Unlock()
-
-	go func() {
-		_ = server.Serve(ln)
-	}()
-	return reportURL + "?side=" + url.QueryEscape(string(mode)), nil
-}
-
-func findGonc(preferred string) (string, error) {
-	if preferred != "" {
-		if fileExists(preferred) {
-			return preferred, nil
-		}
-		return "", errors.New("selected gonc executable does not exist")
-	}
-
-	name := "gonc"
-	if runtime.GOOS == "windows" {
-		name = "gonc.exe"
-	}
-
-	candidates := []string{}
-	if exe, err := os.Executable(); err == nil {
-		base := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(base, "gonc", runtime.GOOS+"-"+runtime.GOARCH, name),
-			filepath.Join(base, "bundled", "gonc", runtime.GOOS+"-"+runtime.GOARCH, name),
-			filepath.Join(base, name),
-		)
-	}
-
-	if wd, err := os.Getwd(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(wd, "bundled", "gonc", runtime.GOOS+"-"+runtime.GOARCH, name),
-			filepath.Join(wd, "..", "gonetcat", "bin", name),
-			filepath.Join(wd, "..", "gonetcat", name),
-		)
-	}
-
-	if path, err := exec.LookPath(name); err == nil {
-		candidates = append(candidates, path)
-	}
-
-	for _, candidate := range candidates {
-		if fileExists(candidate) {
-			abs, err := filepath.Abs(candidate)
-			if err == nil {
-				return abs, nil
-			}
-			return candidate, nil
-		}
-	}
-	return "", errors.New("gonc executable was not found; make sure bundled/gonc/current-platform/gonc(.exe) exists or put gonc in PATH")
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }
 
 func defaultSaveDir() string {

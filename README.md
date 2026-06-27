@@ -2,9 +2,9 @@
 
 Desktop and Android UI for `gonc` point-to-point secure transfer.
 
-The desktop app is a Wails wrapper around the `gonc` executable. The Android app
-uses a gomobile-generated `mobilegonc.aar` built from the sibling `gonetcat`
-checkout.
+The desktop app embeds the `gonetcat` Go engine in the Wails backend. The
+Android app uses a gomobile-generated `mobilegonc.aar` built from the sibling
+`gonetcat` checkout.
 
 ## Screenshots
 
@@ -24,10 +24,9 @@ checkout.
 ```text
 gonc-gui/
   app.go                    Wails backend methods exposed to the frontend
-  internal/goncrunner/      child process runner for gonc
+  internal/goncrunner/      embedded gonc session runner
   frontend/                 React UI
   android/                  Android preview app shell
-  bundled/gonc/             optional per-platform gonc executables
   scripts/                  helper scripts
   android/update-mobilegonc-aar.bat rebuild Android mobilegonc.aar from ../gonetcat
 ```
@@ -52,22 +51,6 @@ Build:
 ```powershell
 $env:GOPROXY="https://goproxy.cn,direct"
 wails build
-```
-
-## gonc executable lookup
-
-At runtime, the app tries these locations:
-
-1. Custom path entered in the UI
-2. `bundled/gonc/<goos>-<goarch>/gonc(.exe)` beside the working directory
-3. Sibling development checkout: `..\gonetcat\bin\gonc(.exe)`
-4. Sibling development checkout: `..\gonetcat\gonc(.exe)`
-5. `PATH`
-
-For local Windows development, build `gonetcat` first, then run:
-
-```powershell
-.\scripts\sync-gonc.ps1 -GonetcatDir ..\gonetcat
 ```
 
 ## Android Development

@@ -477,9 +477,19 @@ input:focus {
   background: #fbfdff;
 }
 
+.remote-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .remote-row {
   display: grid;
-  grid-template-columns: 22px 50px minmax(0, 1fr) auto;
+  grid-template-columns: 22px 50px minmax(0, 1fr) 136px 82px;
   align-items: center;
   gap: 10px;
   min-height: 30px;
@@ -487,7 +497,7 @@ input:focus {
 }
 
 .remote-row.nav-row {
-  grid-template-columns: 50px minmax(0, 1fr) auto;
+  grid-template-columns: 50px minmax(0, 1fr) 136px 82px;
 }
 
 .remote-row input {
@@ -523,6 +533,30 @@ input:focus {
 .remote-row em {
   color: #64748b;
   font-style: normal;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.spinner-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(40, 112, 216, 0.18);
+  border-top-color: #2870d8;
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .progress {

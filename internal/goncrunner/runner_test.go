@@ -43,7 +43,6 @@ func TestBuildArgsVPNServer(t *testing.T) {
 		Mode:       ModeVPNServer,
 		Password:   "pass1234",
 		UseUDP:     true,
-		ReportURL:  "http://127.0.0.1:1234/p2p-report?side=vpnServer",
 		Upstream:   "socks5://127.0.0.1:1080",
 		DNSForward: "8.8.8.8:53",
 		ExtraArgs:  `-plain -x "socks5://with space"`,
@@ -54,7 +53,6 @@ func TestBuildArgsVPNServer(t *testing.T) {
 	want := []string{
 		"-p2p", "pass1234",
 		"-u",
-		"-p2p-report-url", "http://127.0.0.1:1234/p2p-report?side=vpnServer",
 		"-k", "-W", "-P",
 		"-e", ":mux linkagent -x socks5://127.0.0.1:1080 -dns 8.8.8.8:53",
 		"-plain",

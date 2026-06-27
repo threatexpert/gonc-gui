@@ -4,7 +4,17 @@ setlocal
 cd /d "%~dp0"
 
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=v1.1.0"
+if "%VERSION%"=="" (
+  if not exist "%CD%\VERSION" (
+    echo Missing VERSION file: %CD%\VERSION
+    goto failed
+  )
+  set /p VERSION=<"%CD%\VERSION"
+)
+if "%VERSION%"=="" (
+  echo VERSION file is empty.
+  goto failed
+)
 
 set "PLATFORM=windows-amd64"
 set "ANDROID_PLATFORM=android-arm64"
@@ -49,14 +59,6 @@ if errorlevel 1 goto failed
 echo.
 echo [4/7] Copying Windows release files...
 copy /y "%CD%\build\bin\gonc-gui.exe" "%PACKAGE_DIR%\" >nul
-if errorlevel 1 goto failed
-
-if not exist "%CD%\build\bin\bundled\gonc\windows-amd64\gonc.exe" (
-  echo Missing required file: build\bin\bundled\gonc\windows-amd64\gonc.exe
-  goto failed
-)
-
-xcopy "%CD%\build\bin\bundled" "%PACKAGE_DIR%\bundled\" /e /i /y >nul
 if errorlevel 1 goto failed
 
 if exist "%CD%\README.md" copy /y "%CD%\README.md" "%PACKAGE_DIR%\" >nul
