@@ -25,6 +25,7 @@ type App struct {
 	sendRunner          *goncrunner.Runner
 	receiveRunner       *goncrunner.Runner
 	vpnServerRunner     *goncrunner.Runner
+	vpnClientRunner     *goncrunner.Runner
 	receiveLocalHTTPURL string
 	downloadCancel      context.CancelFunc
 	downloadID          int64
@@ -39,6 +40,11 @@ type TransferRequest struct {
 	UseUDP          bool     `json:"useUDP"`
 	Upstream        string   `json:"upstream"`
 	DNSForward      string   `json:"dnsForward"`
+	DNSServers      string   `json:"dnsServers"`
+	RouteCIDRs      string   `json:"routeCidrs"`
+	LinkConfig      string   `json:"linkConfig"`
+	EnableIPv6      bool     `json:"enableIpv6"`
+	TunnelOnly      bool     `json:"tunnelOnly"`
 	ExtraArgs       string   `json:"extraArgs"`
 }
 
@@ -47,6 +53,7 @@ type AppStatus struct {
 	SendRunning      bool   `json:"sendRunning"`
 	ReceiveRunning   bool   `json:"receiveRunning"`
 	VPNServerRunning bool   `json:"vpnServerRunning"`
+	VPNClientRunning bool   `json:"vpnClientRunning"`
 	LocalHTTPURL     string `json:"localHTTPUrl"`
 	Downloading      bool   `json:"downloading"`
 	DefaultSaveDir   string `json:"defaultSaveDir"`
@@ -65,6 +72,7 @@ func NewApp() *App {
 		sendRunner:      goncrunner.New(),
 		receiveRunner:   goncrunner.New(),
 		vpnServerRunner: goncrunner.New(),
+		vpnClientRunner: goncrunner.New(),
 	}
 }
 
@@ -95,19 +103,25 @@ func (a *App) GeneratePassword() (string, error) {
 	return generateSecureRandomString(24)
 }
 
+func (a *App) IsAdministrator() bool {
+	return isAdministrator()
+}
+
 func (a *App) Status() AppStatus {
 	sendRunning := a.sendRunner.IsRunning()
 	receiveRunning := a.receiveRunner.IsRunning()
 	vpnServerRunning := a.vpnServerRunner.IsRunning()
+	vpnClientRunning := a.vpnClientRunner.IsRunning()
 	a.mu.Lock()
 	localURL := a.receiveLocalHTTPURL
 	downloading := a.downloadCancel != nil
 	a.mu.Unlock()
 	return AppStatus{
-		Running:          sendRunning || receiveRunning || vpnServerRunning,
+		Running:          sendRunning || receiveRunning || vpnServerRunning || vpnClientRunning,
 		SendRunning:      sendRunning,
 		ReceiveRunning:   receiveRunning,
 		VPNServerRunning: vpnServerRunning,
+		VPNClientRunning: vpnClientRunning,
 		LocalHTTPURL:     localURL,
 		Downloading:      downloading,
 		DefaultSaveDir:   defaultSaveDir(),
@@ -144,6 +158,11 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		UseUDP:          req.UseUDP,
 		Upstream:        req.Upstream,
 		DNSForward:      req.DNSForward,
+		DNSServers:      req.DNSServers,
+		RouteCIDRs:      req.RouteCIDRs,
+		LinkConfig:      req.LinkConfig,
+		EnableIPv6:      req.EnableIPv6,
+		TunnelOnly:      req.TunnelOnly,
 		ExtraArgs:       req.ExtraArgs,
 	}, func(event goncrunner.Event) {
 		event.Mode = string(mode)
@@ -196,7 +215,7 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 
 func (a *App) stopAllTransfers(requireRunning bool) error {
 	var firstErr error
-	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive, goncrunner.ModeVPNServer} {
+	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive, goncrunner.ModeVPNServer, goncrunner.ModeVPNClient} {
 		if err := a.stopTransfer(mode, requireRunning); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -328,6 +347,8 @@ func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
 		return a.receiveRunner, nil
 	case goncrunner.ModeVPNServer:
 		return a.vpnServerRunner, nil
+	case goncrunner.ModeVPNClient:
+		return a.vpnClientRunner, nil
 	default:
 		return nil, errors.New("unknown mode: " + string(mode))
 	}

@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"gonc-gui/internal/vpnconfig"
+	"gonc-gui/internal/vpnhelper"
 
 	"github.com/threatexpert/gonc/v2/goncembed"
 	"github.com/threatexpert/gonc/v2/httpfileshare"
@@ -22,6 +26,7 @@ const (
 	ModeSend      Mode = "send"
 	ModeReceive   Mode = "receive"
 	ModeVPNServer Mode = "vpnServer"
+	ModeVPNClient Mode = "vpnClient"
 )
 
 type Request struct {
@@ -33,6 +38,11 @@ type Request struct {
 	UseUDP          bool
 	Upstream        string
 	DNSForward      string
+	DNSServers      string
+	RouteCIDRs      string
+	LinkConfig      string
+	EnableIPv6      bool
+	TunnelOnly      bool
 	ExtraArgs       string
 }
 
@@ -69,6 +79,7 @@ type Runner struct {
 	mu       sync.Mutex
 	session  *goncembed.Session
 	source   *dynamicFileSource
+	helper   *vpnhelper.Client
 	stopping bool
 }
 
@@ -101,9 +112,10 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	}
 
 	var (
-		session *goncembed.Session
-		source  *dynamicFileSource
-		err     error
+		session   *goncembed.Session
+		source    *dynamicFileSource
+		vpnHelper *vpnhelper.Client
+		err       error
 	)
 	switch req.Mode {
 	case ModeSend:
@@ -116,6 +128,13 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 		session, err = goncembed.StartP2PReceive(req.Password, req.UseUDP, cb)
 	case ModeVPNServer:
 		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, req.ExtraArgs, cb)
+	case ModeVPNClient:
+		vpnStart, err := startVPNClient(parent, req, cb, sink)
+		if err != nil {
+			return err
+		}
+		session = vpnStart.session
+		vpnHelper = vpnStart.helper
 	default:
 		err = fmt.Errorf("unknown mode: %s", req.Mode)
 	}
@@ -127,10 +146,14 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	if r.session != nil {
 		r.mu.Unlock()
 		session.Stop()
+		if vpnHelper != nil {
+			_ = vpnHelper.Close()
+		}
 		return errors.New("a transfer task is already running")
 	}
 	r.session = session
 	r.source = source
+	r.helper = vpnHelper
 	r.stopping = false
 	r.mu.Unlock()
 
@@ -158,14 +181,20 @@ func (r *Runner) Stop() error {
 func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	r.mu.Lock()
 	session := r.session
+	helper := r.helper
 	if session != nil {
 		r.stopping = true
+		r.helper = nil
 	}
 	r.mu.Unlock()
 	if session == nil {
 		return true, errors.New("no transfer task is running")
 	}
 	session.Stop()
+	if helper != nil {
+		_ = helper.Stop()
+		_ = helper.Close()
+	}
 	if timeout <= 0 {
 		return false, nil
 	}
@@ -189,6 +218,11 @@ func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *ca
 		stopping = r.stopping
 		r.session = nil
 		r.source = nil
+		if r.helper != nil {
+			_ = r.helper.Stop()
+			_ = r.helper.Close()
+			r.helper = nil
+		}
 		r.stopping = false
 	}
 	r.mu.Unlock()
@@ -212,7 +246,7 @@ func validateRequest(req Request) error {
 		if len(req.SharePaths) == 0 {
 			return errors.New("select at least one file or folder to send")
 		}
-	case ModeReceive, ModeVPNServer:
+	case ModeReceive, ModeVPNServer, ModeVPNClient:
 	default:
 		return fmt.Errorf("unknown mode: %s", req.Mode)
 	}
@@ -247,8 +281,194 @@ func buildArgs(req Request) ([]string, error) {
 		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
 			args = append(args, splitExtraArgs(extraArgs)...)
 		}
+	case ModeVPNClient:
+		linkConfig, err := effectiveLinkConfig(req.LinkConfig)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "-link", linkConfig)
+		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
+			args = append(args, splitExtraArgs(extraArgs)...)
+		}
 	}
 	return args, nil
+}
+
+type vpnClientStart struct {
+	session *goncembed.Session
+	helper  *vpnhelper.Client
+}
+
+func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink) (*vpnClientStart, error) {
+	linkConfig, err := effectiveLinkConfig(req.LinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	var helper *vpnhelper.Client
+	if !req.TunnelOnly {
+		emit(sink, "status", "info", "Starting elevated VPN helper")
+		helper, err = vpnhelper.StartElevated(parent)
+		if err != nil {
+			return nil, err
+		}
+		emit(sink, "status", "info", "Elevated VPN helper is ready")
+	}
+
+	readyCh := make(chan string, 1)
+	tunnelLostCh := make(chan string, 8)
+	cb.onReady = func(endpoint string) {
+		if !strings.HasPrefix(endpoint, "socks5://") {
+			return
+		}
+		select {
+		case readyCh <- endpoint:
+		default:
+		}
+	}
+	cb.onP2PStatus = func(status string) {
+		if !vpnTunnelNeedsRoutePause(status) {
+			return
+		}
+		select {
+		case tunnelLostCh <- strings.TrimSpace(status):
+		default:
+		}
+	}
+	session, err := goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, req.ExtraArgs, cb)
+	if err != nil {
+		if helper != nil {
+			_ = helper.Close()
+		}
+		return nil, err
+	}
+	go func() {
+		var vpnApplied bool
+		for {
+			select {
+			case endpoint := <-readyCh:
+				if req.TunnelOnly {
+					emit(sink, "status", "info", "SOCKS5 tunnel is ready")
+					continue
+				}
+				config := vpnconfig.Config{
+					SOCKS5Endpoint: endpoint,
+					Routes:         routeLines(req.RouteCIDRs, req.EnableIPv6),
+					DNSServers:     dnsLines(req.DNSServers, req.EnableIPv6),
+					EnableIPv6:     req.EnableIPv6,
+					MTU:            1400,
+					LogLevel:       "warn",
+				}
+				if vpnApplied {
+					emit(sink, "status", "info", "SOCKS5 endpoint refreshed; reapplying Windows VPN")
+					_ = helper.Stop()
+				} else {
+					emit(sink, "status", "info", "SOCKS5 endpoint ready; starting Windows VPN")
+				}
+				if err := helper.Start(config); err != nil {
+					emit(sink, "status", "error", "Windows VPN start failed: "+err.Error())
+					session.Stop()
+					return
+				}
+				vpnApplied = true
+				emit(sink, "status", "info", "Windows VPN started")
+			case status := <-tunnelLostCh:
+				if req.TunnelOnly || !vpnApplied {
+					continue
+				}
+				emit(sink, "status", "warn", "Tunnel status changed to "+status+"; pausing Windows VPN routes for reconnect")
+				if err := helper.Stop(); err != nil {
+					emit(sink, "status", "warn", "Windows VPN pause failed: "+err.Error())
+				} else {
+					emit(sink, "status", "info", "Windows VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
+				}
+				vpnApplied = false
+			case <-session.Done():
+				return
+			case <-parent.Done():
+				return
+			}
+		}
+	}()
+	return &vpnClientStart{session: session, helper: helper}, nil
+}
+
+func effectiveLinkConfig(value string) (string, error) {
+	clean := strings.TrimSpace(value)
+	if clean != "" {
+		return clean, nil
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return fmt.Sprintf("x://127.0.0.1:%d", port), nil
+}
+
+func routeLines(value string, enableIPv6 bool) []string {
+	lines := splitLines(value)
+	if len(lines) == 0 {
+		lines = []string{"0.0.0.0/1", "128.0.0.0/1"}
+		if enableIPv6 {
+			lines = append(lines, "::/0")
+		}
+		return lines
+	}
+	if !enableIPv6 {
+		filtered := lines[:0]
+		for _, line := range lines {
+			if !strings.Contains(line, ":") {
+				filtered = append(filtered, line)
+			}
+		}
+		return filtered
+	}
+	return lines
+}
+
+func dnsLines(value string, enableIPv6 bool) []string {
+	lines := splitLines(value)
+	if len(lines) == 0 {
+		lines = []string{"8.8.8.8"}
+		if enableIPv6 {
+			lines = append(lines, "2001:4860:4860::8888")
+		}
+		return lines
+	}
+	if !enableIPv6 {
+		filtered := lines[:0]
+		for _, line := range lines {
+			if !strings.Contains(line, ":") {
+				filtered = append(filtered, line)
+			}
+		}
+		return filtered
+	}
+	return lines
+}
+
+func vpnTunnelNeedsRoutePause(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "wait", "waiting", "idle", "ready", "connecting", "negotiating", "reconnecting", "disconnected", "disconnect", "closed", "stopped":
+		return true
+	}
+	lower := strings.ToLower(status)
+	return strings.Contains(lower, "fail") ||
+		strings.Contains(lower, "error") ||
+		strings.Contains(lower, "lost") ||
+		strings.Contains(lower, "timeout")
+}
+
+func splitLines(value string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func splitExtraArgs(extraArgs string) []string {
@@ -285,11 +505,13 @@ func splitExtraArgs(extraArgs string) []string {
 }
 
 type callback struct {
-	mode       Mode
-	sink       Sink
-	reportSink ReportSink
-	mu         sync.Mutex
-	exitCode   int
+	mode        Mode
+	sink        Sink
+	reportSink  ReportSink
+	onReady     func(string)
+	onP2PStatus func(string)
+	mu          sync.Mutex
+	exitCode    int
 }
 
 func (c *callback) Event(level string, message string) {
@@ -297,6 +519,9 @@ func (c *callback) Event(level string, message string) {
 }
 
 func (c *callback) P2PReport(topic string, side string, status string, network string, mode string, peer string, timestamp int64, pid int) {
+	if c.onP2PStatus != nil {
+		c.onP2PStatus(status)
+	}
 	if c.reportSink == nil {
 		return
 	}
@@ -316,7 +541,16 @@ func (c *callback) Ready(endpoint string) {
 	if endpoint == "" {
 		return
 	}
-	event := newEvent("local_http", "info", "local HTTP endpoint is ready")
+	if c.onReady != nil {
+		c.onReady(endpoint)
+	}
+	eventType := "local_http"
+	message := "local HTTP endpoint is ready"
+	if c.mode == ModeVPNClient {
+		eventType = "socks5"
+		message = "SOCKS5 endpoint is ready"
+	}
+	event := newEvent(eventType, "info", message)
 	event.LocalURL = endpoint
 	if c.sink != nil {
 		c.sink(event)

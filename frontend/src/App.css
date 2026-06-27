@@ -141,9 +141,9 @@
 
 .mode-switch {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  max-width: 540px;
+  max-width: 720px;
   margin-bottom: 18px;
   border: 1px solid #d8e2ee;
   border-radius: 8px;
@@ -262,7 +262,25 @@ input {
   font: inherit;
 }
 
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 78px;
+  resize: vertical;
+  border: 1px solid #cbd7e6;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+}
+
 input:focus {
+  border-color: #2870d8;
+  outline: 3px solid rgba(40, 112, 216, 0.14);
+}
+
+textarea:focus {
   border-color: #2870d8;
   outline: 3px solid rgba(40, 112, 216, 0.14);
 }
@@ -322,9 +340,20 @@ input:focus {
 }
 
 .big-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   width: 100%;
   min-height: 48px;
   font-size: 16px;
+}
+
+.button-subtext {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.82;
 }
 
 .drop-zone {

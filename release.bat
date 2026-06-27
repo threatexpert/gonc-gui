@@ -60,6 +60,8 @@ echo.
 echo [4/7] Copying Windows release files...
 copy /y "%CD%\build\bin\gonc-gui.exe" "%PACKAGE_DIR%\" >nul
 if errorlevel 1 goto failed
+copy /y "%CD%\build\bin\wintun.dll" "%PACKAGE_DIR%\" >nul
+if errorlevel 1 goto failed
 
 if exist "%CD%\README.md" copy /y "%CD%\README.md" "%PACKAGE_DIR%\" >nul
 if exist "%CD%\LICENSE" copy /y "%CD%\LICENSE" "%PACKAGE_DIR%\" >nul

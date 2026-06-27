@@ -6,6 +6,8 @@ export function CaptureScreen():Promise<string>;
 
 export function GeneratePassword():Promise<string>;
 
+export function IsAdministrator():Promise<boolean>;
+
 export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 
 export function SelectFiles():Promise<Array<string>>;

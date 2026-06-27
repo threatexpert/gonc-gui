@@ -10,6 +10,10 @@ export function GeneratePassword() {
   return window['go']['main']['App']['GeneratePassword']();
 }
 
+export function IsAdministrator() {
+  return window['go']['main']['App']['IsAdministrator']();
+}
+
 export function RemoteFiles(arg1) {
   return window['go']['main']['App']['RemoteFiles'](arg1);
 }

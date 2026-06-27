@@ -62,3 +62,18 @@ func TestBuildArgsVPNServer(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
+
+func TestVPNTunnelNeedsRoutePause(t *testing.T) {
+	paused := []string{"wait", "waiting", "connecting", "negotiating", "reconnecting", "disconnected", "failed", "error: timeout", "lost peer"}
+	for _, status := range paused {
+		if !vpnTunnelNeedsRoutePause(status) {
+			t.Fatalf("vpnTunnelNeedsRoutePause(%q) = false, want true", status)
+		}
+	}
+	active := []string{"", "connected", "CONNECTED", "direct"}
+	for _, status := range active {
+		if vpnTunnelNeedsRoutePause(status) {
+			t.Fatalf("vpnTunnelNeedsRoutePause(%q) = true, want false", status)
+		}
+	}
+}

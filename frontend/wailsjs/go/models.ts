@@ -49,6 +49,7 @@ export namespace main {
 	    sendRunning: boolean;
 	    receiveRunning: boolean;
 	    vpnServerRunning: boolean;
+	    vpnClientRunning: boolean;
 	    localHTTPUrl: string;
 	    downloading: boolean;
 	    defaultSaveDir: string;
@@ -63,6 +64,7 @@ export namespace main {
 	        this.sendRunning = source["sendRunning"];
 	        this.receiveRunning = source["receiveRunning"];
 	        this.vpnServerRunning = source["vpnServerRunning"];
+	        this.vpnClientRunning = source["vpnClientRunning"];
 	        this.localHTTPUrl = source["localHTTPUrl"];
 	        this.downloading = source["downloading"];
 	        this.defaultSaveDir = source["defaultSaveDir"];
@@ -115,6 +117,11 @@ export namespace main {
 	    useUDP: boolean;
 	    upstream: string;
 	    dnsForward: string;
+	    dnsServers: string;
+	    routeCidrs: string;
+	    linkConfig: string;
+	    enableIpv6: boolean;
+	    tunnelOnly: boolean;
 	    extraArgs: string;
 	
 	    static createFrom(source: any = {}) {
@@ -131,6 +138,11 @@ export namespace main {
 	        this.useUDP = source["useUDP"];
 	        this.upstream = source["upstream"];
 	        this.dnsForward = source["dnsForward"];
+	        this.dnsServers = source["dnsServers"];
+	        this.routeCidrs = source["routeCidrs"];
+	        this.linkConfig = source["linkConfig"];
+	        this.enableIpv6 = source["enableIpv6"];
+	        this.tunnelOnly = source["tunnelOnly"];
 	        this.extraArgs = source["extraArgs"];
 	    }
 	}
