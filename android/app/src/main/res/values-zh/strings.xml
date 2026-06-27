@@ -136,11 +136,13 @@
     <string name="activity_state_connection_success">连接成功</string>
     <string name="activity_summary_connected">已连接 %1$d</string>
     <string name="activity_summary_speed">速度 %1$s</string>
+    <string name="activity_summary_sent_total">已发送 %1$s</string>
     <string name="hide">隐藏</string>
     <string name="show">显示</string>
     <string name="events_will_appear">事件会显示在这里。</string>
     <string name="p2p_status">P2P 状态</string>
     <string name="speed">速度</string>
+    <string name="sent_total">累计发送</string>
     <string name="connections">连接数</string>
     <string name="network">网络</string>
     <string name="connection_route">连接方式</string>

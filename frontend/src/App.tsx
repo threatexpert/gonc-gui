@@ -497,6 +497,7 @@ function App() {
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
   const notificationsReady = useRef(false);
   const vpnDisconnectNotified = useRef(false);
+  const vpnStopRequested = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
@@ -618,9 +619,12 @@ function App() {
       }
       if (event.mode === 'vpnClient') {
         if (event.message.includes('pausing Windows VPN routes')) {
-          notifyVpnTunnelPaused();
+          if (!vpnStopRequested.current) {
+            notifyVpnTunnelPaused();
+          }
         } else if (event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
           vpnDisconnectNotified.current = false;
+          vpnStopRequested.current = false;
         }
       }
       setLogs((current) => [...current.slice(-399), event]);
@@ -1019,6 +1023,7 @@ function App() {
       setVpnClientTraffic(null);
       setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
       vpnDisconnectNotified.current = false;
+      vpnStopRequested.current = false;
     }
     try {
       await StartTransfer({
@@ -1050,6 +1055,9 @@ function App() {
 
   async function stop() {
     setError('');
+    if (mode === 'vpnClient') {
+      vpnStopRequested.current = true;
+    }
     try {
       await StopTransfer(mode);
       if (mode === 'send') {
@@ -1073,11 +1081,18 @@ function App() {
         } else {
           setVpnClientP2PReport((current) => current ? {...current, status: 'stopped'} : null);
           setVpnClientTraffic(null);
+          vpnDisconnectNotified.current = false;
         }
       }
       await refreshStatus();
     } catch (err) {
       setError(localizeError(String(err)));
+    } finally {
+      if (mode === 'vpnClient') {
+        window.setTimeout(() => {
+          vpnStopRequested.current = false;
+        }, 1000);
+      }
     }
   }
 
