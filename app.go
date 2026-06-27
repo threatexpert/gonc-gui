@@ -14,6 +14,7 @@ import (
 
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/vpnprofile"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -67,6 +68,9 @@ type RemoteListResponse struct {
 	TotalSize int64                   `json:"totalSize"`
 }
 
+type VPNProfile = vpnprofile.Profile
+type VPNProfileStore = vpnprofile.Store
+
 func NewApp() *App {
 	return &App{
 		sendRunner:      goncrunner.New(),
@@ -105,6 +109,14 @@ func (a *App) GeneratePassword() (string, error) {
 
 func (a *App) IsAdministrator() bool {
 	return isAdministrator()
+}
+
+func (a *App) LoadVPNProfiles() (VPNProfileStore, error) {
+	return vpnprofile.Load()
+}
+
+func (a *App) SaveVPNProfiles(store VPNProfileStore) error {
+	return vpnprofile.Save(store)
 }
 
 func (a *App) Status() AppStatus {

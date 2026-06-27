@@ -38,6 +38,9 @@ final class GoncVpnState {
     private static String peer = "-";
     private static String peerIpv6 = "-";
     private static String profileName = "";
+    private static double inBps;
+    private static double outBps;
+    private static long lastTrafficMs;
     private static Listener listener;
     private static long nextLogId;
     private static final List<LogEntry> logs = new ArrayList<>();
@@ -98,6 +101,18 @@ final class GoncVpnState {
         return profileName;
     }
 
+    static synchronized double inBps() {
+        return inBps;
+    }
+
+    static synchronized double outBps() {
+        return outBps;
+    }
+
+    static synchronized long lastTrafficMs() {
+        return lastTrafficMs;
+    }
+
     static synchronized boolean isRunning() {
         return CONNECTING.equals(status) || CONNECTED.equals(status) || STOPPING.equals(status);
     }
@@ -126,6 +141,9 @@ final class GoncVpnState {
             peer = "-";
             peerIpv6 = "-";
             profileName = nextProfileName == null ? "" : nextProfileName.trim();
+            inBps = 0;
+            outBps = 0;
+            lastTrafficMs = 0;
             snapshot = listener;
         }
         if (snapshot != null) {
@@ -148,6 +166,9 @@ final class GoncVpnState {
                 peer = "-";
                 peerIpv6 = "-";
                 profileName = "";
+                inBps = 0;
+                outBps = 0;
+                lastTrafficMs = 0;
             }
             snapshot = listener;
         }
@@ -195,6 +216,19 @@ final class GoncVpnState {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             peerIpv6 = nextPeerIpv6 == null || nextPeerIpv6.trim().isEmpty() ? "-" : nextPeerIpv6.trim();
+            snapshot = listener;
+        }
+        if (snapshot != null) {
+            snapshot.onVpnStateChanged();
+        }
+    }
+
+    static void setTraffic(double nextInBps, double nextOutBps) {
+        Listener snapshot;
+        synchronized (GoncVpnState.class) {
+            inBps = nextInBps;
+            outBps = nextOutBps;
+            lastTrafficMs = System.currentTimeMillis();
             snapshot = listener;
         }
         if (snapshot != null) {

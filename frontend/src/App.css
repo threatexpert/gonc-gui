@@ -250,7 +250,8 @@ label {
   font-weight: 800;
 }
 
-input {
+input,
+select {
   width: 100%;
   box-sizing: border-box;
   min-height: 42px;
@@ -275,7 +276,8 @@ textarea {
   font: inherit;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: #2870d8;
   outline: 3px solid rgba(40, 112, 216, 0.14);
 }
@@ -295,8 +297,17 @@ textarea:focus {
 }
 
 .inline input,
+.inline select,
 .password-line input {
   min-width: 0;
+}
+
+.profile-line {
+  flex-wrap: wrap;
+}
+
+.profile-line select {
+  flex: 1 1 220px;
 }
 
 .field-hint {

@@ -1161,6 +1161,18 @@ final class ReceiveController {
             }
 
             @Override
+            public void onTraffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+                host.mainHandler().post(() -> {
+                    if (!isActiveRun(runId)) {
+                        return;
+                    }
+                    host.updateMetricsFromTraffic(receiveMetrics, inBps, outBps);
+                    host.requestBackgroundRender();
+                    host.refreshForegroundService();
+                });
+            }
+
+            @Override
             public void onReady(String endpoint) {
                 host.mainHandler().post(() -> {
                     if (!isActiveRun(runId)) {

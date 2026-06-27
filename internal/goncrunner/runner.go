@@ -13,8 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"gonc-gui/internal/ipv6probe"
 	"gonc-gui/internal/vpnconfig"
 	"gonc-gui/internal/vpnhelper"
+	"gonc-gui/internal/winvpn"
 
 	"github.com/threatexpert/gonc/v2/goncembed"
 	"github.com/threatexpert/gonc/v2/httpfileshare"
@@ -58,6 +60,7 @@ type Event struct {
 	InBps    float64 `json:"inBps,omitempty"`
 	OutBps   float64 `json:"outBps,omitempty"`
 	Elapsed  string  `json:"elapsed,omitempty"`
+	PeerIPv6 string  `json:"peerIpv6,omitempty"`
 }
 
 type P2PStatusReport struct {
@@ -306,12 +309,20 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 	}
 	var helper *vpnhelper.Client
 	if !req.TunnelOnly {
+		if err := winvpn.CheckRuntime(); err != nil {
+			return nil, err
+		}
 		emit(sink, "status", "info", "Starting elevated VPN helper")
 		helper, err = vpnhelper.StartElevated(parent)
 		if err != nil {
 			return nil, err
 		}
 		emit(sink, "status", "info", "Elevated VPN helper is ready")
+	}
+	if req.TunnelOnly || !req.EnableIPv6 {
+		emitPeerIPv6(sink, "disabled")
+	} else {
+		emitPeerIPv6(sink, "waiting")
 	}
 
 	readyCh := make(chan string, 1)
@@ -350,11 +361,12 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					emit(sink, "status", "info", "SOCKS5 tunnel is ready")
 					continue
 				}
+				effectiveIPv6 := resolveEffectiveIPv6(parent, req.EnableIPv6, endpoint, sink)
 				config := vpnconfig.Config{
 					SOCKS5Endpoint: endpoint,
-					Routes:         routeLines(req.RouteCIDRs, req.EnableIPv6),
-					DNSServers:     dnsLines(req.DNSServers, req.EnableIPv6),
-					EnableIPv6:     req.EnableIPv6,
+					Routes:         routeLines(req.RouteCIDRs, effectiveIPv6),
+					DNSServers:     dnsLines(req.DNSServers, effectiveIPv6),
+					EnableIPv6:     effectiveIPv6,
 					MTU:            1400,
 					LogLevel:       "warn",
 				}
@@ -381,6 +393,9 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				} else {
 					emit(sink, "status", "info", "Windows VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
 				}
+				if req.EnableIPv6 {
+					emitPeerIPv6(sink, "waiting")
+				}
 				vpnApplied = false
 			case <-session.Done():
 				return
@@ -390,6 +405,24 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		}
 	}()
 	return &vpnClientStart{session: session, helper: helper}, nil
+}
+
+func resolveEffectiveIPv6(parent context.Context, requested bool, socks5Endpoint string, sink Sink) bool {
+	if !requested {
+		emitPeerIPv6(sink, "disabled")
+		return false
+	}
+	emitPeerIPv6(sink, "checking")
+	emit(sink, "status", "info", "Checking remote IPv6 availability")
+	result := ipv6probe.Check(parent, socks5Endpoint, ipv6probe.DefaultTimeout)
+	if result.Available {
+		emitPeerIPv6(sink, "available")
+		emit(sink, "status", "info", "Remote IPv6 is available via "+result.Detail+"; enabling IPv6 routes")
+		return true
+	}
+	emitPeerIPv6(sink, "unavailable")
+	emit(sink, "status", "warn", "Remote IPv6 is unavailable; IPv6 routes disabled ("+result.Detail+")")
+	return false
 }
 
 func effectiveLinkConfig(value string) (string, error) {
@@ -537,6 +570,25 @@ func (c *callback) P2PReport(topic string, side string, status string, network s
 	})
 }
 
+func (c *callback) Traffic(side string, inBytes int64, outBytes int64, inBps float64, outBps float64, elapsed int64, connCount int, final bool) {
+	if c.sink == nil {
+		return
+	}
+	event := Event{
+		Type:     "traffic",
+		Level:    "info",
+		Message:  "traffic snapshot",
+		Time:     time.Now().Format(time.RFC3339),
+		Mode:     string(c.mode),
+		InBytes:  inBytes,
+		OutBytes: outBytes,
+		InBps:    inBps,
+		OutBps:   outBps,
+		Elapsed:  formatElapsed(elapsed),
+	}
+	c.sink(event)
+}
+
 func (c *callback) Ready(endpoint string) {
 	if endpoint == "" {
 		return
@@ -574,6 +626,16 @@ func (c *callback) ExitCode() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.exitCode
+}
+
+func formatElapsed(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	h := seconds / 3600
+	m := (seconds % 3600) / 60
+	s := seconds % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
 type dynamicFileSource struct {
@@ -711,6 +773,15 @@ func emit(sink Sink, typ, level, message string) {
 		return
 	}
 	sink(newEvent(typ, level, message))
+}
+
+func emitPeerIPv6(sink Sink, state string) {
+	if sink == nil {
+		return
+	}
+	event := newEvent("peer_ipv6", "info", state)
+	event.PeerIPv6 = state
+	sink(event)
 }
 
 func newEvent(typ, level, message string) Event {

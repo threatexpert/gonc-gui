@@ -1290,10 +1290,18 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (traffic == null) {
             return false;
         }
-        metrics.inBps = traffic.inBps;
-        metrics.outBps = traffic.outBps;
-        metrics.lastTrafficMs = System.currentTimeMillis();
+        updateMetricsFromTraffic(metrics, traffic.inBps, traffic.outBps);
         return true;
+    }
+
+    @Override
+    public void updateMetricsFromTraffic(TransferMetrics metrics, double inBps, double outBps) {
+        if (metrics == null) {
+            return;
+        }
+        metrics.inBps = inBps;
+        metrics.outBps = outBps;
+        metrics.lastTrafficMs = System.currentTimeMillis();
     }
 
     private double currentSpeed(TransferMetrics metrics) {

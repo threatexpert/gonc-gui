@@ -503,6 +503,11 @@ public final class GoncVpnService extends VpnService {
             }
 
             @Override
+            public void traffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+                GoncVpnState.setTraffic(inBps, outBps);
+            }
+
+            @Override
             public void ready(String endpoint) {
                 if (endpoint != null && endpoint.startsWith("socks5://")) {
                     GoncVpnState.setEndpoint(endpoint);

@@ -22,6 +22,9 @@ interface GoncBridge {
 
         void onP2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid);
 
+        default void onTraffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+        }
+
         void onReady(String endpoint);
 
         void onStopped();

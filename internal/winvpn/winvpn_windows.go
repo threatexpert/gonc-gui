@@ -5,14 +5,18 @@ package winvpn
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"gonc-gui/internal/vpnconfig"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -25,9 +29,25 @@ type Session struct {
 	config vpnconfig.Config
 }
 
+func CheckRuntime() error {
+	dllPath, err := findWintunDLL()
+	if err != nil {
+		return err
+	}
+	dll, err := windows.LoadDLL(dllPath)
+	if err != nil {
+		return fmt.Errorf("load Wintun runtime %s: %w", dllPath, err)
+	}
+	_ = dll.Release()
+	return nil
+}
+
 func Start(config vpnconfig.Config) (*Session, error) {
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
 		return nil, fmt.Errorf("SOCKS5 endpoint is required")
+	}
+	if err := CheckRuntime(); err != nil {
+		return nil, err
 	}
 	if config.MTU <= 0 {
 		config.MTU = defaultMTU
@@ -156,6 +176,23 @@ func (s *Session) cleanupRoutes() {
 	}
 }
 
+func findWintunDLL() (string, error) {
+	const name = "wintun.dll"
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate gonc-gui.exe: %w", err)
+	}
+	exe, err = filepath.Abs(exe)
+	if err != nil {
+		return "", fmt.Errorf("locate gonc-gui.exe: %w", err)
+	}
+	candidate := filepath.Join(filepath.Dir(exe), name)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate, nil
+	}
+	return "", fmt.Errorf("Wintun runtime %s was not found beside gonc-gui.exe; copy wintun.dll to the application directory", name)
+}
+
 func waitInterface(name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -169,6 +206,7 @@ func waitInterface(name string, timeout time.Duration) error {
 
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(output))

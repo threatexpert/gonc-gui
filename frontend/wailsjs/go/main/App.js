@@ -14,8 +14,16 @@ export function IsAdministrator() {
   return window['go']['main']['App']['IsAdministrator']();
 }
 
+export function LoadVPNProfiles() {
+  return window['go']['main']['App']['LoadVPNProfiles']();
+}
+
 export function RemoteFiles(arg1) {
   return window['go']['main']['App']['RemoteFiles'](arg1);
+}
+
+export function SaveVPNProfiles(arg1) {
+  return window['go']['main']['App']['SaveVPNProfiles'](arg1);
 }
 
 export function SelectFiles() {

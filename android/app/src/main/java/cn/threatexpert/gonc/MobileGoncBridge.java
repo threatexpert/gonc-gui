@@ -93,6 +93,11 @@ final class MobileGoncBridge implements GoncBridge {
             }
 
             @Override
+            public void traffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+                callback.onTraffic(side, inBytes, outBytes, inBps, outBps, elapsed, connCount, isFinal);
+            }
+
+            @Override
             public void ready(String endpoint) {
                 callback.onReady(endpoint);
             }

@@ -2,11 +2,14 @@
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import './App.css';
+import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
   GeneratePassword,
   IsAdministrator,
+  LoadVPNProfiles,
   RemoteFiles,
+  SaveVPNProfiles,
   SelectFiles,
   SelectFolder,
   StartHTTPDownload,
@@ -31,6 +34,7 @@ type LogEvent = {
   localUrl?: string;
   inBps?: number;
   outBps?: number;
+  peerIpv6?: string;
 };
 
 type P2PReport = {
@@ -92,6 +96,24 @@ type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
 };
 
+type VPNProfile = {
+  name: string;
+  passphrase: string;
+  useUdp: boolean;
+  routeIpv6: boolean;
+  dnsServers: string;
+  routeCidrs: string;
+  linkConfig: string;
+  extraArgs: string;
+  tunnelOnly: boolean;
+};
+
+type VPNProfileStore = {
+  version: number;
+  selected: number;
+  profiles: VPNProfile[];
+};
+
 type StatusTone = 'idle' | 'waiting' | 'connecting' | 'connected' | 'error';
 type ConnectionStatus = {
   label: string;
@@ -99,6 +121,9 @@ type ConnectionStatus = {
 };
 
 const appVersion = __APP_VERSION__;
+const vpnProfileQrType = 'gonc.vpn.profile';
+const defaultVpnDNS = '8.8.8.8\n2001:4860:4860::8888';
+const defaultVpnRoutes = '0.0.0.0/1\n128.0.0.0/1\n::/0';
 
 const text = {
   zh: {
@@ -152,6 +177,18 @@ const text = {
     receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     vpnServerPasswordHint: '作为 linkagent 服务端运行，支持多个客户端同时连接。口令相同即可连接，建议随机生成并通过安全渠道分享给 VPN 客户端。',
     vpnClientPasswordHint: '连接远端 linkagent VPN 服务端。系统 VPN 需要管理员权限，会在连接时弹出 UAC 授权。',
+    vpnProfile: '配置',
+    vpnProfileDefaultName: '默认配置',
+    vpnProfileNewName: '新配置',
+    vpnProfileNew: '新增',
+    vpnProfileDelete: '删除',
+    vpnProfileImport: '截图导入',
+    vpnProfileExport: '导出二维码',
+    vpnProfileName: '名称',
+    vpnProfileQr: '配置二维码',
+    vpnProfileQrHint: '二维码包含完整 VPN 配置和口令。',
+    vpnProfileInvalid: '这不是有效的 Gonc VPN 配置二维码。',
+    vpnProfileImported: '已导入 VPN 配置',
     generate: '更换',
     copy: '复制',
     copyLogs: '复制日志',
@@ -190,6 +227,12 @@ const text = {
     extraArgsPlaceholder: '例如 -x socks5://host:port',
     extraArgsHint: '追加到外层 gonc 命令，适合临时使用高级参数。',
     routeIpv6: 'Route IPv6',
+    peerIpv6: '对端 IPv6 出口',
+    peerIpv6Disabled: '未启用',
+    peerIpv6Waiting: '等待 P2P',
+    peerIpv6Checking: '检测中',
+    peerIpv6Available: '可用',
+    peerIpv6Unavailable: '不可用',
     tunnelOnly: '仅 SOCKS5 隧道',
     tunnelOnlyHint: '只建立本地 SOCKS5 隧道，不修改系统路由。',
     vpnDnsServers: 'DNS',
@@ -279,11 +322,23 @@ const text = {
     receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     vpnServerPasswordHint: 'Run as a linkagent server and allow multiple VPN clients to connect. Use the same passphrase on the client; generating a random one and sharing it securely is recommended.',
     vpnClientPasswordHint: 'Connect to a remote linkagent VPN server. System VPN requires administrator permission and will show a UAC prompt when connecting.',
+    vpnProfile: 'Profile',
+    vpnProfileDefaultName: 'Default',
+    vpnProfileNewName: 'New profile',
+    vpnProfileNew: 'New',
+    vpnProfileDelete: 'Delete',
+    vpnProfileImport: 'Screenshot Import',
+    vpnProfileExport: 'Export QR',
+    vpnProfileName: 'Name',
+    vpnProfileQr: 'Profile QR',
+    vpnProfileQrHint: 'The QR code contains the full VPN profile and passphrase.',
+    vpnProfileInvalid: 'This is not a valid Gonc VPN profile QR code.',
+    vpnProfileImported: 'Imported VPN profile',
     generate: 'Change',
     copy: 'Copy',
     copyLogs: 'Copy Logs',
     qr: 'QR',
-    scan: 'Scan',
+    scan: 'Screenshot Scan',
     scanTitle: 'Select the QR code on screen',
     scanHint: 'Drag to select the QR area, or click "Whole image". All monitors are captured.',
     scanWhole: 'Whole image',
@@ -317,6 +372,12 @@ const text = {
     extraArgsPlaceholder: 'e.g. -x socks5://host:port',
     extraArgsHint: 'Appended to the outer gonc command for temporary advanced options.',
     routeIpv6: 'Route IPv6',
+    peerIpv6: 'Peer IPv6 exit',
+    peerIpv6Disabled: 'Not enabled',
+    peerIpv6Waiting: 'Waiting for P2P',
+    peerIpv6Checking: 'Checking',
+    peerIpv6Available: 'Available',
+    peerIpv6Unavailable: 'Unavailable',
     tunnelOnly: 'Tunnel only',
     tunnelOnlyHint: 'Only create the local SOCKS5 tunnel without changing system routes.',
     vpnDnsServers: 'DNS',
@@ -387,6 +448,8 @@ function App() {
   const [vpnClientRouteCIDRs, setVpnClientRouteCIDRs] = useState('');
   const [vpnClientLinkConfig, setVpnClientLinkConfig] = useState('');
   const [vpnClientExtraArgs, setVpnClientExtraArgs] = useState('');
+  const [vpnProfiles, setVpnProfiles] = useState<VPNProfile[]>([]);
+  const [selectedVpnProfile, setSelectedVpnProfile] = useState(0);
   const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, vpnServerRunning: false, vpnClientRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
@@ -403,10 +466,14 @@ function App() {
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
   const [vpnClientTraffic, setVpnClientTraffic] = useState<LogEvent | null>(null);
+  const [vpnClientPeerIPv6, setVpnClientPeerIPv6] = useState('disabled');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrPassword, setQrPassword] = useState('');
+  const [qrTitle, setQrTitle] = useState('');
+  const [qrHint, setQrHint] = useState('');
   const [scanImage, setScanImage] = useState('');
+  const [scanPurpose, setScanPurpose] = useState<'password' | 'vpnProfile'>('password');
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState('');
   const [scanRect, setScanRect] = useState<{x: number; y: number; w: number; h: number} | null>(null);
@@ -458,18 +525,35 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([GeneratePassword(), GeneratePassword(), GeneratePassword()])
-      .then(([sendValue, vpnServerValue, vpnClientValue]) => {
+    Promise.all([GeneratePassword(), GeneratePassword()])
+      .then(([sendValue, vpnServerValue]) => {
         if (!cancelled) {
           setSendPassword((current) => current || sendValue);
           setVpnServerPassword((current) => current || vpnServerValue);
-          setVpnClientPassword((current) => current || vpnClientValue);
         }
       })
       .catch((err) => setError(localizeError(String(err))));
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    LoadVPNProfiles()
+      .then((store: VPNProfileStore) => {
+        const profiles = normalizeVpnProfiles(store.profiles, t);
+        const selected = clampIndex(store.selected, profiles.length);
+        setVpnProfiles(profiles);
+        setSelectedVpnProfile(selected);
+        applyVpnProfile(profiles[selected]);
+      })
+      .catch((err) => {
+        setError(localizeError(String(err)));
+        const fallback = [defaultVpnProfile(t.vpnProfileDefaultName)];
+        setVpnProfiles(fallback);
+        setSelectedVpnProfile(0);
+        applyVpnProfile(fallback[0]);
+      });
   }, []);
 
   useEffect(() => {
@@ -492,6 +576,9 @@ function App() {
           setVpnClientTraffic(event);
         }
         return;
+      }
+      if (event.type === 'peer_ipv6' && event.mode === 'vpnClient') {
+        setVpnClientPeerIPv6(event.peerIpv6 || event.message || '');
       }
       setLogs((current) => [...current.slice(-399), event]);
       if (event.mode === 'receive' && event.localUrl) {
@@ -626,7 +713,8 @@ function App() {
 
   async function generateVpnClientPassword() {
     setError('');
-    setVpnClientPassword(await GeneratePassword());
+    const value = await GeneratePassword();
+    setVpnProfileField('passphrase', value);
     revealPasswordTemporarily();
   }
 
@@ -656,7 +744,7 @@ function App() {
       if (mode === 'vpnServer') {
         setVpnServerPassword(value.trim());
       } else if (mode === 'vpnClient') {
-        setVpnClientPassword(value.trim());
+        setVpnProfileField('passphrase', value.trim());
       } else {
         setReceivePassword(value.trim());
       }
@@ -667,7 +755,7 @@ function App() {
         if (mode === 'vpnServer') {
           setVpnServerPassword(value.trim());
         } else if (mode === 'vpnClient') {
-          setVpnClientPassword(value.trim());
+          setVpnProfileField('passphrase', value.trim());
         } else {
           setReceivePassword(value.trim());
         }
@@ -694,6 +782,8 @@ function App() {
     setError('');
     try {
       setQrPassword(password);
+      setQrTitle(t.qr);
+      setQrHint('');
       setQrDataUrl(await QRCode.toDataURL(password, {
         width: 280,
         margin: 2,
@@ -711,12 +801,37 @@ function App() {
   function closePasswordQr() {
     setQrDataUrl('');
     setQrPassword('');
+    setQrTitle('');
+    setQrHint('');
   }
 
-  async function startScreenScan() {
+  async function showVpnProfileQr() {
+    const profile = normalizeVpnProfile(vpnProfiles[selectedVpnProfile] || currentVpnProfileFromState(t), t);
+    const payload = JSON.stringify({type: vpnProfileQrType, profile});
+    setError('');
+    try {
+      setQrPassword(profile.name || t.vpnProfileDefaultName);
+      setQrTitle(t.vpnProfileQr);
+      setQrHint(t.vpnProfileQrHint);
+      setQrDataUrl(await QRCode.toDataURL(payload, {
+        width: 280,
+        margin: 2,
+        color: {
+          dark: '#101826',
+          light: '#ffffff',
+        },
+      }));
+      updateCurrentVpnProfile(profile);
+    } catch (err) {
+      setError(localizeError(String(err)));
+    }
+  }
+
+  async function startScreenScan(purpose: 'password' | 'vpnProfile' = 'password') {
     setError('');
     setScanError('');
     setScanRect(null);
+    setScanPurpose(purpose);
     setScanBusy(true);
     try {
       const dataUrl = await CaptureScreen();
@@ -755,18 +870,24 @@ function App() {
       const result = jsQR(data.data, data.width, data.height);
       if (result && result.data) {
         const decoded = result.data.trim();
-        if (mode === 'send') {
+        if (scanPurpose === 'vpnProfile') {
+          if (!importVpnProfileFromQr(decoded)) {
+            return;
+          }
+        } else if (mode === 'send') {
           setSendPassword(decoded);
         } else if (mode === 'vpnServer') {
           setVpnServerPassword(decoded);
         } else if (mode === 'vpnClient') {
-          setVpnClientPassword(decoded);
+          setVpnProfileField('passphrase', decoded);
         } else {
           setReceivePassword(decoded);
         }
         revealPasswordTemporarily();
         closeScreenScan();
-        appendLog('status', 'info', t.scanSuccess);
+        if (scanPurpose !== 'vpnProfile') {
+          appendLog('status', 'info', t.scanSuccess);
+        }
       } else {
         setScanError(t.scanNotFound);
       }
@@ -848,6 +969,7 @@ function App() {
     } else {
       setVpnClientP2PReport(null);
       setVpnClientTraffic(null);
+      setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
     }
     try {
       await StartTransfer({
@@ -928,6 +1050,119 @@ function App() {
       }
     } finally {
       setRemoteListLoading(false);
+    }
+  }
+
+  function applyVpnProfile(profile: VPNProfile) {
+    setVpnClientPassword(profile.passphrase || '');
+    setVpnClientUseUDP(Boolean(profile.useUdp));
+    setVpnClientEnableIPv6(Boolean(profile.routeIpv6));
+    setVpnClientTunnelOnly(Boolean(profile.tunnelOnly));
+    setVpnClientDNSServers(profile.dnsServers || defaultVpnDNS);
+    setVpnClientRouteCIDRs(profile.routeCidrs || defaultVpnRoutes);
+    setVpnClientLinkConfig(profile.linkConfig || '');
+    setVpnClientExtraArgs(profile.extraArgs || '');
+  }
+
+  function persistVpnProfiles(nextProfiles: VPNProfile[], selected: number) {
+    SaveVPNProfiles(vpnprofile.Store.createFrom({version: 1, selected, profiles: nextProfiles}))
+      .catch((err: unknown) => setError(localizeError(String(err))));
+  }
+
+  function updateCurrentVpnProfile(patch: Partial<VPNProfile>) {
+    setVpnProfiles((current) => {
+      const base = normalizeVpnProfiles(current, t);
+      const selected = clampIndex(selectedVpnProfile, base.length);
+      const next = base.map((profile, index) => index === selected ? normalizeVpnProfile({...profile, ...patch}, t) : profile);
+      persistVpnProfiles(next, selected);
+      return next;
+    });
+  }
+
+  function selectVpnProfile(index: number) {
+    const selected = clampIndex(index, vpnProfiles.length);
+    setSelectedVpnProfile(selected);
+    if (vpnProfiles[selected]) {
+      applyVpnProfile(vpnProfiles[selected]);
+      persistVpnProfiles(vpnProfiles, selected);
+    }
+  }
+
+  function setVpnProfileField<K extends keyof VPNProfile>(key: K, value: VPNProfile[K]) {
+    updateCurrentVpnProfile({[key]: value} as Partial<VPNProfile>);
+    if (key === 'name') {
+      return;
+    }
+    switch (key) {
+      case 'passphrase':
+        setVpnClientPassword(String(value));
+        break;
+      case 'useUdp':
+        setVpnClientUseUDP(Boolean(value));
+        break;
+      case 'routeIpv6':
+        setVpnClientEnableIPv6(Boolean(value));
+        break;
+      case 'tunnelOnly':
+        setVpnClientTunnelOnly(Boolean(value));
+        break;
+      case 'dnsServers':
+        setVpnClientDNSServers(String(value));
+        break;
+      case 'routeCidrs':
+        setVpnClientRouteCIDRs(String(value));
+        break;
+      case 'linkConfig':
+        setVpnClientLinkConfig(String(value));
+        break;
+      case 'extraArgs':
+        setVpnClientExtraArgs(String(value));
+        break;
+    }
+  }
+
+  function addVpnProfile() {
+    const nextProfile = defaultVpnProfile(uniqueVpnProfileName(vpnProfiles, t.vpnProfileNewName));
+    const next = [...normalizeVpnProfiles(vpnProfiles, t), nextProfile];
+    const selected = next.length - 1;
+    setVpnProfiles(next);
+    setSelectedVpnProfile(selected);
+    applyVpnProfile(nextProfile);
+    persistVpnProfiles(next, selected);
+  }
+
+  function deleteVpnProfile() {
+    const current = normalizeVpnProfiles(vpnProfiles, t);
+    let next = current.filter((_profile, index) => index !== selectedVpnProfile);
+    if (next.length === 0) {
+      next = [defaultVpnProfile(t.vpnProfileDefaultName)];
+    }
+    const selected = clampIndex(selectedVpnProfile, next.length);
+    setVpnProfiles(next);
+    setSelectedVpnProfile(selected);
+    applyVpnProfile(next[selected]);
+    persistVpnProfiles(next, selected);
+  }
+
+  function importVpnProfileFromQr(value: string) {
+    try {
+      const parsed = JSON.parse(value);
+      if (!parsed || parsed.type !== vpnProfileQrType || !parsed.profile) {
+        throw new Error(t.vpnProfileInvalid);
+      }
+      const imported = normalizeVpnProfile(parsed.profile as VPNProfile, t);
+      imported.name = uniqueVpnProfileName(vpnProfiles, imported.name || t.vpnProfileDefaultName);
+      const next = [...normalizeVpnProfiles(vpnProfiles, t), imported];
+      const selected = next.length - 1;
+      setVpnProfiles(next);
+      setSelectedVpnProfile(selected);
+      applyVpnProfile(imported);
+      persistVpnProfiles(next, selected);
+      appendLog('status', 'info', `${t.vpnProfileImported}: ${imported.name}`);
+      return true;
+    } catch {
+      setScanError(t.vpnProfileInvalid);
+      return false;
     }
   }
 
@@ -1081,6 +1316,29 @@ function App() {
               </>
             ) : null}
 
+            {mode === 'vpnClient' && (
+              <>
+                <div className="field">
+                  <label>{t.vpnProfile}</label>
+                  <div className="inline profile-line">
+                    <select
+                      value={selectedVpnProfile}
+                      disabled={vpnClientRunning}
+                      onChange={(event) => selectVpnProfile(Number(event.target.value))}
+                    >
+                      {normalizeVpnProfiles(vpnProfiles, t).map((profile, index) => (
+                        <option value={index} key={`${profile.name}-${index}`}>{profile.name}</option>
+                      ))}
+                    </select>
+                    <button className="secondary" disabled={vpnClientRunning} onClick={addVpnProfile}>{t.vpnProfileNew}</button>
+                    <button className="secondary" disabled={vpnClientRunning} onClick={() => startScreenScan('vpnProfile')}>{t.vpnProfileImport}</button>
+                    <button className="secondary" disabled={vpnProfiles.length === 0} onClick={showVpnProfileQr}>{t.vpnProfileExport}</button>
+                    <button className="secondary" disabled={vpnClientRunning} onClick={deleteVpnProfile}>{t.vpnProfileDelete}</button>
+                  </div>
+                </div>
+              </>
+            )}
+
             <div className="field">
               <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
               <div className="inline password-line">
@@ -1095,7 +1353,7 @@ function App() {
                     } else if (mode === 'vpnServer') {
                       setVpnServerPassword(event.target.value);
                     } else {
-                      setVpnClientPassword(event.target.value);
+                      setVpnProfileField('passphrase', event.target.value);
                     }
                   }}
                   placeholder={t.passPlaceholder}
@@ -1105,14 +1363,14 @@ function App() {
                   <>
                     <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
                     {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
-                    {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
+                    {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : mode === 'receive' ? (
                   <>
                     {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
-                    {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
+                    {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : mode === 'vpnServer' ? (
@@ -1120,7 +1378,7 @@ function App() {
                     {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
                     {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
-                    {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
+                    {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 ) : (
@@ -1128,7 +1386,7 @@ function App() {
                     {!vpnClientRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
                     <button className="secondary" disabled={!vpnClientPassword} onClick={copyPassword}>{t.copy}</button>
                     {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
-                    {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scan}</button>}
+                    {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
                     <button className="secondary" disabled={!vpnClientPassword} onClick={showPasswordQr}>{t.qr}</button>
                   </>
                 )}
@@ -1171,12 +1429,20 @@ function App() {
                 </button>
                 {vpnClientAdvanced && (
                   <div className="advanced-fields">
+                    <div className="field">
+                      <label>{t.vpnProfileName}</label>
+                      <input
+                        value={vpnProfiles[selectedVpnProfile]?.name || ''}
+                        disabled={vpnClientRunning}
+                        onChange={(event) => setVpnProfileField('name', event.target.value)}
+                      />
+                    </div>
                     <label className="check">
                       <input
                         type="checkbox"
                         checked={vpnClientUseUDP}
                         disabled={vpnClientRunning}
-                        onChange={(event) => setVpnClientUseUDP(event.target.checked)}
+                        onChange={(event) => setVpnProfileField('useUdp', event.target.checked)}
                       />
                       <span>{t.useUDP}</span>
                     </label>
@@ -1185,7 +1451,7 @@ function App() {
                         type="checkbox"
                         checked={vpnClientEnableIPv6}
                         disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnClientEnableIPv6(event.target.checked)}
+                        onChange={(event) => setVpnProfileField('routeIpv6', event.target.checked)}
                       />
                       <span>{t.routeIpv6}</span>
                     </label>
@@ -1195,7 +1461,7 @@ function App() {
                           type="checkbox"
                           checked={vpnClientTunnelOnly}
                           disabled={vpnClientRunning}
-                          onChange={(event) => setVpnClientTunnelOnly(event.target.checked)}
+                          onChange={(event) => setVpnProfileField('tunnelOnly', event.target.checked)}
                         />
                         <span>{t.tunnelOnly}</span>
                       </label>
@@ -1206,7 +1472,7 @@ function App() {
                       <textarea
                         value={vpnClientDNSServers}
                         disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnClientDNSServers(event.target.value)}
+                        onChange={(event) => setVpnProfileField('dnsServers', event.target.value)}
                         placeholder={t.vpnDnsServersPlaceholder}
                       />
                     </div>
@@ -1215,7 +1481,7 @@ function App() {
                       <textarea
                         value={vpnClientRouteCIDRs}
                         disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnClientRouteCIDRs(event.target.value)}
+                        onChange={(event) => setVpnProfileField('routeCidrs', event.target.value)}
                         placeholder={t.routeCidrsPlaceholder}
                       />
                     </div>
@@ -1224,7 +1490,7 @@ function App() {
                       <input
                         value={vpnClientLinkConfig}
                         disabled={vpnClientRunning}
-                        onChange={(event) => setVpnClientLinkConfig(event.target.value)}
+                        onChange={(event) => setVpnProfileField('linkConfig', event.target.value)}
                         placeholder={t.linkConfigPlaceholder}
                       />
                     </div>
@@ -1233,7 +1499,7 @@ function App() {
                       <input
                         value={vpnClientExtraArgs}
                         disabled={vpnClientRunning}
-                        onChange={(event) => setVpnClientExtraArgs(event.target.value)}
+                        onChange={(event) => setVpnProfileField('extraArgs', event.target.value)}
                         placeholder={t.extraArgsPlaceholder}
                       />
                       <div className="field-hint"><p>{t.extraArgsHint}</p></div>
@@ -1404,6 +1670,7 @@ function App() {
               <Metric label={t.network} value={activeP2PReport?.network || '-'} />
               <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
               <Metric label={t.speed} value={formatRate(transferSpeed)} />
+              {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
             </section>
             <section className="log-pane">
             <div className="log-header">
@@ -1430,9 +1697,10 @@ function App() {
       {qrDataUrl && (
         <div className="qr-backdrop" role="presentation" onClick={closePasswordQr}>
           <section className="qr-dialog" role="dialog" aria-modal="true" aria-label={t.qr} onClick={(event) => event.stopPropagation()}>
-            <h2>{t.qr}</h2>
+            <h2>{qrTitle || t.qr}</h2>
             <img src={qrDataUrl} alt={t.qr} />
             <div className="qr-password">{qrPassword}</div>
+            {qrHint && <p className="field-hint">{qrHint}</p>}
             <button className="primary" onClick={closePasswordQr}>{t.close}</button>
           </section>
         </div>
@@ -1458,7 +1726,7 @@ function App() {
             </div>
             {scanError && <div className="scan-error">{scanError}</div>}
             <div className="scan-actions">
-              <button className="secondary" disabled={scanBusy} onClick={startScreenScan}>{t.scanAgain}</button>
+              <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan(scanPurpose)}>{t.scanAgain}</button>
               <button className="secondary" disabled={scanBusy} onClick={decodeWholeScan}>{t.scanWhole}</button>
               <button className="primary" onClick={closeScreenScan}>{t.close}</button>
             </div>
@@ -1491,6 +1759,69 @@ function latestReport(reports: P2PReport[]) {
   }, null);
 }
 
+function defaultVpnProfile(name: string): VPNProfile {
+  return {
+    name: name || 'Default',
+    passphrase: '',
+    useUdp: false,
+    routeIpv6: false,
+    dnsServers: defaultVpnDNS,
+    routeCidrs: defaultVpnRoutes,
+    linkConfig: '',
+    extraArgs: '',
+    tunnelOnly: false,
+  };
+}
+
+function currentVpnProfileFromState(t: typeof text.zh): VPNProfile {
+  return defaultVpnProfile(t.vpnProfileDefaultName);
+}
+
+function normalizeVpnProfile(profile: Partial<VPNProfile>, t: typeof text.zh): VPNProfile {
+  return {
+    name: String(profile.name || t.vpnProfileDefaultName).trim() || t.vpnProfileDefaultName,
+    passphrase: String(profile.passphrase || '').trim(),
+    useUdp: Boolean(profile.useUdp),
+    routeIpv6: Boolean(profile.routeIpv6),
+    dnsServers: normalizeLines(String(profile.dnsServers || defaultVpnDNS)) || defaultVpnDNS,
+    routeCidrs: normalizeLines(String(profile.routeCidrs || defaultVpnRoutes)) || defaultVpnRoutes,
+    linkConfig: String(profile.linkConfig || '').trim(),
+    extraArgs: String(profile.extraArgs || '').trim(),
+    tunnelOnly: Boolean(profile.tunnelOnly),
+  };
+}
+
+function normalizeVpnProfiles(profiles: VPNProfile[] | undefined, t: typeof text.zh) {
+  const source = profiles && profiles.length > 0 ? profiles : [defaultVpnProfile(t.vpnProfileDefaultName)];
+  return source.map((profile) => normalizeVpnProfile(profile, t));
+}
+
+function normalizeLines(value: string) {
+  return value.replace(/\r\n/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean).join('\n');
+}
+
+function clampIndex(index: number, length: number) {
+  if (length <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(index || 0, length - 1));
+}
+
+function uniqueVpnProfileName(profiles: VPNProfile[], base: string) {
+  const cleanBase = (base || 'Profile').trim() || 'Profile';
+  const existing = new Set(profiles.map((profile) => (profile.name || '').trim()));
+  if (!existing.has(cleanBase)) {
+    return cleanBase;
+  }
+  for (let index = 2; index < 1000; index++) {
+    const candidate = `${cleanBase} ${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${cleanBase} ${Date.now()}`;
+}
+
 function routeLabel(modeValue: string, t: typeof text.zh) {
   const clean = modeValue.trim().toLowerCase();
   if (clean === 'p2p') {
@@ -1500,6 +1831,23 @@ function routeLabel(modeValue: string, t: typeof text.zh) {
     return t.relayRoute;
   }
   return '-';
+}
+
+function peerIpv6Label(value: string, t: typeof text.zh) {
+  switch ((value || '').trim().toLowerCase()) {
+    case 'disabled':
+      return t.peerIpv6Disabled;
+    case 'waiting':
+      return t.peerIpv6Waiting;
+    case 'checking':
+      return t.peerIpv6Checking;
+    case 'available':
+      return t.peerIpv6Available;
+    case 'unavailable':
+      return t.peerIpv6Unavailable;
+    default:
+      return value || '-';
+  }
 }
 
 function normalizeP2PStatus(status: string) {

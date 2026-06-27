@@ -130,6 +130,9 @@ final class VpnClientController {
         metrics.network = GoncVpnState.network();
         metrics.routeMode = GoncVpnState.route();
         metrics.peer = GoncVpnState.peer();
+        metrics.inBps = GoncVpnState.inBps();
+        metrics.outBps = GoncVpnState.outBps();
+        metrics.lastTrafficMs = GoncVpnState.lastTrafficMs();
         return metrics;
     }
 

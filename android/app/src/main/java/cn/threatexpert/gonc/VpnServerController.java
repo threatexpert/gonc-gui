@@ -570,6 +570,18 @@ final class VpnServerController {
             }
 
             @Override
+            public void onTraffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+                host.mainHandler().post(() -> {
+                    if (runId != id || session == null) {
+                        return;
+                    }
+                    host.updateMetricsFromTraffic(metrics, inBps, outBps);
+                    host.requestBackgroundRender();
+                    host.refreshForegroundService();
+                });
+            }
+
+            @Override
             public void onReady(String endpoint) {
                 host.mainHandler().post(() -> {
                     if (runId != id || session == null) {
