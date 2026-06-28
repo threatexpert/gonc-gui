@@ -122,20 +122,16 @@ jobs:
             cp -R "build/bin/${{ matrix.binary }}" "${package_dir}/"
             cp README.md LICENSE "${package_dir}/"
             (cd dist && ditto -c -k --sequesterRsrc --keepParent "${release_name}" "${release_name}.zip")
-            hash="$(shasum -a 256 "dist/${release_name}.zip" | awk '{print $1}')"
-            printf "%s  %s\n" "${hash}" "${release_name}.zip" > "dist/${release_name}.zip.sha256.txt"
           elif [[ "${{ runner.os }}" == "Windows" ]]; then
             cp "build/bin/${{ matrix.binary }}" "${package_dir}/"
             cp "wintun/bin/${{ matrix.wintun_arch }}/wintun.dll" "${package_dir}/"
             cp README.md LICENSE "${package_dir}/"
             (cd dist && 7z a -tzip "${release_name}.zip" "${release_name}" > /dev/null)
-            sha256sum "dist/${release_name}.zip" | sed "s#dist/##" > "dist/${release_name}.zip.sha256.txt"
           else
             cp "build/bin/${{ matrix.binary }}" "${package_dir}/"
             chmod +x "${package_dir}/${{ matrix.binary }}"
             cp README.md LICENSE "${package_dir}/"
             tar -czf "dist/${release_name}.tar.gz" -C dist "${release_name}"
-            sha256sum "dist/${release_name}.tar.gz" | sed "s#dist/##" > "dist/${release_name}.tar.gz.sha256.txt"
           fi
 
       - name: Upload desktop artifact
@@ -145,7 +141,6 @@ jobs:
           path: |
             dist/*.zip
             dist/*.tar.gz
-            dist/*.sha256.txt
           if-no-files-found: error
 
   android:
@@ -229,7 +224,6 @@ jobs:
           release_name="${APP_NAME}-${VERSION}-android-arm64"
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release.apk "dist/${release_name}.apk"
-          sha256sum "dist/${release_name}.apk" | sed "s#dist/##" > "dist/${release_name}.apk.sha256.txt"
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
@@ -237,7 +231,6 @@ jobs:
           name: ${{ env.APP_NAME }}-android-arm64
           path: |
             dist/*.apk
-            dist/*.sha256.txt
           if-no-files-found: error
 
   publish:
@@ -277,6 +270,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            while IFS= read -r asset; do
+              gh release delete-asset "${RELEASE_TAG}" "${asset}" --yes
+            done < <(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | grep '\.sha256\.txt$' || true)
             gh release upload "${RELEASE_TAG}" release-assets/* --clobber
           else
             gh release create "${RELEASE_TAG}" release-assets/* \
