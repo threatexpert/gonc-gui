@@ -5,6 +5,7 @@ package winvpn
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,12 +22,19 @@ import (
 
 const (
 	interfaceName = "Gonc"
+	interfaceIPv4 = "10.60.173.33"
+	interfaceMask = "255.255.255.0"
 	defaultMTU    = 1400
 )
 
 type Session struct {
 	mu     sync.Mutex
 	config vpnconfig.Config
+}
+
+type routeTarget struct {
+	ifIndex string
+	nextHop string
 }
 
 func CheckRuntime() error {
@@ -82,7 +90,7 @@ func (s *Session) configure() error {
 	if err := waitInterface(interfaceName, 8*time.Second); err != nil {
 		return err
 	}
-	if err := run("netsh", "interface", "ipv4", "set", "address", "name="+interfaceName, "static", "10.0.0.2", "255.255.255.0"); err != nil {
+	if err := run("netsh", "interface", "ipv4", "set", "address", "name="+interfaceName, "static", interfaceIPv4, interfaceMask); err != nil {
 		return fmt.Errorf("configure VPN IPv4 address: %w", err)
 	}
 	if s.config.EnableIPv6 {
@@ -92,6 +100,9 @@ func (s *Session) configure() error {
 		}
 	}
 	if err := s.configureDNS(); err != nil {
+		return err
+	}
+	if err := s.configureBypassRoutes(); err != nil {
 		return err
 	}
 	if err := s.configureRoutes(); err != nil {
@@ -134,6 +145,40 @@ func (s *Session) configureDNS() error {
 	return nil
 }
 
+func (s *Session) configureBypassRoutes() error {
+	for _, ip := range s.config.BypassIPs {
+		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+		if err != nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
+			continue
+		}
+		route, err := currentRouteTo(addr.String())
+		if err != nil {
+			return fmt.Errorf("find route for VPN bypass %s: %w", addr, err)
+		}
+		if addr.Is6() {
+			if !s.config.EnableIPv6 {
+				continue
+			}
+			args := []string{"interface", "ipv6", "add", "route", addr.String() + "/128", "interface=" + route.ifIndex, "metric=1", "store=active"}
+			if route.nextHop != "" && route.nextHop != "::" {
+				args = append(args, "nexthop="+route.nextHop)
+			}
+			if err := run("netsh", args...); err != nil {
+				return fmt.Errorf("add VPN IPv6 bypass route %s: %w", addr, err)
+			}
+			continue
+		}
+		nextHop := route.nextHop
+		if nextHop == "" {
+			nextHop = "0.0.0.0"
+		}
+		if err := run("route", "add", addr.String(), "mask", "255.255.255.255", nextHop, "metric", "1", "IF", route.ifIndex); err != nil {
+			return fmt.Errorf("add VPN bypass route %s: %w", addr, err)
+		}
+	}
+	return nil
+}
+
 func (s *Session) configureRoutes() error {
 	for _, cidr := range s.config.Routes {
 		cidr = strings.TrimSpace(cidr)
@@ -161,6 +206,17 @@ func (s *Session) configureRoutes() error {
 }
 
 func (s *Session) cleanupRoutes() {
+	for _, ip := range s.config.BypassIPs {
+		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+		if err != nil || !addr.IsValid() {
+			continue
+		}
+		if addr.Is6() {
+			_ = run("netsh", "interface", "ipv6", "delete", "route", addr.String()+"/128")
+			continue
+		}
+		_ = run("route", "delete", addr.String(), "mask", "255.255.255.255")
+	}
 	for _, cidr := range s.config.Routes {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
@@ -202,6 +258,24 @@ func waitInterface(name string, timeout time.Duration) error {
 		time.Sleep(150 * time.Millisecond)
 	}
 	return fmt.Errorf("VPN interface %q did not appear", name)
+}
+
+func currentRouteTo(ip string) (routeTarget, error) {
+	script := "$r = Find-NetRoute -RemoteIPAddress '" + strings.ReplaceAll(ip, "'", "''") + "' | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($null -eq $r) { exit 2 }; Write-Output ([string]$r.InterfaceIndex + ',' + [string]$r.NextHop)"
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	output, err := cmd.Output()
+	if err != nil {
+		return routeTarget{}, err
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(output)), ",", 2)
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return routeTarget{}, fmt.Errorf("route not found")
+	}
+	route := routeTarget{ifIndex: strings.TrimSpace(parts[0])}
+	if len(parts) > 1 {
+		route.nextHop = strings.TrimSpace(parts[1])
+	}
+	return route, nil
 }
 
 func run(name string, args ...string) error {

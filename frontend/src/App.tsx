@@ -21,7 +21,7 @@ import {
   SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification} from '../wailsjs/runtime/runtime';
+import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
 type Lang = 'zh' | 'en';
@@ -205,6 +205,7 @@ const text = {
     scanWhole: '识别整张',
     scanAgain: '重新截图',
     scanNotFound: '未识别到二维码，请重新框选或重新截图。',
+    scanCaptureTimeout: '截图已取消或超时，请重试。',
     scanSuccess: '已从二维码识别口令',
     paste: '粘贴',
     copied: '口令已复制',
@@ -250,6 +251,8 @@ const text = {
     linkConfig: 'SOCKS5 入口',
     linkConfigPlaceholder: '留空自动选择本地端口',
     remoteFiles: '对方分享的文件',
+    selectAll: '全选',
+    invertSelection: '反选',
     refresh: '刷新',
     refreshing: '刷新中',
     stopDownload: '停止下载',
@@ -258,6 +261,7 @@ const text = {
     resumeDownload: '续传',
     overwriteDownload: '覆盖',
     noSelection: '请先勾选要下载的文件或目录。',
+    downloadFailed: '下载失败：',
     noList: '尚未读取目录',
     remoteListAutoLoadFailed: '自动读取文件列表失败：',
     files: '个文件',
@@ -278,6 +282,8 @@ const text = {
     modifiedTime: '修改时间',
     vpnTunnelPausedTitle: 'VPN 隧道已断开',
     vpnTunnelPausedBody: '正在等待隧道重连，系统路由已临时暂停。',
+    vpnTunnelRestoredTitle: 'VPN 隧道已恢复',
+    vpnTunnelRestoredBody: '隧道已重新连接，系统路由已恢复。',
     shareUpdateFailed: '更新分享列表失败。',
     weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
   },
@@ -355,6 +361,7 @@ const text = {
     scanWhole: 'Whole image',
     scanAgain: 'Recapture',
     scanNotFound: 'No QR code found. Try selecting again or recapture.',
+    scanCaptureTimeout: 'Screenshot was cancelled or timed out. Try again.',
     scanSuccess: 'Passphrase read from QR code',
     paste: 'Paste',
     copied: 'Passphrase copied',
@@ -400,6 +407,8 @@ const text = {
     linkConfig: 'SOCKS5 Entry',
     linkConfigPlaceholder: 'Blank picks a local port automatically',
     remoteFiles: 'Peer Shared Files',
+    selectAll: 'Select All',
+    invertSelection: 'Invert',
     refresh: 'Refresh',
     refreshing: 'Refreshing',
     stopDownload: 'Stop Download',
@@ -408,6 +417,7 @@ const text = {
     resumeDownload: 'Resume',
     overwriteDownload: 'Overwrite',
     noSelection: 'Select files or folders to download first.',
+    downloadFailed: 'Download failed:',
     noList: 'No list loaded',
     remoteListAutoLoadFailed: 'Automatic file list load failed:',
     files: 'files',
@@ -428,6 +438,8 @@ const text = {
     modifiedTime: 'Modified',
     vpnTunnelPausedTitle: 'VPN tunnel disconnected',
     vpnTunnelPausedBody: 'Waiting for the tunnel to reconnect. System routes are paused temporarily.',
+    vpnTunnelRestoredTitle: 'VPN tunnel restored',
+    vpnTunnelRestoredBody: 'The tunnel is connected again and system routes are restored.',
     shareUpdateFailed: 'Failed to update shared list.',
     weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
   }
@@ -475,6 +487,7 @@ function App() {
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [remoteListLoading, setRemoteListLoading] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [downloadError, setDownloadError] = useState('');
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
   const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
@@ -495,14 +508,20 @@ function App() {
   const [isAdministrator, setIsAdministrator] = useState(false);
   const scanImgRef = useRef<HTMLImageElement | null>(null);
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
+  const scanBusyRef = useRef(false);
+  const scanImageRef = useRef('');
+  const scanCaptureSeq = useRef(0);
   const notificationsReady = useRef(false);
   const vpnDisconnectNotified = useRef(false);
+  const vpnTunnelWasConnected = useRef(false);
   const vpnStopRequested = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
 
   const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
+  const currentRemoteBreadcrumbs = useMemo(() => remoteBreadcrumbs(currentRemotePath), [currentRemotePath]);
+  const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteList?.files || [], selectedPaths), [remoteList, selectedPaths]);
   const activeSpeed = Math.max(
     freshSpeed(downloadProgress?.time, downloadProgress?.bytesPerSecond, nowTick),
     freshSpeed(receiveTraffic?.time, receiveTraffic?.inBps, nowTick),
@@ -541,6 +560,37 @@ function App() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    scanBusyRef.current = scanBusy;
+  }, [scanBusy]);
+
+  useEffect(() => {
+    scanImageRef.current = scanImage;
+  }, [scanImage]);
+
+  useEffect(() => {
+    const recoverPendingCapture = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      window.setTimeout(() => {
+        if (!scanBusyRef.current || scanImageRef.current) {
+          return;
+        }
+        scanCaptureSeq.current += 1;
+        restoreAppWindowAfterCapture();
+        setScanBusy(false);
+        setError(t.scanCaptureTimeout);
+      }, 800);
+    };
+    window.addEventListener('focus', recoverPendingCapture);
+    document.addEventListener('visibilitychange', recoverPendingCapture);
+    return () => {
+      window.removeEventListener('focus', recoverPendingCapture);
+      document.removeEventListener('visibilitychange', recoverPendingCapture);
+    };
+  }, [t.scanCaptureTimeout]);
 
   useEffect(() => {
     let cancelled = false;
@@ -618,12 +668,13 @@ function App() {
         setVpnClientPeerIPv6(event.peerIpv6 || event.message || '');
       }
       if (event.mode === 'vpnClient') {
-        if (event.message.includes('pausing Windows VPN routes')) {
+        if (event.message.includes('pausing system VPN routes') || event.message.includes('pausing Windows VPN routes')) {
           if (!vpnStopRequested.current) {
             notifyVpnTunnelPaused();
           }
-        } else if (event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
-          vpnDisconnectNotified.current = false;
+        } else if (event.message.includes('System VPN started') || event.message.includes('System VPN routes restored') || event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
+          notifyVpnTunnelRestored();
+          vpnTunnelWasConnected.current = true;
           vpnStopRequested.current = false;
         }
       }
@@ -660,6 +711,7 @@ function App() {
         setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'vpnClient') {
         setVpnClientP2PReport(report);
+        handleVpnClientTunnelReport(report.status);
       }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
@@ -670,6 +722,9 @@ function App() {
         setLogs((current) => [...current.slice(-399), event]);
       }
       if (event.type === 'status') {
+        if (event.level === 'error') {
+          setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
+        }
         if (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error') {
           ClearTaskbarProgress().catch(() => undefined);
         }
@@ -879,18 +934,29 @@ function App() {
   }
 
   async function startScreenScan(purpose: 'password' | 'vpnProfile' = 'password') {
+    const captureSeq = scanCaptureSeq.current + 1;
+    scanCaptureSeq.current = captureSeq;
     setError('');
     setScanError('');
     setScanRect(null);
     setScanPurpose(purpose);
     setScanBusy(true);
     try {
-      const dataUrl = await CaptureScreen();
+      prepareAppWindowForCapture();
+      const dataUrl = await captureScreenWithTimeout(12000, t.scanCaptureTimeout);
+      if (scanCaptureSeq.current !== captureSeq) {
+        return;
+      }
       setScanImage(dataUrl);
     } catch (err) {
-      setError(localizeError(String(err)));
+      if (scanCaptureSeq.current === captureSeq) {
+        setError(localizeError(String(err)));
+      }
     } finally {
-      setScanBusy(false);
+      if (scanCaptureSeq.current === captureSeq) {
+        restoreAppWindowAfterCapture();
+        setScanBusy(false);
+      }
     }
   }
 
@@ -1023,6 +1089,7 @@ function App() {
       setVpnClientTraffic(null);
       setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
       vpnDisconnectNotified.current = false;
+      vpnTunnelWasConnected.current = false;
       vpnStopRequested.current = false;
     }
     try {
@@ -1082,6 +1149,7 @@ function App() {
           setVpnClientP2PReport((current) => current ? {...current, status: 'stopped'} : null);
           setVpnClientTraffic(null);
           vpnDisconnectNotified.current = false;
+          vpnTunnelWasConnected.current = false;
         }
       }
       await refreshStatus();
@@ -1099,6 +1167,7 @@ function App() {
   async function loadRemoteFiles(path = currentRemotePath, silent = false) {
     if (!silent) {
       setError('');
+      setDownloadError('');
     }
     setRemoteListLoading(true);
     try {
@@ -1109,7 +1178,7 @@ function App() {
       setRemoteList(list);
     } catch (err) {
       if (!silent) {
-        setError(localizeError(String(err)));
+        setDownloadError(localizeError(String(err)));
       } else {
         appendLog('status', 'warn', `${t.remoteListAutoLoadFailed} ${localizeError(String(err))}`);
       }
@@ -1233,25 +1302,27 @@ function App() {
 
   async function startDownload() {
     setError('');
+    setDownloadError('');
     if (selectedPaths.size === 0) {
-      setError(t.noSelection);
+      setDownloadError(t.noSelection);
       return;
     }
     try {
       await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths), downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
-      setError(localizeError(String(err)));
+      setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
 
   async function startDownloadAll() {
     setError('');
+    setDownloadError('');
     try {
       await StartHTTPDownload(saveDir, currentRemotePath, [], downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
-      setError(localizeError(String(err)));
+      setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
 
@@ -1267,7 +1338,7 @@ function App() {
   }
 
   function notifyVpnTunnelPaused() {
-    if (vpnDisconnectNotified.current || !notificationsReady.current) {
+    if (!vpnTunnelWasConnected.current || vpnDisconnectNotified.current || !notificationsReady.current) {
       return;
     }
     vpnDisconnectNotified.current = true;
@@ -1276,6 +1347,56 @@ function App() {
       title: t.vpnTunnelPausedTitle,
       body: t.vpnTunnelPausedBody,
     }).catch(() => undefined);
+  }
+
+  function notifyVpnTunnelRestored() {
+    if (!vpnDisconnectNotified.current || !notificationsReady.current) {
+      vpnDisconnectNotified.current = false;
+      return;
+    }
+    vpnDisconnectNotified.current = false;
+    SendNotification({
+      id: `vpn-tunnel-restored-${Date.now()}`,
+      title: t.vpnTunnelRestoredTitle,
+      body: t.vpnTunnelRestoredBody,
+    }).catch(() => undefined);
+  }
+
+  function handleVpnClientTunnelReport(status: string) {
+    if (vpnTunnelIsConnected(status)) {
+      vpnTunnelWasConnected.current = true;
+      vpnStopRequested.current = false;
+      notifyVpnTunnelRestored();
+      return;
+    }
+    if (vpnTunnelNeedsNotification(status) && !vpnStopRequested.current) {
+      notifyVpnTunnelPaused();
+    }
+  }
+
+  function restoreAppWindowAfterCapture() {
+    try {
+      WindowShow();
+      WindowUnminimise();
+      WindowSetAlwaysOnTop(true);
+      window.setTimeout(() => WindowSetAlwaysOnTop(false), 80);
+      window.setTimeout(() => {
+        WindowShow();
+        WindowUnminimise();
+        WindowSetAlwaysOnTop(true);
+        window.setTimeout(() => WindowSetAlwaysOnTop(false), 80);
+      }, 300);
+    } catch {
+      // Best-effort UI recovery for Linux screenshot portal cancellation.
+    }
+  }
+
+  function prepareAppWindowForCapture() {
+    try {
+      WindowMinimise();
+    } catch {
+      // The backend also moves the window before capture.
+    }
   }
 
   function appendSharePaths(paths: string[]) {
@@ -1305,6 +1426,34 @@ function App() {
       } else {
         next.add(path);
       }
+      return next;
+    });
+  }
+
+  function selectVisibleRemoteFiles() {
+    if (!visibleEntries.length) {
+      return;
+    }
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      visibleEntries.forEach((file) => next.add(file.path));
+      return next;
+    });
+  }
+
+  function invertVisibleRemoteFiles() {
+    if (!visibleEntries.length) {
+      return;
+    }
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      visibleEntries.forEach((file) => {
+        if (next.has(file.path)) {
+          next.delete(file.path);
+        } else {
+          next.add(file.path);
+        }
+      });
       return next;
     });
   }
@@ -1677,10 +1826,6 @@ function App() {
                     <span className={`dot ${receiveStatus.tone}`} />
                     {receiveStatus.label}
                   </span>
-                  <button className="secondary refresh-button" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles()}>
-                    {remoteListLoading && <span className="spinner-dot" aria-hidden="true" />}
-                    {remoteListLoading ? t.refreshing : t.refresh}
-                  </button>
                   <div className="compact-switch" aria-label={t.downloadMode}>
                     <button className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
                     <button className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
@@ -1696,11 +1841,28 @@ function App() {
                 </div>
               </div>
               <div className="remote-summary">
-                <span>{t.currentDir}: {currentRemotePath}</span>
-                <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
-                <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
-                <span>{selectedPaths.size} {t.selected}</span>
+                <div className="remote-breadcrumb" aria-label={t.currentDir}>
+                  {currentRemoteBreadcrumbs.map((part, index) => (
+                    <button
+                      className={index === currentRemoteBreadcrumbs.length - 1 ? 'active' : ''}
+                      disabled={index === currentRemoteBreadcrumbs.length - 1 || remoteListLoading}
+                      key={part.path}
+                      onClick={() => loadRemoteFiles(part.path)}
+                    >
+                      {part.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="remote-tools">
+                  <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
+                  <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
+                  <span>{selectedPaths.size} {t.selected}{selectedRemoteBytes > 0 ? ` · ${formatBytes(selectedRemoteBytes)}` : ''}</span>
+                  <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={selectVisibleRemoteFiles}>{t.selectAll}</button>
+                  <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={invertVisibleRemoteFiles}>{t.invertSelection}</button>
+                  <button className="quiet-action" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
+                </div>
               </div>
+              {downloadError && <div className="remote-error">{downloadError}</div>}
               {downloadProgress && (
                 <div className="progress">
                   <div>
@@ -1727,14 +1889,6 @@ function App() {
                   <p className="muted">{t.listHint}</p>
                 ) : (
                   <>
-                    {currentRemotePath !== '/' && (
-                      <div className="remote-row nav-row">
-                        <span>{t.dir}</span>
-                        <button className="folder-link" onClick={() => loadRemoteFiles(parentPath(currentRemotePath))}>{t.parent}</button>
-                        <em>-</em>
-                        <em />
-                      </div>
-                    )}
                     {visibleEntries.map((file) => (
                       <div className="remote-row" key={file.path}>
                         <input
@@ -1742,7 +1896,7 @@ function App() {
                           checked={selectedPaths.has(file.path)}
                           onChange={() => toggleSelected(file.path)}
                         />
-                        <span>{file.is_dir ? t.dir : t.file}</span>
+                        <span className={`type-icon ${file.is_dir ? 'folder' : 'file'}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file} />
                         {file.is_dir ? (
                           <button className="folder-link" onClick={() => loadRemoteFiles(file.path)}>{file.name}</button>
                         ) : (
@@ -1951,6 +2105,31 @@ function normalizeP2PStatus(status: string) {
   return status.trim().toLowerCase();
 }
 
+function captureScreenWithTimeout(timeoutMs: number, timeoutMessage: string) {
+  let timer = 0;
+  return Promise.race([
+    CaptureScreen(),
+    new Promise<string>((_resolve, reject) => {
+      timer = window.setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    }),
+  ]).finally(() => window.clearTimeout(timer));
+}
+
+function vpnTunnelIsConnected(status: string) {
+  return normalizeP2PStatus(status) === 'connected';
+}
+
+function vpnTunnelNeedsNotification(status: string) {
+  const normalized = normalizeP2PStatus(status);
+  if (['wait', 'waiting', 'idle', 'ready', 'connecting', 'negotiating', 'reconnecting', 'disconnected', 'disconnect', 'closed', 'stopped'].includes(normalized)) {
+    return true;
+  }
+  return normalized.includes('fail') ||
+    normalized.includes('error') ||
+    normalized.includes('lost') ||
+    normalized.includes('timeout');
+}
+
 function singleConnectionStatus(status: string, running: boolean, t: typeof text.zh): ConnectionStatus {
   if (!running) {
     return {label: t.idle, tone: 'idle'};
@@ -2091,6 +2270,40 @@ function parentPath(value: string) {
   }
   const index = normalized.lastIndexOf('/');
   return index <= 0 ? '/' : normalized.slice(0, index);
+}
+
+function remoteBreadcrumbs(value: string) {
+  const normalized = normalizeRemotePath(value);
+  const parts = normalized === '/' ? [] : normalized.replace(/^\//, '').split('/');
+  const breadcrumbs = [{name: '/', path: '/'}];
+  let current = '';
+  for (const part of parts) {
+    current = `${current}/${part}`;
+    breadcrumbs.push({name: part, path: normalizeRemotePath(current)});
+  }
+  return breadcrumbs;
+}
+
+function selectedRemoteSize(files: RemoteFile[], selectedPaths: Set<string>) {
+  if (files.length === 0 || selectedPaths.size === 0) {
+    return 0;
+  }
+  const selected = Array.from(selectedPaths).map(normalizeRemotePath);
+  const counted = new Set<string>();
+  let total = 0;
+  for (const file of files) {
+    if (file.is_dir) {
+      continue;
+    }
+    const filePath = normalizeRemotePath(file.path);
+    const matched = selected.some((path) => filePath === path || filePath.startsWith(`${path}/`));
+    if (!matched || counted.has(filePath)) {
+      continue;
+    }
+    counted.add(filePath);
+    total += file.size || 0;
+  }
+  return total;
 }
 
 function formatBytes(value: number) {

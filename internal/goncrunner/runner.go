@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/netip"
 	"os"
 	"regexp"
 	"strconv"
@@ -327,6 +328,9 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 
 	readyCh := make(chan string, 1)
 	tunnelLostCh := make(chan string, 8)
+	bypassUpdateCh := make(chan struct{}, 1)
+	var bypassMu sync.Mutex
+	bypassIPs := map[string]struct{}{}
 	cb.onReady = func(endpoint string) {
 		if !strings.HasPrefix(endpoint, "socks5://") {
 			return
@@ -336,7 +340,13 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		default:
 		}
 	}
-	cb.onP2PStatus = func(status string) {
+	cb.onP2PReport = func(status string, peer string) {
+		if ips := extractPeerIPs(peer); len(ips) > 0 && replaceBypassIPs(&bypassMu, bypassIPs, ips) {
+			select {
+			case bypassUpdateCh <- struct{}{}:
+			default:
+			}
+		}
 		if !vpnTunnelNeedsRoutePause(status) {
 			return
 		}
@@ -354,6 +364,36 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 	}
 	go func() {
 		var vpnApplied bool
+		var currentEndpoint string
+		var currentIPv6 bool
+		applyVPN := func(endpoint string, effectiveIPv6 bool, reapply bool) bool {
+			config := vpnconfig.Config{
+				SOCKS5Endpoint: endpoint,
+				Routes:         routeLines(req.RouteCIDRs, effectiveIPv6),
+				DNSServers:     dnsLines(req.DNSServers, effectiveIPv6),
+				BypassIPs:      snapshotBypassIPs(&bypassMu, bypassIPs),
+				EnableIPv6:     effectiveIPv6,
+				MTU:            1400,
+				LogLevel:       "warn",
+			}
+			if reapply {
+				emit(sink, "status", "info", "System VPN bypass updated; reapplying routes")
+				_ = helper.Stop()
+			} else if vpnApplied {
+				emit(sink, "status", "info", "SOCKS5 endpoint refreshed; reapplying system VPN")
+				_ = helper.Stop()
+			} else {
+				emit(sink, "status", "info", "SOCKS5 endpoint ready; starting system VPN")
+			}
+			if err := helper.Start(config); err != nil {
+				emit(sink, "status", "error", "System VPN start failed: "+err.Error())
+				session.Stop()
+				return false
+			}
+			vpnApplied = true
+			emit(sink, "status", "info", "System VPN started")
+			return true
+		}
 		for {
 			select {
 			case endpoint := <-readyCh:
@@ -362,36 +402,27 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					continue
 				}
 				effectiveIPv6 := resolveEffectiveIPv6(parent, req.EnableIPv6, endpoint, sink)
-				config := vpnconfig.Config{
-					SOCKS5Endpoint: endpoint,
-					Routes:         routeLines(req.RouteCIDRs, effectiveIPv6),
-					DNSServers:     dnsLines(req.DNSServers, effectiveIPv6),
-					EnableIPv6:     effectiveIPv6,
-					MTU:            1400,
-					LogLevel:       "warn",
-				}
-				if vpnApplied {
-					emit(sink, "status", "info", "SOCKS5 endpoint refreshed; reapplying Windows VPN")
-					_ = helper.Stop()
-				} else {
-					emit(sink, "status", "info", "SOCKS5 endpoint ready; starting Windows VPN")
-				}
-				if err := helper.Start(config); err != nil {
-					emit(sink, "status", "error", "Windows VPN start failed: "+err.Error())
-					session.Stop()
+				currentEndpoint = endpoint
+				currentIPv6 = effectiveIPv6
+				if !applyVPN(endpoint, effectiveIPv6, false) {
 					return
 				}
-				vpnApplied = true
-				emit(sink, "status", "info", "Windows VPN started")
+			case <-bypassUpdateCh:
+				if req.TunnelOnly || !vpnApplied || currentEndpoint == "" {
+					continue
+				}
+				if !applyVPN(currentEndpoint, currentIPv6, true) {
+					return
+				}
 			case status := <-tunnelLostCh:
 				if req.TunnelOnly || !vpnApplied {
 					continue
 				}
-				emit(sink, "status", "warn", "Tunnel status changed to "+status+"; pausing Windows VPN routes for reconnect")
+				emit(sink, "status", "warn", "Tunnel status changed to "+status+"; pausing system VPN routes for reconnect")
 				if err := helper.Stop(); err != nil {
-					emit(sink, "status", "warn", "Windows VPN pause failed: "+err.Error())
+					emit(sink, "status", "warn", "System VPN pause failed: "+err.Error())
 				} else {
-					emit(sink, "status", "info", "Windows VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
+					emit(sink, "status", "info", "System VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
 				}
 				if req.EnableIPv6 {
 					emitPeerIPv6(sink, "waiting")
@@ -481,6 +512,76 @@ func dnsLines(value string, enableIPv6 bool) []string {
 	return lines
 }
 
+func extractPeerIPs(peer string) []string {
+	peer = strings.TrimSpace(peer)
+	if peer == "" {
+		return nil
+	}
+	candidates := []string{peer}
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		candidates = append(candidates, host)
+	}
+	candidates = append(candidates, strings.Trim(peer, "[]"))
+
+	var ips []string
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.Trim(strings.TrimSpace(candidate), "[]")
+		if candidate == "" {
+			continue
+		}
+		addr, err := netip.ParseAddr(candidate)
+		if err != nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
+			continue
+		}
+		ip := addr.String()
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+func snapshotBypassIPs(mu *sync.Mutex, values map[string]struct{}) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	ips := make([]string, 0, len(values))
+	for ip := range values {
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+func replaceBypassIPs(mu *sync.Mutex, values map[string]struct{}, ips []string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	next := map[string]struct{}{}
+	for _, ip := range ips {
+		next[ip] = struct{}{}
+	}
+	if len(next) == len(values) {
+		same := true
+		for ip := range next {
+			if _, ok := values[ip]; !ok {
+				same = false
+				break
+			}
+		}
+		if same {
+			return false
+		}
+	}
+	for ip := range values {
+		delete(values, ip)
+	}
+	for ip := range next {
+		values[ip] = struct{}{}
+	}
+	return true
+}
+
 func vpnTunnelNeedsRoutePause(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "wait", "waiting", "idle", "ready", "connecting", "negotiating", "reconnecting", "disconnected", "disconnect", "closed", "stopped":
@@ -542,7 +643,7 @@ type callback struct {
 	sink        Sink
 	reportSink  ReportSink
 	onReady     func(string)
-	onP2PStatus func(string)
+	onP2PReport func(status string, peer string)
 	mu          sync.Mutex
 	exitCode    int
 }
@@ -552,8 +653,8 @@ func (c *callback) Event(level string, message string) {
 }
 
 func (c *callback) P2PReport(topic string, side string, status string, network string, mode string, peer string, timestamp int64, pid int) {
-	if c.onP2PStatus != nil {
-		c.onP2PStatus(status)
+	if c.onP2PReport != nil {
+		c.onP2PReport(status, peer)
 	}
 	if c.reportSink == nil {
 		return

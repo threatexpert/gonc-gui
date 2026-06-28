@@ -3,7 +3,9 @@ package vpnprofile
 import (
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -95,11 +97,32 @@ func Save(store Store) error {
 }
 
 func filePath() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "Gonc", "gonc-gui", "vpn-profiles.json.enc"), nil
+}
+
+func userConfigDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		return os.UserConfigDir()
+	}
+	sudoUser := strings.TrimSpace(os.Getenv("SUDO_USER"))
+	if sudoUser == "" || sudoUser == "root" {
+		return os.UserConfigDir()
+	}
+	u, err := user.Lookup(sudoUser)
+	if err != nil || strings.TrimSpace(u.HomeDir) == "" {
+		return os.UserConfigDir()
+	}
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(u.HomeDir, "Library", "Application Support"), nil
+	}
+	if configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configHome != "" && !strings.HasPrefix(configHome, "/root/") {
+		return configHome, nil
+	}
+	return filepath.Join(u.HomeDir, ".config"), nil
 }
 
 func normalize(store *Store) {

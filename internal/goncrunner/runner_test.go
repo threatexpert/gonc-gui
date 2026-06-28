@@ -2,6 +2,7 @@ package goncrunner
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -75,5 +76,44 @@ func TestVPNTunnelNeedsRoutePause(t *testing.T) {
 		if vpnTunnelNeedsRoutePause(status) {
 			t.Fatalf("vpnTunnelNeedsRoutePause(%q) = true, want false", status)
 		}
+	}
+}
+
+func TestExtractPeerIPs(t *testing.T) {
+	tests := []struct {
+		name string
+		peer string
+		want []string
+	}{
+		{name: "ipv4 hostport", peer: "203.0.113.10:443", want: []string{"203.0.113.10"}},
+		{name: "ipv6 hostport", peer: "[2001:db8::10]:443", want: []string{"2001:db8::10"}},
+		{name: "plain ipv4", peer: "198.51.100.2", want: []string{"198.51.100.2"}},
+		{name: "ignore loopback", peer: "127.0.0.1:1080", want: nil},
+		{name: "ignore hostname", peer: "example.com:443", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPeerIPs(tt.peer)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("extractPeerIPs(%q) = %#v, want %#v", tt.peer, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReplaceBypassIPs(t *testing.T) {
+	var mu sync.Mutex
+	values := map[string]struct{}{"203.0.113.10": {}}
+	if replaceBypassIPs(&mu, values, []string{"203.0.113.10"}) {
+		t.Fatal("replaceBypassIPs reported change for same set")
+	}
+	if !replaceBypassIPs(&mu, values, []string{"198.51.100.2"}) {
+		t.Fatal("replaceBypassIPs did not report change for new set")
+	}
+	if _, ok := values["203.0.113.10"]; ok {
+		t.Fatal("old bypass IP was not removed")
+	}
+	if _, ok := values["198.51.100.2"]; !ok {
+		t.Fatal("new bypass IP was not added")
 	}
 }
