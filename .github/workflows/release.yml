@@ -168,13 +168,6 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          command -v sdkmanager
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
       - name: Resolve version
         shell: bash
         run: |
@@ -199,6 +192,17 @@ jobs:
             fi
           done
           exit "${missing}"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "${sdkmanager}" ]]; then
+            echo "::error::sdkmanager was not found at ${sdkmanager}"
+            exit 1
+          fi
+          yes | "${sdkmanager}" --licenses >/dev/null || true
+          "${sdkmanager}" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Configure Android signing
         shell: bash
