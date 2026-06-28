@@ -1,0 +1,283 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version. Defaults to VERSION file."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: gonc-gui
+  WAILS_VERSION: v2.12.0
+
+jobs:
+  desktop:
+    name: Desktop ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows/amd64
+            platform: windows-amd64
+            binary: gonc-gui.exe
+            wintun_arch: amd64
+            linux_tags: ""
+          - os: windows-latest
+            target: windows/arm64
+            platform: windows-arm64
+            binary: gonc-gui.exe
+            wintun_arch: arm64
+            linux_tags: ""
+          - os: ubuntu-24.04
+            target: linux/amd64
+            platform: ubuntu-amd64
+            binary: gonc-gui
+            wintun_arch: ""
+            linux_tags: webkit2_41
+          - os: macos-15-intel
+            target: darwin/amd64
+            platform: macos-amd64
+            binary: gonc-gui.app
+            wintun_arch: ""
+            linux_tags: ""
+          - os: macos-15
+            target: darwin/arm64
+            platform: macos-arm64
+            binary: gonc-gui.app
+            wintun_arch: ""
+            linux_tags: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
+            version="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(tr -d '\r\n' < VERSION)"
+          fi
+          version="${version#v}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Build Wails app
+        shell: bash
+        run: |
+          if [[ -n "${{ matrix.linux_tags }}" ]]; then
+            wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }}"
+          else
+            wails build -platform "${{ matrix.target }}"
+          fi
+
+      - name: Package desktop artifact
+        shell: bash
+        run: |
+          release_name="${APP_NAME}-${VERSION}-${{ matrix.platform }}"
+          package_dir="dist/${release_name}"
+          mkdir -p "${package_dir}"
+
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            cp -R "build/bin/${{ matrix.binary }}" "${package_dir}/"
+            cp README.md LICENSE "${package_dir}/"
+            (cd dist && ditto -c -k --sequesterRsrc --keepParent "${release_name}" "${release_name}.zip")
+            hash="$(shasum -a 256 "dist/${release_name}.zip" | awk '{print $1}')"
+            printf "%s  %s\n" "${hash}" "${release_name}.zip" > "dist/${release_name}.zip.sha256.txt"
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp "build/bin/${{ matrix.binary }}" "${package_dir}/"
+            cp "wintun/bin/${{ matrix.wintun_arch }}/wintun.dll" "${package_dir}/"
+            cp README.md LICENSE "${package_dir}/"
+            (cd dist && 7z a -tzip "${release_name}.zip" "${release_name}" > /dev/null)
+            sha256sum "dist/${release_name}.zip" | sed "s#dist/##" > "dist/${release_name}.zip.sha256.txt"
+          else
+            cp "build/bin/${{ matrix.binary }}" "${package_dir}/"
+            chmod +x "${package_dir}/${{ matrix.binary }}"
+            cp README.md LICENSE "${package_dir}/"
+            tar -czf "dist/${release_name}.tar.gz" -C dist "${release_name}"
+            sha256sum "dist/${release_name}.tar.gz" | sed "s#dist/##" > "dist/${release_name}.tar.gz.sha256.txt"
+          fi
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256.txt
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          command -v sdkmanager
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
+            version="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(tr -d '\r\n' < VERSION)"
+          fi
+          version="${version#v}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+
+      - name: Check Android signing secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: Configure Android signing
+        shell: bash
+        run: |
+          printf "%s" "${ANDROID_KEYSTORE_BASE64}" | base64 -d > gonc-release.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=../gonc-release.jks
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          EOF
+
+      - name: Build Android release APK
+        shell: bash
+        run: |
+          chmod +x android/gradlew
+          (cd android && ./gradlew assembleRelease --no-daemon)
+          test -f android/app/build/outputs/apk/release/app-release.apk
+          test ! -f android/app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Package Android artifact
+        shell: bash
+        run: |
+          release_name="${APP_NAME}-${VERSION}-android-arm64"
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/${release_name}.apk"
+          sha256sum "dist/${release_name}.apk" | sed "s#dist/##" > "dist/${release_name}.apk.sha256.txt"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-android-arm64
+          path: |
+            dist/*.apk
+            dist/*.sha256.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-24.04
+    needs:
+      - desktop
+      - android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
+            version="${{ github.event.inputs.version }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="$(tr -d '\r\n' < VERSION)"
+          fi
+          version="${version#v}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "RELEASE_TAG=v${version}" >> "${GITHUB_ENV}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" release-assets/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" release-assets/* \
+              --title "${APP_NAME} ${VERSION}" \
+              --notes "Automated release for ${APP_NAME} ${VERSION}." \
+              --target "${GITHUB_SHA}" \
+              --latest
+          fi
