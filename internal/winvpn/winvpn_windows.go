@@ -30,10 +30,6 @@ const (
 	dnsLeakRuleUDPHigh = "Gonc VPN DNS Leak Protection Dnscache UDP 53 non-VPN local high"
 	dnsLeakRuleTCPLow  = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local low"
 	dnsLeakRuleTCPHigh = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local high"
-	legacyDNSLeakTCP   = "Gonc VPN DNS Leak Protection TCP 53"
-	legacyDNSLeakUDP   = "Gonc VPN DNS Leak Protection UDP 53"
-	legacyDNSCacheTCP  = "Gonc VPN DNS Leak Protection Dnscache TCP 53"
-	legacyDNSCacheUDP  = "Gonc VPN DNS Leak Protection Dnscache UDP 53"
 )
 
 type Session struct {
@@ -194,10 +190,6 @@ func cleanupDNSLeakFirewallRules() error {
 		dnsLeakRuleUDPHigh,
 		dnsLeakRuleTCPLow,
 		dnsLeakRuleTCPHigh,
-		legacyDNSCacheUDP,
-		legacyDNSCacheTCP,
-		legacyDNSLeakUDP,
-		legacyDNSLeakTCP,
 	} {
 		if err := removeDNSLeakFirewallRule(name); err != nil && firstErr == nil {
 			firstErr = err
