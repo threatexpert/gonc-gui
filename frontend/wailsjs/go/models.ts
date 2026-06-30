@@ -120,6 +120,9 @@ export namespace main {
 	    dnsServers: string;
 	    routeCidrs: string;
 	    linkConfig: string;
+	    mtu: number;
+	    routeMetric: number;
+	    blockDnsLeak: boolean;
 	    enableIpv6: boolean;
 	    tunnelOnly: boolean;
 	    extraArgs: string;
@@ -141,6 +144,9 @@ export namespace main {
 	        this.dnsServers = source["dnsServers"];
 	        this.routeCidrs = source["routeCidrs"];
 	        this.linkConfig = source["linkConfig"];
+	        this.mtu = source["mtu"];
+	        this.routeMetric = source["routeMetric"];
+	        this.blockDnsLeak = source["blockDnsLeak"];
 	        this.enableIpv6 = source["enableIpv6"];
 	        this.tunnelOnly = source["tunnelOnly"];
 	        this.extraArgs = source["extraArgs"];
@@ -159,6 +165,9 @@ export namespace vpnprofile {
 	    dnsServers: string;
 	    routeCidrs: string;
 	    linkConfig: string;
+	    mtu: number;
+	    routeMetric: number;
+	    blockDnsLeak: boolean;
 	    extraArgs: string;
 	    tunnelOnly: boolean;
 	
@@ -175,6 +184,9 @@ export namespace vpnprofile {
 	        this.dnsServers = source["dnsServers"];
 	        this.routeCidrs = source["routeCidrs"];
 	        this.linkConfig = source["linkConfig"];
+	        this.mtu = source["mtu"];
+	        this.routeMetric = source["routeMetric"];
+	        this.blockDnsLeak = source["blockDnsLeak"];
 	        this.extraArgs = source["extraArgs"];
 	        this.tunnelOnly = source["tunnelOnly"];
 	    }

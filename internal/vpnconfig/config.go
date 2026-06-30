@@ -7,5 +7,7 @@ type Config struct {
 	BypassIPs      []string `json:"bypassIps"`
 	EnableIPv6     bool     `json:"enableIPv6"`
 	MTU            int      `json:"mtu"`
+	RouteMetric    int      `json:"routeMetric"`
+	BlockDNSLeak   bool     `json:"blockDnsLeak"`
 	LogLevel       string   `json:"logLevel"`
 }

@@ -7,6 +7,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.Editable;
+import android.text.InputType;
 import android.text.TextWatcher;
 import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
@@ -130,6 +131,8 @@ final class VpnClientController {
         metrics.network = GoncVpnState.network();
         metrics.routeMode = GoncVpnState.route();
         metrics.peer = GoncVpnState.peer();
+        metrics.inBytes = GoncVpnState.inBytes();
+        metrics.outBytes = GoncVpnState.outBytes();
         metrics.inBps = GoncVpnState.inBps();
         metrics.outBps = GoncVpnState.outBps();
         metrics.lastTrafficMs = GoncVpnState.lastTrafficMs();
@@ -190,6 +193,7 @@ final class VpnClientController {
             card.addView(profileNameField(), u.blockParams(u.dp(10)));
             card.addView(options(), u.blockParams(u.dp(10)));
             card.addView(linkConfigField(), u.blockParams(u.dp(10)));
+            card.addView(mtuField(), u.blockParams(u.dp(10)));
             card.addView(extraArgsField(), u.blockParams(u.dp(10)));
             card.addView(multilineField(
                     string(R.string.vpn_dns_servers),
@@ -418,6 +422,21 @@ final class VpnClientController {
                 string(R.string.vpn_extra_args_hint),
                 value -> currentProfile().extraArgs = value);
         TextView desc = u.text(string(R.string.vpn_extra_args_desc), 12, u.muted(), Typeface.NORMAL);
+        desc.setPadding(u.dp(4), u.dp(4), 0, 0);
+        box.addView(desc);
+        return box;
+    }
+
+    private View mtuField() {
+        UiKit u = host.ui();
+        LinearLayout box = (LinearLayout) labeledSingleLineField(
+                string(R.string.vpn_mtu),
+                String.valueOf(VpnProfile.normalizeMtu(currentProfile().mtu)),
+                string(R.string.vpn_mtu_hint),
+                value -> currentProfile().mtu = parseMtu(value));
+        EditText input = (EditText) box.getChildAt(1);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        TextView desc = u.text(string(R.string.vpn_mtu_desc), 12, u.muted(), Typeface.NORMAL);
         desc.setPadding(u.dp(4), u.dp(4), 0, 0);
         box.addView(desc);
         return box;
@@ -730,8 +749,20 @@ final class VpnClientController {
         profile.passphrase = profile.passphrase == null ? "" : profile.passphrase.trim();
         profile.linkConfig = profile.linkConfig == null ? "" : profile.linkConfig.trim();
         profile.extraArgs = profile.extraArgs == null ? "" : profile.extraArgs.trim();
+        profile.mtu = VpnProfile.normalizeMtu(profile.mtu);
         profile.dnsServers = normalizeLines(profile.dnsServers);
         profile.routeCidrs = normalizeLines(profile.routeCidrs);
+    }
+
+    private int parseMtu(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return VpnProfile.DEFAULT_MTU;
+        }
+        try {
+            return VpnProfile.normalizeMtu(Integer.parseInt(value.trim()));
+        } catch (NumberFormatException ignored) {
+            return VpnProfile.DEFAULT_MTU;
+        }
     }
 
     private String normalizeLines(String value) {

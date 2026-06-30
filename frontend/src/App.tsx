@@ -21,7 +21,7 @@ import {
   SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {ClipboardGetText, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
+import {ClipboardGetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
 type Lang = 'zh' | 'en';
@@ -108,6 +108,9 @@ type VPNProfile = {
   dnsServers: string;
   routeCidrs: string;
   linkConfig: string;
+  mtu: number;
+  routeMetric: number;
+  blockDnsLeak: boolean;
   extraArgs: string;
   tunnelOnly: boolean;
 };
@@ -129,6 +132,8 @@ const vpnProfileQrType = 'gonc.vpn.profile';
 const defaultVpnDNS = '8.8.8.8\n2001:4860:4860::8888';
 const defaultVpnRoutes = '0.0.0.0/1\n128.0.0.0/1\n::/0';
 const privateLanRoutes = '10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16';
+const defaultVpnMTU = 1400;
+const defaultVpnRouteMetric = 1;
 
 const text = {
   zh: {
@@ -250,6 +255,14 @@ const text = {
     routeFillPrivate: '常见内网',
     linkConfig: 'SOCKS5 入口',
     linkConfigPlaceholder: '留空自动选择本地端口',
+    mtu: 'MTU',
+    mtuPlaceholder: '默认 1400',
+    mtuHint: '留空或无效值使用默认 1400，建议范围 576-9000。',
+    routeMetric: 'Windows 路由跃点数',
+    routeMetricPlaceholder: '默认 1',
+    routeMetricHint: '仅 Windows VPN 使用。留空或无效值使用默认 1。',
+    dnsLeakProtection: '防 DNS 泄漏',
+    dnsLeakProtectionHint: '仅 Windows VPN 使用。连接期间阻止系统 DNS Client 服务用非 VPN 本地地址访问 TCP/UDP 53，停止 VPN 后会删除规则。',
     remoteFiles: '对方分享的文件',
     selectAll: '全选',
     invertSelection: '反选',
@@ -406,6 +419,14 @@ const text = {
     routeFillPrivate: 'Private LANs',
     linkConfig: 'SOCKS5 Entry',
     linkConfigPlaceholder: 'Blank picks a local port automatically',
+    mtu: 'MTU',
+    mtuPlaceholder: 'Default 1400',
+    mtuHint: 'Blank or invalid values use the default 1400. Recommended range: 576-9000.',
+    routeMetric: 'Windows route metric',
+    routeMetricPlaceholder: 'Default 1',
+    routeMetricHint: 'Windows VPN only. Blank or invalid values use the default 1.',
+    dnsLeakProtection: 'DNS leak protection',
+    dnsLeakProtectionHint: 'Windows VPN only. Blocks the system DNS Client service from accessing TCP/UDP 53 from non-VPN local addresses and removes the rules after VPN stops.',
     remoteFiles: 'Peer Shared Files',
     selectAll: 'Select All',
     invertSelection: 'Invert',
@@ -474,7 +495,11 @@ function App() {
   const [vpnClientDNSServers, setVpnClientDNSServers] = useState('');
   const [vpnClientRouteCIDRs, setVpnClientRouteCIDRs] = useState('');
   const [vpnClientLinkConfig, setVpnClientLinkConfig] = useState('');
+  const [vpnClientMTU, setVpnClientMTU] = useState(String(defaultVpnMTU));
+  const [vpnClientRouteMetric, setVpnClientRouteMetric] = useState(String(defaultVpnRouteMetric));
+  const [vpnClientBlockDNSLeak, setVpnClientBlockDNSLeak] = useState(false);
   const [vpnClientExtraArgs, setVpnClientExtraArgs] = useState('');
+  const [runtimePlatform, setRuntimePlatform] = useState(() => navigator.platform.toLowerCase().includes('win') ? 'windows' : '');
   const [vpnProfiles, setVpnProfiles] = useState<VPNProfile[]>([]);
   const [selectedVpnProfile, setSelectedVpnProfile] = useState(0);
   const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, vpnServerRunning: false, vpnClientRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
@@ -495,6 +520,7 @@ function App() {
   const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
   const [vpnClientTraffic, setVpnClientTraffic] = useState<LogEvent | null>(null);
   const [vpnClientPeerIPv6, setVpnClientPeerIPv6] = useState('disabled');
+  const [vpnClientSocks5Endpoint, setVpnClientSocks5Endpoint] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrPassword, setQrPassword] = useState('');
@@ -531,6 +557,7 @@ function App() {
   const receiveRunning = status.receiveRunning;
   const vpnServerRunning = status.vpnServerRunning;
   const vpnClientRunning = status.vpnClientRunning;
+  const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
   const canStart = !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
@@ -633,6 +660,24 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    Environment()
+      .then((env) => {
+        if (!cancelled) {
+          setRuntimePlatform(String(env.platform || '').toLowerCase());
+        }
+      })
+      .catch(() => {
+        if (!cancelled && navigator.platform.toLowerCase().includes('win')) {
+          setRuntimePlatform('windows');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     InitializeNotifications()
       .then(() => IsNotificationAvailable())
       .then(async (available) => {
@@ -666,6 +711,9 @@ function App() {
       }
       if (event.type === 'peer_ipv6' && event.mode === 'vpnClient') {
         setVpnClientPeerIPv6(event.peerIpv6 || event.message || '');
+      }
+      if (event.type === 'socks5' && event.mode === 'vpnClient') {
+        setVpnClientSocks5Endpoint(event.localUrl || event.message.replace(/^SOCKS5 endpoint is ready:\s*/i, ''));
       }
       if (event.mode === 'vpnClient') {
         if (event.message.includes('pausing system VPN routes') || event.message.includes('pausing Windows VPN routes')) {
@@ -1088,6 +1136,7 @@ function App() {
       setVpnClientP2PReport(null);
       setVpnClientTraffic(null);
       setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
+      setVpnClientSocks5Endpoint('');
       vpnDisconnectNotified.current = false;
       vpnTunnelWasConnected.current = false;
       vpnStopRequested.current = false;
@@ -1105,6 +1154,9 @@ function App() {
         dnsServers: vpnClientDNSServers,
         routeCidrs: vpnClientRouteCIDRs,
         linkConfig: vpnClientLinkConfig,
+        mtu: normalizeVpnMTU(vpnClientMTU),
+        routeMetric: normalizeRouteMetric(vpnClientRouteMetric),
+        blockDnsLeak: isWindows && vpnClientBlockDNSLeak,
         enableIpv6: vpnClientEnableIPv6,
         tunnelOnly: vpnClientTunnelOnly,
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs
@@ -1148,6 +1200,7 @@ function App() {
         } else {
           setVpnClientP2PReport((current) => current ? {...current, status: 'stopped'} : null);
           setVpnClientTraffic(null);
+          setVpnClientSocks5Endpoint('');
           vpnDisconnectNotified.current = false;
           vpnTunnelWasConnected.current = false;
         }
@@ -1195,6 +1248,9 @@ function App() {
     setVpnClientDNSServers(profile.dnsServers || defaultVpnDNS);
     setVpnClientRouteCIDRs(profile.routeCidrs || defaultVpnRoutes);
     setVpnClientLinkConfig(profile.linkConfig || '');
+    setVpnClientMTU(String(normalizeVpnMTU(profile.mtu)));
+    setVpnClientRouteMetric(String(normalizeRouteMetric(profile.routeMetric)));
+    setVpnClientBlockDNSLeak(Boolean(profile.blockDnsLeak));
     setVpnClientExtraArgs(profile.extraArgs || '');
   }
 
@@ -1248,6 +1304,15 @@ function App() {
         break;
       case 'linkConfig':
         setVpnClientLinkConfig(String(value));
+        break;
+      case 'mtu':
+        setVpnClientMTU(String(value));
+        break;
+      case 'routeMetric':
+        setVpnClientRouteMetric(String(value));
+        break;
+      case 'blockDnsLeak':
+        setVpnClientBlockDNSLeak(Boolean(value));
         break;
       case 'extraArgs':
         setVpnClientExtraArgs(String(value));
@@ -1704,6 +1769,62 @@ function App() {
                       />
                     </div>
                     <div className="field">
+                      <label>{t.mtu}</label>
+                      <input
+                        type="number"
+                        min="576"
+                        max="9000"
+                        step="1"
+                        value={vpnClientMTU}
+                        disabled={vpnClientRunning || vpnClientTunnelOnly}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setVpnClientMTU(value);
+                          updateCurrentVpnProfile({mtu: normalizeVpnMTU(value)});
+                        }}
+                        placeholder={t.mtuPlaceholder}
+                      />
+                      <div className="field-hint"><p>{t.mtuHint}</p></div>
+                    </div>
+                    {isWindows && (
+                      <div className="field">
+                        <label>{t.routeMetric}</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="9999"
+                          step="1"
+                          value={vpnClientRouteMetric}
+                          disabled={vpnClientRunning || vpnClientTunnelOnly}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setVpnClientRouteMetric(value);
+                            updateCurrentVpnProfile({routeMetric: normalizeRouteMetric(value)});
+                          }}
+                          placeholder={t.routeMetricPlaceholder}
+                        />
+                        <div className="field-hint"><p>{t.routeMetricHint}</p></div>
+                      </div>
+                    )}
+                    {isWindows && (
+                      <div className="field inline-field">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={vpnClientBlockDNSLeak}
+                            disabled={vpnClientRunning || vpnClientTunnelOnly}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setVpnClientBlockDNSLeak(checked);
+                              updateCurrentVpnProfile({blockDnsLeak: checked});
+                            }}
+                          />
+                          <span>{t.dnsLeakProtection}</span>
+                        </label>
+                        <div className="field-hint"><p>{t.dnsLeakProtectionHint}</p></div>
+                      </div>
+                    )}
+                    <div className="field">
                       <label>{t.vpnDnsServers}</label>
                       <textarea
                         value={vpnClientDNSServers}
@@ -1921,6 +2042,7 @@ function App() {
               <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
               <Metric label={t.speed} value={formatRate(transferSpeed)} />
               {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
+              {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
               {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
             </section>
             <section className="log-pane">
@@ -2019,6 +2141,9 @@ function defaultVpnProfile(name: string): VPNProfile {
     dnsServers: defaultVpnDNS,
     routeCidrs: defaultVpnRoutes,
     linkConfig: '',
+    mtu: defaultVpnMTU,
+    routeMetric: defaultVpnRouteMetric,
+    blockDnsLeak: false,
     extraArgs: '',
     tunnelOnly: false,
   };
@@ -2037,9 +2162,28 @@ function normalizeVpnProfile(profile: Partial<VPNProfile>, t: typeof text.zh): V
     dnsServers: normalizeLines(String(profile.dnsServers || defaultVpnDNS)) || defaultVpnDNS,
     routeCidrs: normalizeLines(String(profile.routeCidrs || defaultVpnRoutes)) || defaultVpnRoutes,
     linkConfig: String(profile.linkConfig || '').trim(),
+    mtu: normalizeVpnMTU(profile.mtu),
+    routeMetric: normalizeRouteMetric(profile.routeMetric),
+    blockDnsLeak: Boolean(profile.blockDnsLeak),
     extraArgs: String(profile.extraArgs || '').trim(),
     tunnelOnly: Boolean(profile.tunnelOnly),
   };
+}
+
+function normalizeVpnMTU(value: unknown): number {
+  const mtu = typeof value === 'number' ? value : Number(String(value || '').trim());
+  if (!Number.isFinite(mtu) || mtu < 576 || mtu > 9000) {
+    return defaultVpnMTU;
+  }
+  return Math.round(mtu);
+}
+
+function normalizeRouteMetric(value: unknown): number {
+  const metric = typeof value === 'number' ? value : Number(String(value || '').trim());
+  if (!Number.isFinite(metric) || metric < 1 || metric > 9999) {
+    return defaultVpnRouteMetric;
+  }
+  return Math.round(metric);
 }
 
 function normalizeVpnProfiles(profiles: VPNProfile[] | undefined, t: typeof text.zh) {

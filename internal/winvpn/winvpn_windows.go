@@ -21,10 +21,19 @@ import (
 )
 
 const (
-	interfaceName = "Gonc"
-	interfaceIPv4 = "10.60.173.33"
-	interfaceMask = "255.255.255.0"
-	defaultMTU    = 1400
+	interfaceName      = "Gonc"
+	interfaceIPv4      = "10.60.173.33"
+	interfaceMask      = "255.255.255.0"
+	defaultMTU         = 1400
+	defaultRouteMetric = 1
+	dnsLeakRuleUDPLow  = "Gonc VPN DNS Leak Protection Dnscache UDP 53 non-VPN local low"
+	dnsLeakRuleUDPHigh = "Gonc VPN DNS Leak Protection Dnscache UDP 53 non-VPN local high"
+	dnsLeakRuleTCPLow  = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local low"
+	dnsLeakRuleTCPHigh = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local high"
+	legacyDNSLeakTCP   = "Gonc VPN DNS Leak Protection TCP 53"
+	legacyDNSLeakUDP   = "Gonc VPN DNS Leak Protection UDP 53"
+	legacyDNSCacheTCP  = "Gonc VPN DNS Leak Protection Dnscache TCP 53"
+	legacyDNSCacheUDP  = "Gonc VPN DNS Leak Protection Dnscache UDP 53"
 )
 
 type Session struct {
@@ -60,6 +69,7 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	if config.MTU <= 0 {
 		config.MTU = defaultMTU
 	}
+	config.RouteMetric = normalizeRouteMetric(config.RouteMetric)
 	if config.LogLevel == "" {
 		config.LogLevel = "warn"
 	}
@@ -82,8 +92,9 @@ func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupRoutes()
+	err := cleanupDNSLeakFirewallRules()
 	engine.Stop()
-	return nil
+	return err
 }
 
 func (s *Session) configure() error {
@@ -99,6 +110,9 @@ func (s *Session) configure() error {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}
+	if err := s.configureInterfaceMetric(); err != nil {
+		return err
+	}
 	if err := s.configureDNS(); err != nil {
 		return err
 	}
@@ -108,7 +122,116 @@ func (s *Session) configure() error {
 	if err := s.configureRoutes(); err != nil {
 		return err
 	}
+	if err := s.configureDNSLeakProtection(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func normalizeRouteMetric(value int) int {
+	if value < 1 || value > 9999 {
+		return defaultRouteMetric
+	}
+	return value
+}
+
+func (s *Session) configureInterfaceMetric() error {
+	metric := fmt.Sprint(s.config.RouteMetric)
+	if err := run("netsh", "interface", "ipv4", "set", "interface", "interface="+interfaceName, "metric="+metric); err != nil {
+		return fmt.Errorf("configure VPN IPv4 interface metric: %w", err)
+	}
+	if s.config.EnableIPv6 {
+		if err := run("netsh", "interface", "ipv6", "set", "interface", "interface="+interfaceName, "metric="+metric); err != nil {
+			return fmt.Errorf("configure VPN IPv6 interface metric: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Session) configureDNSLeakProtection() error {
+	_ = cleanupDNSLeakFirewallRules()
+	if !s.config.BlockDNSLeak {
+		return nil
+	}
+	if err := addDNSLeakFirewallRule(dnsLeakRuleUDPLow, "UDP", "0.0.0.0-10.60.173.32"); err != nil {
+		return err
+	}
+	if err := addDNSLeakFirewallRule(dnsLeakRuleUDPHigh, "UDP", "10.60.173.34-255.255.255.255"); err != nil {
+		_ = cleanupDNSLeakFirewallRules()
+		return err
+	}
+	if err := addDNSLeakFirewallRule(dnsLeakRuleTCPLow, "TCP", "0.0.0.0-10.60.173.32"); err != nil {
+		_ = cleanupDNSLeakFirewallRules()
+		return err
+	}
+	if err := addDNSLeakFirewallRule(dnsLeakRuleTCPHigh, "TCP", "10.60.173.34-255.255.255.255"); err != nil {
+		_ = cleanupDNSLeakFirewallRules()
+		return err
+	}
+	return nil
+}
+
+func addDNSLeakFirewallRule(name string, protocol string, localIP string) error {
+	if err := run("netsh", "advfirewall", "firewall", "add", "rule",
+		"name="+name,
+		"dir=out",
+		"action=block",
+		"protocol="+protocol,
+		"localip="+localIP,
+		"remoteport=53",
+		"service=Dnscache",
+		"profile=any",
+		"enable=yes"); err != nil {
+		return fmt.Errorf("add DNS leak firewall rule %s: %w", name, err)
+	}
+	return nil
+}
+
+func cleanupDNSLeakFirewallRules() error {
+	var firstErr error
+	for _, name := range []string{
+		dnsLeakRuleUDPLow,
+		dnsLeakRuleUDPHigh,
+		dnsLeakRuleTCPLow,
+		dnsLeakRuleTCPHigh,
+		legacyDNSCacheUDP,
+		legacyDNSCacheTCP,
+		legacyDNSLeakUDP,
+		legacyDNSLeakTCP,
+	} {
+		if err := removeDNSLeakFirewallRule(name); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func removeDNSLeakFirewallRule(name string) error {
+	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if isFirewallRuleMissingMessage(msg) {
+			return nil
+		}
+		if msg != "" {
+			return fmt.Errorf("remove DNS leak firewall rule %s: %w: %s", name, err, msg)
+		}
+		return fmt.Errorf("remove DNS leak firewall rule %s: %w", name, err)
+	}
+	return nil
+}
+
+func isFirewallRuleMissingMessage(message string) bool {
+	clean := strings.ToLower(strings.TrimSpace(message))
+	if clean == "" {
+		return false
+	}
+	return strings.Contains(clean, "no rules match") ||
+		strings.Contains(clean, "no rule matches") ||
+		(strings.Contains(clean, "没有") && strings.Contains(clean, "规则")) ||
+		(strings.Contains(clean, "找不到") && strings.Contains(clean, "规则"))
 }
 
 func (s *Session) configureDNS() error {
@@ -189,7 +312,7 @@ func (s *Session) configureRoutes() error {
 			if !s.config.EnableIPv6 {
 				continue
 			}
-			if err := run("netsh", "interface", "ipv6", "add", "route", cidr, "interface="+interfaceName, "publish=no"); err != nil {
+			if err := run("netsh", "interface", "ipv6", "add", "route", cidr, "interface="+interfaceName, "metric="+fmt.Sprint(s.config.RouteMetric), "publish=no"); err != nil {
 				return fmt.Errorf("add VPN IPv6 route %s: %w", cidr, err)
 			}
 			continue
@@ -198,7 +321,7 @@ func (s *Session) configureRoutes() error {
 		if err != nil || ip == nil {
 			return fmt.Errorf("invalid VPN route %s", cidr)
 		}
-		if err := run("netsh", "interface", "ipv4", "add", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "metric=5", "store=active"); err != nil {
+		if err := run("netsh", "interface", "ipv4", "add", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "metric="+fmt.Sprint(s.config.RouteMetric), "store=active"); err != nil {
 			return fmt.Errorf("add VPN route %s: %w", cidr, err)
 		}
 	}
@@ -263,6 +386,7 @@ func waitInterface(name string, timeout time.Duration) error {
 func currentRouteTo(ip string) (routeTarget, error) {
 	script := "$r = Find-NetRoute -RemoteIPAddress '" + strings.ReplaceAll(ip, "'", "''") + "' | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($null -eq $r) { exit 2 }; Write-Output ([string]$r.InterfaceIndex + ',' + [string]$r.NextHop)"
 	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.Output()
 	if err != nil {
 		return routeTarget{}, err

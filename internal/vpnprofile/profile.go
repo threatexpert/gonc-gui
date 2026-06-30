@@ -10,21 +10,26 @@ import (
 )
 
 const (
-	defaultName   = "Default"
-	defaultDNS    = "8.8.8.8\n2001:4860:4860::8888"
-	defaultRoutes = "0.0.0.0/1\n128.0.0.0/1\n::/0"
+	defaultName        = "Default"
+	defaultDNS         = "8.8.8.8\n2001:4860:4860::8888"
+	defaultRoutes      = "0.0.0.0/1\n128.0.0.0/1\n::/0"
+	defaultMTU         = 1400
+	defaultRouteMetric = 1
 )
 
 type Profile struct {
-	Name       string `json:"name"`
-	Passphrase string `json:"passphrase"`
-	UseUDP     bool   `json:"useUdp"`
-	RouteIPv6  bool   `json:"routeIpv6"`
-	DNSServers string `json:"dnsServers"`
-	RouteCIDRs string `json:"routeCidrs"`
-	LinkConfig string `json:"linkConfig"`
-	ExtraArgs  string `json:"extraArgs"`
-	TunnelOnly bool   `json:"tunnelOnly"`
+	Name         string `json:"name"`
+	Passphrase   string `json:"passphrase"`
+	UseUDP       bool   `json:"useUdp"`
+	RouteIPv6    bool   `json:"routeIpv6"`
+	DNSServers   string `json:"dnsServers"`
+	RouteCIDRs   string `json:"routeCidrs"`
+	LinkConfig   string `json:"linkConfig"`
+	MTU          int    `json:"mtu"`
+	RouteMetric  int    `json:"routeMetric"`
+	BlockDNSLeak bool   `json:"blockDnsLeak"`
+	ExtraArgs    string `json:"extraArgs"`
+	TunnelOnly   bool   `json:"tunnelOnly"`
 }
 
 type Store struct {
@@ -46,9 +51,11 @@ func DefaultProfile(name string) Profile {
 		name = defaultName
 	}
 	return Profile{
-		Name:       name,
-		DNSServers: defaultDNS,
-		RouteCIDRs: defaultRoutes,
+		Name:        name,
+		DNSServers:  defaultDNS,
+		RouteCIDRs:  defaultRoutes,
+		MTU:         defaultMTU,
+		RouteMetric: defaultRouteMetric,
 	}
 }
 
@@ -141,6 +148,8 @@ func normalize(store *Store) {
 		profile.Passphrase = strings.TrimSpace(profile.Passphrase)
 		profile.LinkConfig = strings.TrimSpace(profile.LinkConfig)
 		profile.ExtraArgs = strings.TrimSpace(profile.ExtraArgs)
+		profile.MTU = normalizeMTU(profile.MTU)
+		profile.RouteMetric = normalizeRouteMetric(profile.RouteMetric)
 		profile.DNSServers = normalizeLines(profile.DNSServers)
 		if profile.DNSServers == "" {
 			profile.DNSServers = defaultDNS
@@ -156,6 +165,20 @@ func normalize(store *Store) {
 	if store.Selected >= len(store.Profiles) {
 		store.Selected = len(store.Profiles) - 1
 	}
+}
+
+func normalizeMTU(value int) int {
+	if value < 576 || value > 9000 {
+		return defaultMTU
+	}
+	return value
+}
+
+func normalizeRouteMetric(value int) int {
+	if value < 1 || value > 9999 {
+		return defaultRouteMetric
+	}
+	return value
 }
 
 func normalizeLines(value string) string {

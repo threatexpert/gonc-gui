@@ -87,6 +87,11 @@ public final class MainActivity extends Activity implements ModuleHost {
     private static final String PREFS = "gonc_main";
     private static final String KEY_VPN_PROFILES = "vpn_profiles";
     private static final String KEY_SELECTED_VPN_PROFILE = "selected_vpn_profile";
+    private static final String KEY_LAST_MODULE = "last_module";
+    private static final String MODULE_SEND = "send";
+    private static final String MODULE_RECEIVE = "receive";
+    private static final String MODULE_VPN_CLIENT = "vpnClient";
+    private static final String MODULE_VPN_SERVER = "vpnServer";
     private static final String VPN_PROFILE_QR_TYPE = "gonc.vpn.profile";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -154,6 +159,10 @@ public final class MainActivity extends Activity implements ModuleHost {
             receiveController = new ReceiveController(this);
             vpnClient.load();
             vpnServer.load();
+            applyModule(prefs().getString(KEY_LAST_MODULE, MODULE_SEND), false);
+        }
+        if (reusedModules) {
+            applyModule(prefs().getString(KEY_LAST_MODULE, MODULE_SEND), false);
         }
         buildRoot();
         if (!reusedModules) {
@@ -249,11 +258,11 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (requestCode == REQUEST_OPEN_DOCUMENT && resultCode == RESULT_OK && data != null) {
             List<Uri> uris = collectUris(data);
             addUris(uris, data);
-            sendMode = true;
+            applyModule(MODULE_SEND, true);
             render();
         } else if (requestCode == REQUEST_OPEN_SEND_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
             addTreeUri(data.getData(), data);
-            sendMode = true;
+            applyModule(MODULE_SEND, true);
             render();
         } else if (requestCode == REQUEST_OPEN_SAVE_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri saveTreeUri = data.getData();
@@ -466,28 +475,22 @@ public final class MainActivity extends Activity implements ModuleHost {
 
         Button send = modeButton(getString(R.string.send_files), !vpnMode && !vpnServerMode && sendMode);
         send.setOnClickListener(v -> {
-            vpnMode = false;
-            vpnServerMode = false;
-            sendMode = true;
+            selectModule(MODULE_SEND);
             render();
         });
         Button receive = modeButton(getString(R.string.receive_files), !vpnMode && !vpnServerMode && !sendMode);
         receive.setOnClickListener(v -> {
-            vpnMode = false;
-            vpnServerMode = false;
-            sendMode = false;
+            selectModule(MODULE_RECEIVE);
             render();
         });
         Button vpn = modeButton(getString(R.string.vpn_tunnel), vpnMode);
         vpn.setOnClickListener(v -> {
-            vpnMode = true;
-            vpnServerMode = false;
+            selectModule(MODULE_VPN_CLIENT);
             render();
         });
         Button vpnServer = modeButton(getString(R.string.vpn_server), vpnServerMode);
         vpnServer.setOnClickListener(v -> {
-            vpnMode = false;
-            vpnServerMode = true;
+            selectModule(MODULE_VPN_SERVER);
             render();
         });
 
@@ -504,6 +507,33 @@ public final class MainActivity extends Activity implements ModuleHost {
         box.addView(bottomRow, bottomParams);
         box.setLayoutParams(blockParams());
         return box;
+    }
+
+    private void selectModule(String module) {
+        applyModule(module, true);
+    }
+
+    private void applyModule(String module, boolean save) {
+        String clean = module == null ? MODULE_SEND : module;
+        vpnMode = MODULE_VPN_CLIENT.equals(clean);
+        vpnServerMode = MODULE_VPN_SERVER.equals(clean);
+        sendMode = !vpnMode && !vpnServerMode && !MODULE_RECEIVE.equals(clean);
+        if (MODULE_RECEIVE.equals(clean)) {
+            sendMode = false;
+        }
+        if (save) {
+            prefs().edit().putString(KEY_LAST_MODULE, currentModule()).apply();
+        }
+    }
+
+    private String currentModule() {
+        if (vpnMode) {
+            return MODULE_VPN_CLIENT;
+        }
+        if (vpnServerMode) {
+            return MODULE_VPN_SERVER;
+        }
+        return sendMode ? MODULE_SEND : MODULE_RECEIVE;
     }
 
     private View metricBox(String label, String value) {
@@ -802,9 +832,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     private void resetTransientStateForFreshLaunch() {
         logs.clear();
 
-        sendMode = true;
-        vpnMode = false;
-        vpnServerMode = false;
         vpnClient.resetForFreshLaunch();
         sendController.resetForFreshLaunch();
         receiveController.resetForFreshLaunch();
@@ -918,6 +945,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         intent.putExtra(GoncVpnService.EXTRA_DNS_SERVERS, profile.dnsServers);
         intent.putExtra(GoncVpnService.EXTRA_ROUTE_CIDRS, profile.routeCidrs);
         intent.putExtra(GoncVpnService.EXTRA_LINK_CONFIG, profile.linkConfig == null ? "" : profile.linkConfig.trim());
+        intent.putExtra(GoncVpnService.EXTRA_MTU, VpnProfile.normalizeMtu(profile.mtu));
         intent.putExtra(GoncVpnService.EXTRA_EXTRA_ARGS, profile.extraArgs == null ? "" : profile.extraArgs.trim());
         intent.putExtra(GoncVpnService.EXTRA_TUNNEL_ONLY, profile.tunnelOnly);
         appendLog("info", "VPN start requested: " + profile.displayName(this) + (profile.tunnelOnly ? " (tunnel only)" : ""));
@@ -1579,9 +1607,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         List<Uri> uris = collectUris(intent);
         if (!uris.isEmpty()) {
             addUris(uris, intent);
-            vpnMode = false;
-            vpnServerMode = false;
-            sendMode = true;
+            applyModule(MODULE_SEND, true);
             appendLog("info", "Received " + uris.size() + " file(s) from Android");
         }
     }

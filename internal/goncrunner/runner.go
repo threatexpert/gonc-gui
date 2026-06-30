@@ -44,6 +44,9 @@ type Request struct {
 	DNSServers      string
 	RouteCIDRs      string
 	LinkConfig      string
+	MTU             int
+	RouteMetric     int
+	BlockDNSLeak    bool
 	EnableIPv6      bool
 	TunnelOnly      bool
 	ExtraArgs       string
@@ -373,7 +376,9 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				DNSServers:     dnsLines(req.DNSServers, effectiveIPv6),
 				BypassIPs:      snapshotBypassIPs(&bypassMu, bypassIPs),
 				EnableIPv6:     effectiveIPv6,
-				MTU:            1400,
+				MTU:            normalizeMTU(req.MTU),
+				RouteMetric:    normalizeRouteMetric(req.RouteMetric),
+				BlockDNSLeak:   req.BlockDNSLeak,
 				LogLevel:       "warn",
 			}
 			if reapply {
@@ -461,13 +466,21 @@ func effectiveLinkConfig(value string) (string, error) {
 	if clean != "" {
 		return clean, nil
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
+	return "x://127.0.0.1:0", nil
+}
+
+func normalizeMTU(value int) int {
+	if value < 576 || value > 9000 {
+		return 1400
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-	return fmt.Sprintf("x://127.0.0.1:%d", port), nil
+	return value
+}
+
+func normalizeRouteMetric(value int) int {
+	if value < 1 || value > 9999 {
+		return 5
+	}
+	return value
 }
 
 func routeLines(value string, enableIPv6 bool) []string {
@@ -701,7 +714,7 @@ func (c *callback) Ready(endpoint string) {
 	message := "local HTTP endpoint is ready"
 	if c.mode == ModeVPNClient {
 		eventType = "socks5"
-		message = "SOCKS5 endpoint is ready"
+		message = "SOCKS5 endpoint is ready: " + endpoint
 	}
 	event := newEvent(eventType, "info", message)
 	event.LocalURL = endpoint

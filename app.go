@@ -45,6 +45,9 @@ type TransferRequest struct {
 	DNSServers      string   `json:"dnsServers"`
 	RouteCIDRs      string   `json:"routeCidrs"`
 	LinkConfig      string   `json:"linkConfig"`
+	MTU             int      `json:"mtu"`
+	RouteMetric     int      `json:"routeMetric"`
+	BlockDNSLeak    bool     `json:"blockDnsLeak"`
 	EnableIPv6      bool     `json:"enableIpv6"`
 	TunnelOnly      bool     `json:"tunnelOnly"`
 	ExtraArgs       string   `json:"extraArgs"`
@@ -186,6 +189,9 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		DNSServers:      req.DNSServers,
 		RouteCIDRs:      req.RouteCIDRs,
 		LinkConfig:      req.LinkConfig,
+		MTU:             req.MTU,
+		RouteMetric:     req.RouteMetric,
+		BlockDNSLeak:    req.BlockDNSLeak,
 		EnableIPv6:      req.EnableIPv6,
 		TunnelOnly:      req.TunnelOnly,
 		ExtraArgs:       req.ExtraArgs,

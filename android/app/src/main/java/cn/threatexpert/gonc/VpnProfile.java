@@ -10,6 +10,7 @@ final class VpnProfile {
     static final String DEFAULT_VPN_DNS = "8.8.8.8\n2001:4860:4860::8888";
     static final String DEFAULT_VPN_ROUTES = "0.0.0.0/1\n128.0.0.0/1\n::/0";
     static final String PRIVATE_LAN_ROUTES = "10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16";
+    static final int DEFAULT_MTU = 1400;
 
     String name;
     String passphrase;
@@ -19,6 +20,7 @@ final class VpnProfile {
     String routeCidrs;
     /** Optional gonc -link config (e.g. a bare port "3080", or a full mux link); blank = auto-pick a free port. */
     String linkConfig;
+    int mtu;
     /** Optional extra gonc command-line args (space-separated), appended verbatim to the tunnel. */
     String extraArgs;
     /** When true, "Connect" only sets up the SOCKS5 tunnel and does not start the system VPN. */
@@ -33,6 +35,7 @@ final class VpnProfile {
         profile.dnsServers = DEFAULT_VPN_DNS;
         profile.routeCidrs = DEFAULT_VPN_ROUTES;
         profile.linkConfig = "";
+        profile.mtu = DEFAULT_MTU;
         profile.extraArgs = "";
         profile.tunnelOnly = false;
         return profile;
@@ -48,6 +51,7 @@ final class VpnProfile {
         profile.routeCidrs = object.optString("routeCidrs", DEFAULT_VPN_ROUTES);
         // Back-compat: an earlier build briefly stored this as "socks5Address".
         profile.linkConfig = object.optString("linkConfig", object.optString("socks5Address", ""));
+        profile.mtu = normalizeMtu(object.optInt("mtu", DEFAULT_MTU));
         profile.extraArgs = object.optString("extraArgs", "");
         profile.tunnelOnly = object.optBoolean("tunnelOnly", false);
         return profile;
@@ -63,6 +67,7 @@ final class VpnProfile {
             object.put("dnsServers", dnsServers == null ? "" : dnsServers);
             object.put("routeCidrs", routeCidrs == null ? "" : routeCidrs);
             object.put("linkConfig", linkConfig == null ? "" : linkConfig);
+            object.put("mtu", normalizeMtu(mtu));
             object.put("extraArgs", extraArgs == null ? "" : extraArgs);
             object.put("tunnelOnly", tunnelOnly);
         } catch (JSONException ignored) {
@@ -74,5 +79,9 @@ final class VpnProfile {
         return name == null || name.trim().isEmpty()
                 ? context.getString(R.string.vpn_profile_default_name)
                 : name.trim();
+    }
+
+    static int normalizeMtu(int value) {
+        return value < 576 || value > 9000 ? DEFAULT_MTU : value;
     }
 }

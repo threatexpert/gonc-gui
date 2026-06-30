@@ -330,6 +330,22 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.inline-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+}
+
+.inline-field input[type="checkbox"] {
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
 .field-hint p {
   margin: 0;
 }

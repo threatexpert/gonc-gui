@@ -14,9 +14,9 @@ import android.os.ParcelFileDescriptor;
 import androidx.core.app.NotificationCompat;
 
 import java.io.IOException;
-import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.security.SecureRandom;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -32,12 +32,16 @@ public final class GoncVpnService extends VpnService {
     static final String EXTRA_DNS_SERVERS = "dns_servers";
     static final String EXTRA_ROUTE_CIDRS = "route_cidrs";
     static final String EXTRA_LINK_CONFIG = "link_config";
+    static final String EXTRA_MTU = "mtu";
     static final String EXTRA_EXTRA_ARGS = "extra_args";
     static final String EXTRA_TUNNEL_ONLY = "tunnel_only";
 
     private static final int NOTIFICATION_ID = 2001;
     private static final String CHANNEL_ID = "gonc_vpn";
-    private static final int MTU = 1400;
+    private static final int DEFAULT_MTU = 1400;
+    private static final int AUTO_PORT_START = 16000;
+    private static final int AUTO_PORT_COUNT = 1000;
+    private static final SecureRandom PORT_RANDOM = new SecureRandom();
 
     private final Object lock = new Object();
     private ParcelFileDescriptor vpnInterface;
@@ -79,15 +83,16 @@ public final class GoncVpnService extends VpnService {
             String dnsServers = intent.getStringExtra(EXTRA_DNS_SERVERS);
             String routeCidrs = intent.getStringExtra(EXTRA_ROUTE_CIDRS);
             String linkConfig = intent.getStringExtra(EXTRA_LINK_CONFIG);
+            int mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU);
             String extraArgs = intent.getStringExtra(EXTRA_EXTRA_ARGS);
             boolean tunnelOnly = intent.getBooleanExtra(EXTRA_TUNNEL_ONLY, false);
-            startVpn(password, useUdp, enableIpv6, dnsServers, routeCidrs, linkConfig, extraArgs, tunnelOnly);
+            startVpn(password, useUdp, enableIpv6, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
             return START_STICKY;
         }
         return START_NOT_STICKY;
     }
 
-    private void startVpn(String password, boolean useUdp, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, String extraArgs, boolean tunnelOnly) {
+    private void startVpn(String password, boolean useUdp, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
         synchronized (lock) {
             if (goncSession != null || vpnInterface != null || tun2socksRunning) {
                 log("warn", "VPN is already running");
@@ -107,7 +112,7 @@ public final class GoncVpnService extends VpnService {
                 }
                 GoncCrashReporter.stage(this, "resolve link config");
                 String effectiveLink = resolveLinkConfig(linkConfig);
-                String socks5Endpoint = "socks5://" + socks5AddressFromLink(effectiveLink);
+                int effectiveMtu = normalizeMtu(mtu);
                 log("info", "Using link config " + effectiveLink);
 
                 if (isStopRequested()) {
@@ -154,7 +159,7 @@ public final class GoncVpnService extends VpnService {
                 }
 
                 GoncCrashReporter.stage(this, "establish VPN interface");
-                ParcelFileDescriptor establishedTun = establishInterface(effectiveIpv6, dnsServers, routeCidrs);
+                ParcelFileDescriptor establishedTun = establishInterface(effectiveIpv6, dnsServers, routeCidrs, effectiveMtu);
                 if (establishedTun == null) {
                     throw new IllegalStateException("Could not establish VPN interface");
                 }
@@ -183,7 +188,7 @@ public final class GoncVpnService extends VpnService {
                 boolean startedTun2Socks = false;
                 boolean shouldStopAfterStart = false;
                 try {
-                    Mobilegonc.startTun2Socks(tun2socksFd, readySocks5Endpoint, "tun0", MTU, "warn");
+                    Mobilegonc.startTun2Socks(tun2socksFd, readySocks5Endpoint, "tun0", effectiveMtu, "warn");
                     startedTun2Socks = true;
                     // Step 3: close the original low-numbered fd via bionic so Android's
                     // fdsan tables are properly updated. Go already cleared the PFD tag
@@ -250,9 +255,8 @@ public final class GoncVpnService extends VpnService {
     }
 
     /**
-     * Turn the user's link config into the string gonc's -link expects. Blank picks a
-     * free local port and yields {@code x://127.0.0.1:<port>}; anything else (a bare
-     * port, which gonc accepts directly, or a full mux link) is passed through verbatim.
+     * Turn the user's link config into the string gonc's -link expects. Android keeps
+     * a stable local port for the lifetime of the VPN because tun2socks is started once.
      */
     private String resolveLinkConfig(String linkConfig) throws IOException {
         String clean = linkConfig == null ? "" : linkConfig.trim();
@@ -260,6 +264,10 @@ public final class GoncVpnService extends VpnService {
             return "x://127.0.0.1:" + findAvailableLocalPort();
         }
         return clean;
+    }
+
+    private int normalizeMtu(int value) {
+        return value < 576 || value > 9000 ? DEFAULT_MTU : value;
     }
 
     private static boolean isAllDigits(String value) {
@@ -332,22 +340,17 @@ public final class GoncVpnService extends VpnService {
     private int findAvailableLocalPort() throws IOException {
         InetAddress loopback = InetAddress.getByName("127.0.0.1");
         IOException lastError = null;
-        for (int i = 0; i < 20; i++) {
+        int firstOffset = PORT_RANDOM.nextInt(AUTO_PORT_COUNT);
+        for (int i = 0; i < AUTO_PORT_COUNT; i++) {
+            int port = AUTO_PORT_START + ((firstOffset + i) % AUTO_PORT_COUNT);
             ServerSocket tcp = null;
-            DatagramSocket udp = null;
             try {
-                tcp = new ServerSocket(0, 50, loopback);
+                tcp = new ServerSocket(port, 50, loopback);
                 tcp.setReuseAddress(false);
-                int port = tcp.getLocalPort();
-                udp = new DatagramSocket(port, loopback);
-                udp.setReuseAddress(false);
                 return port;
             } catch (IOException error) {
                 lastError = error;
             } finally {
-                if (udp != null) {
-                    udp.close();
-                }
                 if (tcp != null) {
                     try {
                         tcp.close();
@@ -356,7 +359,9 @@ public final class GoncVpnService extends VpnService {
                 }
             }
         }
-        throw lastError == null ? new IOException("Cannot find available local proxy port") : lastError;
+        throw lastError == null
+                ? new IOException("Cannot find available local proxy port in " + AUTO_PORT_START + "-" + (AUTO_PORT_START + AUTO_PORT_COUNT - 1))
+                : lastError;
     }
 
     private void closeDetachedFd(int fd) {
@@ -378,7 +383,7 @@ public final class GoncVpnService extends VpnService {
         }
     }
 
-    private ParcelFileDescriptor establishInterface(boolean enableIpv6, String dnsServers, String routeCidrs) throws Exception {
+    private ParcelFileDescriptor establishInterface(boolean enableIpv6, String dnsServers, String routeCidrs, int mtu) throws Exception {
         GoncCrashReporter.stage(this, "vpn builder create");
         Builder builder = new Builder();
 
@@ -386,7 +391,7 @@ public final class GoncVpnService extends VpnService {
         builder.setSession(getString(R.string.vpn_session_name));
 
         GoncCrashReporter.stage(this, "vpn builder set mtu");
-        builder.setMtu(MTU);
+        builder.setMtu(mtu);
 
         GoncCrashReporter.stage(this, "vpn builder add ipv4 address");
         builder.addAddress("10.0.0.2", 32);
@@ -504,7 +509,7 @@ public final class GoncVpnService extends VpnService {
 
             @Override
             public void traffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
-                GoncVpnState.setTraffic(inBps, outBps);
+                GoncVpnState.setTraffic(inBytes, outBytes, inBps, outBps);
             }
 
             @Override

@@ -38,6 +38,8 @@ final class GoncVpnState {
     private static String peer = "-";
     private static String peerIpv6 = "-";
     private static String profileName = "";
+    private static long inBytes;
+    private static long outBytes;
     private static double inBps;
     private static double outBps;
     private static long lastTrafficMs;
@@ -101,6 +103,14 @@ final class GoncVpnState {
         return profileName;
     }
 
+    static synchronized long inBytes() {
+        return inBytes;
+    }
+
+    static synchronized long outBytes() {
+        return outBytes;
+    }
+
     static synchronized double inBps() {
         return inBps;
     }
@@ -141,6 +151,8 @@ final class GoncVpnState {
             peer = "-";
             peerIpv6 = "-";
             profileName = nextProfileName == null ? "" : nextProfileName.trim();
+            inBytes = 0;
+            outBytes = 0;
             inBps = 0;
             outBps = 0;
             lastTrafficMs = 0;
@@ -166,6 +178,8 @@ final class GoncVpnState {
                 peer = "-";
                 peerIpv6 = "-";
                 profileName = "";
+                inBytes = 0;
+                outBytes = 0;
                 inBps = 0;
                 outBps = 0;
                 lastTrafficMs = 0;
@@ -223,9 +237,11 @@ final class GoncVpnState {
         }
     }
 
-    static void setTraffic(double nextInBps, double nextOutBps) {
+    static void setTraffic(long nextInBytes, long nextOutBytes, double nextInBps, double nextOutBps) {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
+            inBytes = Math.max(0, nextInBytes);
+            outBytes = Math.max(0, nextOutBytes);
             inBps = nextInBps;
             outBps = nextOutBps;
             lastTrafficMs = System.currentTimeMillis();

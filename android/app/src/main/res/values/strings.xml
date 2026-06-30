@@ -97,6 +97,9 @@
     <string name="vpn_link_config">Link config</string>
     <string name="vpn_link_config_hint">Port, e.g. 3080</string>
     <string name="vpn_link_config_desc">Leave blank to auto-pick a local port. For the full format, see gonc\'s mux link.</string>
+    <string name="vpn_mtu">MTU</string>
+    <string name="vpn_mtu_hint">Default 1400</string>
+    <string name="vpn_mtu_desc">Leave blank or use 576-9000. Invalid values fall back to 1400.</string>
     <string name="vpn_server_upstream">Upstream proxy</string>
     <string name="vpn_server_upstream_hint">socks5://host:port or http://host:port</string>
     <string name="vpn_server_upstream_desc">Sets the VPN traffic exit. When blank, this device is the exit.</string>
