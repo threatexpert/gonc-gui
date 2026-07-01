@@ -92,9 +92,13 @@ func StartElevated(ctx context.Context) (*Client, error) {
 	}
 }
 
-func (c *Client) Start(config vpnconfig.Config) error {
+func (c *Client) Start(config vpnconfig.Config) ([]string, error) {
 	if c.conn != nil {
-		return c.call(request{Op: OpStart, Config: config})
+		resp, err := c.call(request{Op: OpStart, Config: config})
+		if err != nil {
+			return resp.Logs, err
+		}
+		return resp.Logs, nil
 	}
 	if c.local != nil {
 		_ = c.local.Stop()
@@ -102,15 +106,16 @@ func (c *Client) Start(config vpnconfig.Config) error {
 	}
 	session, err := winvpn.Start(config)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.local = session
-	return nil
+	return nil, nil
 }
 
 func (c *Client) Stop() error {
 	if c.conn != nil {
-		return c.call(request{Op: OpStop})
+		_, err := c.call(request{Op: OpStop})
+		return err
 	}
 	if c.local != nil {
 		err := c.local.Stop()
@@ -125,29 +130,29 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.conn != nil {
-		_ = c.call(request{Op: OpExit})
+		_, _ = c.call(request{Op: OpExit})
 		return c.conn.Close()
 	}
 	return c.Stop()
 }
 
-func (c *Client) call(req request) error {
+func (c *Client) call(req request) (response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.enc.Encode(req); err != nil {
-		return err
+		return response{}, err
 	}
 	var resp response
 	if err := c.dec.Decode(&resp); err != nil {
-		return err
+		return response{}, err
 	}
 	if !resp.OK {
 		if resp.Error == "" {
 			resp.Error = "VPN helper command failed"
 		}
-		return errors.New(resp.Error)
+		return resp, errors.New(resp.Error)
 	}
-	return nil
+	return resp, nil
 }
 
 func randomToken() (string, error) {

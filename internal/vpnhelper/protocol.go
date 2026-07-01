@@ -16,6 +16,7 @@ type request struct {
 }
 
 type response struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK    bool     `json:"ok"`
+	Error string   `json:"error,omitempty"`
+	Logs  []string `json:"logs,omitempty"`
 }

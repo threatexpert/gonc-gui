@@ -390,7 +390,8 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 			} else {
 				emit(sink, "status", "info", "SOCKS5 endpoint ready; starting system VPN")
 			}
-			if err := helper.Start(config); err != nil {
+			_, err := helper.Start(config)
+			if err != nil {
 				emit(sink, "status", "error", "System VPN start failed: "+err.Error())
 				session.Stop()
 				return false

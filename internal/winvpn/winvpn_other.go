@@ -18,4 +18,8 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	return nil, fmt.Errorf("Windows VPN is only supported on Windows")
 }
 
+func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
+	return Start(config)
+}
+
 func (s *Session) Stop() error { return nil }

@@ -1,34 +1,34 @@
 .shell {
   min-height: 100vh;
-  background: #f6f8fb;
+  background: #f3f6fa;
   color: #172033;
 }
 
 .workspace {
-  width: min(960px, calc(100vw - 40px));
+  width: min(1180px, calc(100vw - 28px));
   margin: 0 auto;
-  padding: 22px 0;
+  padding: 14px 0;
 }
 
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
+  gap: 14px;
+  margin-bottom: 10px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
   background: #1b8f6a;
   color: #ffffff;
@@ -44,7 +44,7 @@
 }
 
 .brand h1 {
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.2;
 }
 
@@ -66,23 +66,23 @@
 }
 
 .brand p {
-  margin-top: 3px;
+  margin-top: 1px;
   color: #64748b;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .status-block {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  min-height: 34px;
+  gap: 7px;
+  min-height: 30px;
   border: 1px solid #d8e2ee;
   border-radius: 999px;
-  padding: 0 12px;
+  padding: 0 10px;
   background: #ffffff;
   color: #405169;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -142,9 +142,9 @@
 .mode-switch {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  max-width: 720px;
-  margin-bottom: 18px;
+  gap: 4px;
+  max-width: 760px;
+  margin-bottom: 10px;
   border: 1px solid #d8e2ee;
   border-radius: 8px;
   padding: 4px;
@@ -152,10 +152,10 @@
 }
 
 button {
-  min-height: 38px;
+  min-height: 34px;
   border: 0;
   border-radius: 6px;
-  padding: 0 14px;
+  padding: 0 12px;
   font: inherit;
   font-weight: 750;
   cursor: pointer;
@@ -180,7 +180,7 @@ button:disabled {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, auto));
   gap: 3px;
-  min-height: 38px;
+  min-height: 34px;
   border: 1px solid #d8e2ee;
   border-radius: 6px;
   padding: 3px;
@@ -188,7 +188,7 @@ button:disabled {
 }
 
 .compact-switch button {
-  min-height: 30px;
+  min-height: 26px;
   padding: 0 10px;
   background: transparent;
   color: #52657d;
@@ -202,11 +202,11 @@ button:disabled {
 
 .main-pane {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .alert {
-  padding: 12px 14px;
+  padding: 9px 12px;
   border-left: 4px solid #c93f3f;
   border-radius: 6px;
   background: #fff1f1;
@@ -215,17 +215,17 @@ button:disabled {
 
 .flow-panel {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   border: 1px solid #d8e2ee;
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px;
   background: #ffffff;
-  box-shadow: 0 14px 34px rgba(23, 32, 51, 0.08);
+  box-shadow: 0 8px 22px rgba(23, 32, 51, 0.06);
 }
 
 .field {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .field-heading,
@@ -246,7 +246,7 @@ button:disabled {
 
 label {
   color: #405169;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -254,10 +254,10 @@ input,
 select {
   width: 100%;
   box-sizing: border-box;
-  min-height: 42px;
+  min-height: 34px;
   border: 1px solid #cbd7e6;
   border-radius: 6px;
-  padding: 0 12px;
+  padding: 0 10px;
   background: #ffffff;
   color: #172033;
   font: inherit;
@@ -266,11 +266,11 @@ select {
 textarea {
   width: 100%;
   box-sizing: border-box;
-  min-height: 78px;
+  min-height: 58px;
   resize: vertical;
   border: 1px solid #cbd7e6;
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: #ffffff;
   color: #172033;
   font: inherit;
@@ -293,7 +293,7 @@ textarea:focus {
 .primary-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .password-line {
@@ -324,10 +324,10 @@ textarea:focus {
 }
 
 .field-hint {
-  margin-top: 8px;
+  margin-top: 2px;
   color: #5c6f87;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .inline-field label {
@@ -414,8 +414,8 @@ textarea:focus {
   justify-content: center;
   gap: 2px;
   width: 100%;
-  min-height: 48px;
-  font-size: 16px;
+  min-height: 42px;
+  font-size: 15px;
 }
 
 .button-subtext {
@@ -428,7 +428,7 @@ textarea:focus {
   --wails-drop-target: drop;
   border: 1px dashed #8fa8c3;
   border-radius: 8px;
-  padding: 8px;
+  padding: 7px;
   background: #f8fbff;
 }
 
@@ -439,9 +439,9 @@ textarea:focus {
 
 .path-list {
   display: grid;
-  gap: 8px;
-  min-height: 96px;
-  max-height: 180px;
+  gap: 6px;
+  min-height: 74px;
+  max-height: 140px;
   overflow: auto;
   border-radius: 6px;
 }
@@ -449,7 +449,7 @@ textarea:focus {
 .drop-hint {
   display: grid;
   place-items: center;
-  min-height: 120px;
+  min-height: 78px;
   margin: 0;
   color: #64748b;
   font-weight: 700;
@@ -460,8 +460,8 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
+  gap: 8px;
+  min-height: 32px;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
   padding: 0 8px 0 12px;
@@ -476,7 +476,7 @@ textarea:focus {
 }
 
 .path-row button {
-  min-height: 30px;
+  min-height: 26px;
   background: #f3f5f8;
   color: #8a2e2e;
 }
@@ -484,8 +484,8 @@ textarea:focus {
 .check {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 32px;
+  gap: 8px;
+  min-height: 28px;
   color: #405169;
 }
 
@@ -497,7 +497,7 @@ textarea:focus {
 
 .advanced-panel {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .advanced-toggle {
@@ -506,22 +506,32 @@ textarea:focus {
 
 .advanced-fields {
   display: grid;
-  gap: 12px;
+  align-items: start;
+  gap: 10px;
   border-top: 1px solid #e1e8f0;
-  padding-top: 12px;
+  padding-top: 10px;
+}
+
+.advanced-fields > .field,
+.advanced-fields > .check {
+  min-width: 0;
+}
+
+.advanced-fields > .field:has(textarea) textarea {
+  min-height: 64px;
 }
 
 .remote-pane,
 .diagnostics {
   border: 1px solid #d8e2ee;
   border-radius: 8px;
-  padding: 16px;
+  padding: 12px;
   background: #ffffff;
 }
 
 .remote-pane {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .remote-summary {
@@ -604,11 +614,11 @@ textarea:focus {
 .connection-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
+  gap: 7px;
+  min-height: 32px;
   border: 1px solid #d8e2ee;
   border-radius: 999px;
-  padding: 0 12px;
+  padding: 0 10px;
   background: #ffffff;
   color: #405169;
   font-size: 13px;
@@ -642,12 +652,12 @@ textarea:focus {
 
 .remote-list {
   display: grid;
-  gap: 6px;
-  max-height: 250px;
+  gap: 4px;
+  max-height: 210px;
   overflow: auto;
   border: 1px solid #e1e8f0;
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px;
   background: #fbfdff;
 }
 
@@ -665,9 +675,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: 22px 22px minmax(0, 1fr) 136px 82px;
   align-items: center;
-  gap: 10px;
-  min-height: 30px;
-  font-size: 13px;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12px;
 }
 
 .remote-row input {
@@ -791,7 +801,7 @@ progress {
 
 .diagnostics {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .diagnostics summary {
@@ -803,17 +813,17 @@ progress {
 .status-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .metric {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   border: 1px solid #e1e8f0;
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px;
   background: #fbfdff;
 }
 
@@ -826,7 +836,7 @@ progress {
 .metric strong {
   overflow: hidden;
   color: #172033;
-  font-size: 15px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -836,7 +846,7 @@ progress {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  min-height: 42px;
+  min-height: 34px;
   border-radius: 6px;
   padding: 0 12px;
   font: inherit;
@@ -861,7 +871,7 @@ progress {
 .log-pane {
   display: grid;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .log-header h3 {
@@ -869,15 +879,15 @@ progress {
 }
 
 .logs {
-  min-height: 130px;
-  max-height: 240px;
+  min-height: 96px;
+  max-height: 190px;
   overflow: auto;
   border-radius: 8px;
   background: #101826;
   color: #dbe7f6;
-  padding: 12px;
+  padding: 10px;
   font-family: Consolas, "SFMono-Regular", monospace;
-  font-size: 12px;
+  font-size: 11px;
   text-align: left;
   user-select: text;
 }
@@ -886,7 +896,7 @@ progress {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr);
   gap: 10px;
-  line-height: 1.55;
+  line-height: 1.45;
   user-select: text;
 }
 
@@ -1016,6 +1026,51 @@ progress {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-height: 900px) and (min-width: 721px) {
+  .workspace {
+    padding: 10px 0;
+  }
+
+  .app-header {
+    margin-bottom: 8px;
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .brand p {
+    display: none;
+  }
+
+  .mode-switch {
+    margin-bottom: 8px;
+  }
+
+  .flow-panel,
+  .remote-pane,
+  .diagnostics {
+    padding: 10px;
+  }
+
+  .field-hint {
+    line-height: 1.32;
+  }
+
+  textarea {
+    min-height: 50px;
+  }
+
+  .advanced-fields > .field:has(textarea) textarea {
+    min-height: 56px;
+  }
+
+  .logs {
+    max-height: 150px;
+  }
 }
 
 @media (max-width: 720px) {

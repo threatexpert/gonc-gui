@@ -297,6 +297,8 @@ const text = {
     vpnTunnelPausedBody: '正在等待隧道重连，系统路由已临时暂停。',
     vpnTunnelRestoredTitle: 'VPN 隧道已恢复',
     vpnTunnelRestoredBody: '隧道已重新连接，系统路由已恢复。',
+    vpnStartedTitle: 'VPN 已开启',
+    vpnStartedBody: '系统 VPN 路由和 DNS 已配置完成。',
     shareUpdateFailed: '更新分享列表失败。',
     weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
   },
@@ -461,6 +463,8 @@ const text = {
     vpnTunnelPausedBody: 'Waiting for the tunnel to reconnect. System routes are paused temporarily.',
     vpnTunnelRestoredTitle: 'VPN tunnel restored',
     vpnTunnelRestoredBody: 'The tunnel is connected again and system routes are restored.',
+    vpnStartedTitle: 'VPN is on',
+    vpnStartedBody: 'System VPN routes and DNS are ready.',
     shareUpdateFailed: 'Failed to update shared list.',
     weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
   }
@@ -539,6 +543,7 @@ function App() {
   const scanCaptureSeq = useRef(0);
   const notificationsReady = useRef(false);
   const vpnDisconnectNotified = useRef(false);
+  const vpnStartedNotified = useRef(false);
   const vpnTunnelWasConnected = useRef(false);
   const vpnStopRequested = useRef(false);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -711,6 +716,7 @@ function App() {
       }
       if (event.type === 'peer_ipv6' && event.mode === 'vpnClient') {
         setVpnClientPeerIPv6(event.peerIpv6 || event.message || '');
+        return;
       }
       if (event.type === 'socks5' && event.mode === 'vpnClient') {
         setVpnClientSocks5Endpoint(event.localUrl || event.message.replace(/^SOCKS5 endpoint is ready:\s*/i, ''));
@@ -721,6 +727,7 @@ function App() {
             notifyVpnTunnelPaused();
           }
         } else if (event.message.includes('System VPN started') || event.message.includes('System VPN routes restored') || event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
+          notifyVpnStarted();
           notifyVpnTunnelRestored();
           vpnTunnelWasConnected.current = true;
           vpnStopRequested.current = false;
@@ -1138,6 +1145,7 @@ function App() {
       setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
       setVpnClientSocks5Endpoint('');
       vpnDisconnectNotified.current = false;
+      vpnStartedNotified.current = false;
       vpnTunnelWasConnected.current = false;
       vpnStopRequested.current = false;
     }
@@ -1202,6 +1210,7 @@ function App() {
           setVpnClientTraffic(null);
           setVpnClientSocks5Endpoint('');
           vpnDisconnectNotified.current = false;
+          vpnStartedNotified.current = false;
           vpnTunnelWasConnected.current = false;
         }
       }
@@ -1414,6 +1423,18 @@ function App() {
     }).catch(() => undefined);
   }
 
+  function notifyVpnStarted() {
+    if (vpnStartedNotified.current || !notificationsReady.current) {
+      return;
+    }
+    vpnStartedNotified.current = true;
+    SendNotification({
+      id: `vpn-started-${Date.now()}`,
+      title: t.vpnStartedTitle,
+      body: t.vpnStartedBody,
+    }).catch(() => undefined);
+  }
+
   function notifyVpnTunnelRestored() {
     if (!vpnDisconnectNotified.current || !notificationsReady.current) {
       vpnDisconnectNotified.current = false;
@@ -1431,7 +1452,9 @@ function App() {
     if (vpnTunnelIsConnected(status)) {
       vpnTunnelWasConnected.current = true;
       vpnStopRequested.current = false;
-      notifyVpnTunnelRestored();
+      if (vpnClientTunnelOnly) {
+        notifyVpnTunnelRestored();
+      }
       return;
     }
     if (vpnTunnelNeedsNotification(status) && !vpnStopRequested.current) {

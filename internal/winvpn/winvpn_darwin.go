@@ -97,6 +97,10 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	return session, nil
 }
 
+func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
+	return Start(config)
+}
+
 func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

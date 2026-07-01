@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"gonc-gui/internal/dnsproxy"
 	"gonc-gui/internal/vpnconfig"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
@@ -24,6 +25,7 @@ const (
 	interfaceName      = "Gonc"
 	interfaceIPv4      = "10.60.173.33"
 	interfaceMask      = "255.255.255.0"
+	dnsProxyIPv4       = "127.60.173.33"
 	defaultMTU         = 1400
 	defaultRouteMetric = 1
 	dnsLeakRuleUDPLow  = "Gonc VPN DNS Leak Protection Dnscache UDP 53 non-VPN local low"
@@ -33,8 +35,9 @@ const (
 )
 
 type Session struct {
-	mu     sync.Mutex
-	config vpnconfig.Config
+	mu       sync.Mutex
+	config   vpnconfig.Config
+	dnsProxy *dnsproxy.Server
 }
 
 type routeTarget struct {
@@ -56,12 +59,22 @@ func CheckRuntime() error {
 }
 
 func Start(config vpnconfig.Config) (*Session, error) {
+	return StartWithTrace(config, nil)
+}
+
+func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
+	started := time.Now()
+	defer func() {
+		traceVPNStep(trace, "total", started)
+	}()
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
 		return nil, fmt.Errorf("SOCKS5 endpoint is required")
 	}
+	step := time.Now()
 	if err := CheckRuntime(); err != nil {
 		return nil, err
 	}
+	traceVPNStep(trace, "check Wintun runtime", step)
 	if config.MTU <= 0 {
 		config.MTU = defaultMTU
 	}
@@ -69,15 +82,24 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	if config.LogLevel == "" {
 		config.LogLevel = "warn"
 	}
+	session := &Session{config: config}
+	step = time.Now()
+	if err := session.configureDNSLeakProtection(trace); err != nil {
+		return nil, err
+	}
+	traceVPNStep(trace, "configure DNS leak protection", step)
+	step = time.Now()
 	engine.Insert(&engine.Key{
 		Device:   "tun://" + interfaceName,
 		Proxy:    config.SOCKS5Endpoint,
 		LogLevel: config.LogLevel,
 		MTU:      config.MTU,
 	})
+	traceVPNStep(trace, "insert tun2socks engine", step)
+	step = time.Now()
 	engine.Start()
-	session := &Session{config: config}
-	if err := session.configure(); err != nil {
+	traceVPNStep(trace, "start tun2socks engine", step)
+	if err := session.configure(trace); err != nil {
 		_ = session.Stop()
 		return nil, err
 	}
@@ -88,40 +110,75 @@ func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupRoutes()
-	err := cleanupDNSLeakFirewallRules()
+	if s.dnsProxy != nil {
+		_ = s.dnsProxy.Close()
+		s.dnsProxy = nil
+	}
+	var err error
+	if s.config.BlockDNSLeak {
+		err = setDNSLeakFirewallRulesEnabled(false)
+	} else {
+		err = cleanupDNSLeakFirewallRules()
+	}
 	engine.Stop()
 	return err
 }
 
-func (s *Session) configure() error {
+func (s *Session) configure(trace func(string)) error {
+	step := time.Now()
 	if err := waitInterface(interfaceName, 8*time.Second); err != nil {
 		return err
 	}
+	traceVPNStep(trace, "wait interface", step)
+	step = time.Now()
 	if err := run("netsh", "interface", "ipv4", "set", "address", "name="+interfaceName, "static", interfaceIPv4, interfaceMask); err != nil {
 		return fmt.Errorf("configure VPN IPv4 address: %w", err)
 	}
+	traceVPNStep(trace, "configure IPv4 address", step)
 	if s.config.EnableIPv6 {
-		_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd00::2")
-		if err := run("netsh", "interface", "ipv6", "add", "address", "interface="+interfaceName, "address=fd00::2/128"); err != nil {
-			return fmt.Errorf("configure VPN IPv6 address: %w", err)
+		step = time.Now()
+		if err := s.configureIPv6Address(); err != nil {
+			return err
 		}
+		traceVPNStep(trace, "configure IPv6 address", step)
 	}
+	step = time.Now()
 	if err := s.configureInterfaceMetric(); err != nil {
 		return err
 	}
+	traceVPNStep(trace, "configure interface metric", step)
+	step = time.Now()
+	if err := s.startDNSProxy(trace); err != nil {
+		return err
+	}
+	traceVPNStep(trace, "start DNS proxy", step)
+	step = time.Now()
 	if err := s.configureDNS(); err != nil {
 		return err
 	}
-	if err := s.configureBypassRoutes(); err != nil {
-		return err
-	}
+	traceVPNStep(trace, "configure DNS", step)
+	step = time.Now()
+	traceVPNMessage(trace, "System VPN step: configure bypass routes skipped on Windows")
+	step = time.Now()
 	if err := s.configureRoutes(); err != nil {
 		return err
 	}
-	if err := s.configureDNSLeakProtection(); err != nil {
-		return err
-	}
+	traceVPNStep(trace, "configure VPN routes", step)
 	return nil
+}
+
+func traceVPNStep(trace func(string), name string, started time.Time) {
+	if trace == nil {
+		return
+	}
+	trace(fmt.Sprintf("System VPN step: %s completed in %s", name, time.Since(started).Round(time.Millisecond)))
+}
+
+func traceVPNMessage(trace func(string), message string) {
+	if trace == nil {
+		return
+	}
+	trace(message)
 }
 
 func normalizeRouteMetric(value int) int {
@@ -144,36 +201,99 @@ func (s *Session) configureInterfaceMetric() error {
 	return nil
 }
 
-func (s *Session) configureDNSLeakProtection() error {
-	_ = cleanupDNSLeakFirewallRules()
-	if !s.config.BlockDNSLeak {
-		return nil
-	}
-	if err := addDNSLeakFirewallRule(dnsLeakRuleUDPLow, "UDP", "0.0.0.0-10.60.173.32"); err != nil {
-		return err
-	}
-	if err := addDNSLeakFirewallRule(dnsLeakRuleUDPHigh, "UDP", "10.60.173.34-255.255.255.255"); err != nil {
-		_ = cleanupDNSLeakFirewallRules()
-		return err
-	}
-	if err := addDNSLeakFirewallRule(dnsLeakRuleTCPLow, "TCP", "0.0.0.0-10.60.173.32"); err != nil {
-		_ = cleanupDNSLeakFirewallRules()
-		return err
-	}
-	if err := addDNSLeakFirewallRule(dnsLeakRuleTCPHigh, "TCP", "10.60.173.34-255.255.255.255"); err != nil {
-		_ = cleanupDNSLeakFirewallRules()
-		return err
+func (s *Session) configureIPv6Address() error {
+	_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd00::2")
+	if err := run("netsh", "interface", "ipv6", "add", "address", "interface="+interfaceName, "address=fd00::2/128"); err != nil {
+		return fmt.Errorf("configure VPN IPv6 address: %w", err)
 	}
 	return nil
 }
 
-func addDNSLeakFirewallRule(name string, protocol string, localIP string) error {
+func (s *Session) configureDNSLeakProtection(trace func(string)) error {
+	if !s.config.BlockDNSLeak {
+		step := time.Now()
+		err := cleanupDNSLeakFirewallRules()
+		traceVPNStep(trace, "cleanup DNS leak protection rules", step)
+		return err
+	}
+	rules := []struct {
+		name     string
+		action   string
+		protocol string
+		remoteIP string
+	}{
+		{dnsLeakRuleUDPLow, "block", "UDP", "0.0.0.0-126.255.255.255"},
+		{dnsLeakRuleUDPHigh, "block", "UDP", "128.0.0.0-255.255.255.255"},
+		{dnsLeakRuleTCPLow, "block", "TCP", "0.0.0.0-126.255.255.255"},
+		{dnsLeakRuleTCPHigh, "block", "TCP", "128.0.0.0-255.255.255.255"},
+	}
+
+	type ruleResult struct {
+		index    int
+		action   string
+		protocol string
+		remoteIP string
+		elapsed  time.Duration
+		err      error
+	}
+	results := make(chan ruleResult, len(rules))
+	for index, rule := range rules {
+		index, rule := index, rule
+		go func() {
+			step := time.Now()
+			err := ensureDNSLeakFirewallRule(rule.name, rule.action, rule.protocol, rule.remoteIP)
+			results <- ruleResult{
+				index:    index,
+				action:   rule.action,
+				protocol: rule.protocol,
+				remoteIP: rule.remoteIP,
+				elapsed:  time.Since(step),
+				err:      err,
+			}
+		}()
+	}
+	ordered := make([]ruleResult, len(rules))
+	var firstErr error
+	for range rules {
+		result := <-results
+		ordered[result.index] = result
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+	}
+	for _, result := range ordered {
+		traceVPNMessage(trace, fmt.Sprintf(
+			"System VPN step: ensure DNS leak rule %s %s remote %s completed in %s",
+			result.action,
+			result.protocol,
+			result.remoteIP,
+			result.elapsed.Round(time.Millisecond),
+		))
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	return nil
+}
+
+func ensureDNSLeakFirewallRule(name string, action string, protocol string, remoteIP string) error {
+	found, err := trySetDNSLeakFirewallRule(name, true, action, remoteIP)
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	return addDNSLeakFirewallRule(name, action, protocol, remoteIP)
+}
+
+func addDNSLeakFirewallRule(name string, action string, protocol string, remoteIP string) error {
 	if err := run("netsh", "advfirewall", "firewall", "add", "rule",
 		"name="+name,
 		"dir=out",
-		"action=block",
+		"action="+action,
 		"protocol="+protocol,
-		"localip="+localIP,
+		"remoteip="+remoteIP,
 		"remoteport=53",
 		"service=Dnscache",
 		"profile=any",
@@ -183,6 +303,54 @@ func addDNSLeakFirewallRule(name string, protocol string, localIP string) error 
 	return nil
 }
 
+func setDNSLeakFirewallRulesEnabled(enabled bool) error {
+	var firstErr error
+	for _, name := range []string{
+		dnsLeakRuleUDPLow,
+		dnsLeakRuleUDPHigh,
+		dnsLeakRuleTCPLow,
+		dnsLeakRuleTCPHigh,
+	} {
+		if err := setDNSLeakFirewallRuleEnabled(name, enabled); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func setDNSLeakFirewallRuleEnabled(name string, enabled bool) error {
+	_, err := trySetDNSLeakFirewallRule(name, enabled, "", "")
+	return err
+}
+
+func trySetDNSLeakFirewallRule(name string, enabled bool, action string, remoteIP string) (bool, error) {
+	value := "no"
+	if enabled {
+		value = "yes"
+	}
+	args := []string{"advfirewall", "firewall", "set", "rule", "name=" + name, "new", "enable=" + value}
+	if action != "" {
+		args = append(args, "action="+action)
+	}
+	if remoteIP != "" {
+		args = append(args, "localip=any", "remoteip="+remoteIP)
+	}
+	cmd := exec.Command("netsh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if isFirewallRuleMissingMessage(msg) {
+			return false, nil
+		}
+		if msg != "" {
+			return false, fmt.Errorf("set DNS leak firewall rule %s enable=%s: %w: %s", name, value, err, msg)
+		}
+		return false, fmt.Errorf("set DNS leak firewall rule %s enable=%s: %w", name, value, err)
+	}
+	return true, nil
+}
+
 func cleanupDNSLeakFirewallRules() error {
 	var firstErr error
 	for _, name := range []string{
@@ -190,6 +358,8 @@ func cleanupDNSLeakFirewallRules() error {
 		dnsLeakRuleUDPHigh,
 		dnsLeakRuleTCPLow,
 		dnsLeakRuleTCPHigh,
+		"Gonc VPN DNS Leak Protection Dnscache UDP 53 loopback DNS proxy allow",
+		"Gonc VPN DNS Leak Protection Dnscache TCP 53 loopback DNS proxy allow",
 	} {
 		if err := removeDNSLeakFirewallRule(name); err != nil && firstErr == nil {
 			firstErr = err
@@ -227,36 +397,19 @@ func isFirewallRuleMissingMessage(message string) bool {
 }
 
 func (s *Session) configureDNS() error {
-	v4Set := false
-	v6Set := false
-	for _, dns := range s.config.DNSServers {
-		dns = strings.TrimSpace(dns)
-		if dns == "" {
-			continue
-		}
-		if strings.Contains(dns, ":") {
-			if !s.config.EnableIPv6 {
-				continue
-			}
-			if !v6Set {
-				if err := run("netsh", "interface", "ipv6", "set", "dnsservers", "name="+interfaceName, "static", dns, "primary"); err != nil {
-					return fmt.Errorf("configure VPN IPv6 DNS: %w", err)
-				}
-				v6Set = true
-			} else if err := run("netsh", "interface", "ipv6", "add", "dnsservers", "name="+interfaceName, "address="+dns); err != nil {
-				return fmt.Errorf("add VPN IPv6 DNS: %w", err)
-			}
-			continue
-		}
-		if !v4Set {
-			if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dns, "primary", "validate=no"); err != nil {
-				return fmt.Errorf("configure VPN DNS: %w", err)
-			}
-			v4Set = true
-		} else if err := run("netsh", "interface", "ipv4", "add", "dnsservers", "name="+interfaceName, "address="+dns, "validate=no"); err != nil {
-			return fmt.Errorf("add VPN DNS: %w", err)
-		}
+	if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dnsProxyIPv4, "primary", "validate=no"); err != nil {
+		return fmt.Errorf("configure VPN DNS proxy: %w", err)
 	}
+	_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
+	return nil
+}
+
+func (s *Session) startDNSProxy(trace func(string)) error {
+	proxy, err := dnsproxy.StartWithTrace(dnsProxyIPv4, s.config.SOCKS5Endpoint, s.config.DNSServers, trace)
+	if err != nil {
+		return fmt.Errorf("start DNS proxy: %w", err)
+	}
+	s.dnsProxy = proxy
 	return nil
 }
 
