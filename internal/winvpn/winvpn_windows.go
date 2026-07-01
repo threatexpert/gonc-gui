@@ -340,7 +340,7 @@ func trySetDNSLeakFirewallRule(name string, enabled bool, action string, remoteI
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(output))
-		if isFirewallRuleMissingMessage(msg) {
+		if isFirewallRuleMissingError(err, msg) {
 			return false, nil
 		}
 		if msg != "" {
@@ -374,7 +374,7 @@ func removeDNSLeakFirewallRule(name string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(output))
-		if isFirewallRuleMissingMessage(msg) {
+		if isFirewallRuleMissingError(err, msg) {
 			return nil
 		}
 		if msg != "" {
@@ -383,6 +383,14 @@ func removeDNSLeakFirewallRule(name string) error {
 		return fmt.Errorf("remove DNS leak firewall rule %s: %w", name, err)
 	}
 	return nil
+}
+
+func isFirewallRuleMissingError(err error, message string) bool {
+	if isFirewallRuleMissingMessage(message) {
+		return true
+	}
+	_, ok := err.(*exec.ExitError)
+	return ok
 }
 
 func isFirewallRuleMissingMessage(message string) bool {
