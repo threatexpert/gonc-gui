@@ -114,12 +114,7 @@ func (s *Session) Stop() error {
 		_ = s.dnsProxy.Close()
 		s.dnsProxy = nil
 	}
-	var err error
-	if s.config.BlockDNSLeak {
-		err = setDNSLeakFirewallRulesEnabled(false)
-	} else {
-		err = cleanupDNSLeakFirewallRules()
-	}
+	err := cleanupDNSLeakFirewallRules()
 	engine.Stop()
 	return err
 }
@@ -277,13 +272,7 @@ func (s *Session) configureDNSLeakProtection(trace func(string)) error {
 }
 
 func ensureDNSLeakFirewallRule(name string, action string, protocol string, remoteIP string) error {
-	found, err := trySetDNSLeakFirewallRule(name, true, action, remoteIP)
-	if err != nil {
-		return err
-	}
-	if found {
-		return nil
-	}
+	_ = removeDNSLeakFirewallRule(name)
 	return addDNSLeakFirewallRule(name, action, protocol, remoteIP)
 }
 
@@ -303,56 +292,7 @@ func addDNSLeakFirewallRule(name string, action string, protocol string, remoteI
 	return nil
 }
 
-func setDNSLeakFirewallRulesEnabled(enabled bool) error {
-	var firstErr error
-	for _, name := range []string{
-		dnsLeakRuleUDPLow,
-		dnsLeakRuleUDPHigh,
-		dnsLeakRuleTCPLow,
-		dnsLeakRuleTCPHigh,
-	} {
-		if err := setDNSLeakFirewallRuleEnabled(name, enabled); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-func setDNSLeakFirewallRuleEnabled(name string, enabled bool) error {
-	_, err := trySetDNSLeakFirewallRule(name, enabled, "", "")
-	return err
-}
-
-func trySetDNSLeakFirewallRule(name string, enabled bool, action string, remoteIP string) (bool, error) {
-	value := "no"
-	if enabled {
-		value = "yes"
-	}
-	args := []string{"advfirewall", "firewall", "set", "rule", "name=" + name, "new", "enable=" + value}
-	if action != "" {
-		args = append(args, "action="+action)
-	}
-	if remoteIP != "" {
-		args = append(args, "localip=any", "remoteip="+remoteIP)
-	}
-	cmd := exec.Command("netsh", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(output))
-		if isFirewallRuleMissingError(err, msg) {
-			return false, nil
-		}
-		if msg != "" {
-			return false, fmt.Errorf("set DNS leak firewall rule %s enable=%s: %w: %s", name, value, err, msg)
-		}
-		return false, fmt.Errorf("set DNS leak firewall rule %s enable=%s: %w", name, value, err)
-	}
-	return true, nil
-}
-
 func cleanupDNSLeakFirewallRules() error {
-	var firstErr error
 	for _, name := range []string{
 		dnsLeakRuleUDPLow,
 		dnsLeakRuleUDPHigh,
@@ -361,47 +301,16 @@ func cleanupDNSLeakFirewallRules() error {
 		"Gonc VPN DNS Leak Protection Dnscache UDP 53 loopback DNS proxy allow",
 		"Gonc VPN DNS Leak Protection Dnscache TCP 53 loopback DNS proxy allow",
 	} {
-		if err := removeDNSLeakFirewallRule(name); err != nil && firstErr == nil {
-			firstErr = err
-		}
+		_ = removeDNSLeakFirewallRule(name)
 	}
-	return firstErr
+	return nil
 }
 
 func removeDNSLeakFirewallRule(name string) error {
 	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(output))
-		if isFirewallRuleMissingError(err, msg) {
-			return nil
-		}
-		if msg != "" {
-			return fmt.Errorf("remove DNS leak firewall rule %s: %w: %s", name, err, msg)
-		}
-		return fmt.Errorf("remove DNS leak firewall rule %s: %w", name, err)
-	}
+	_ = cmd.Run()
 	return nil
-}
-
-func isFirewallRuleMissingError(err error, message string) bool {
-	if isFirewallRuleMissingMessage(message) {
-		return true
-	}
-	_, ok := err.(*exec.ExitError)
-	return ok
-}
-
-func isFirewallRuleMissingMessage(message string) bool {
-	clean := strings.ToLower(strings.TrimSpace(message))
-	if clean == "" {
-		return false
-	}
-	return strings.Contains(clean, "no rules match") ||
-		strings.Contains(clean, "no rule matches") ||
-		(strings.Contains(clean, "没有") && strings.Contains(clean, "规则")) ||
-		(strings.Contains(clean, "找不到") && strings.Contains(clean, "规则"))
 }
 
 func (s *Session) configureDNS() error {
