@@ -245,6 +245,8 @@ jobs:
       R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
       GONC_GUI_DOWNLOAD_BASE: https://gonc.download
+      CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_CACHE_PURGE_TOKEN: ${{ secrets.CLOUDFLARE_CACHE_PURGE_TOKEN }}
 
     steps:
       - name: Checkout
@@ -361,3 +363,14 @@ jobs:
           aws s3 sync r2-latest/ "s3://${R2_BUCKET}/gonc-gui/latest/" \
             --endpoint-url "${endpoint}" \
             --delete
+
+      - name: Purge Cloudflare cache for GUI downloads
+        if: ${{ env.CLOUDFLARE_ZONE_ID != '' && env.CLOUDFLARE_CACHE_PURGE_TOKEN != '' }}
+        shell: bash
+        run: |
+          purge_payload="$(printf '{"prefixes":["gonc.download/gonc-gui/latest","gonc.download/gonc-gui/%s"]}' "${RELEASE_TAG}")"
+          curl --fail-with-body \
+            "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_CACHE_PURGE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "${purge_payload}"
