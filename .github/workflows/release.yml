@@ -239,6 +239,12 @@ jobs:
     needs:
       - desktop
       - android
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+      GONC_GUI_DOWNLOAD_BASE: https://gonc.download
 
     steps:
       - name: Checkout
@@ -264,6 +270,13 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Generate checksums
+        shell: bash
+        run: |
+          find release-assets -type f ! -name '*.sha256.txt' -print0 | while IFS= read -r -d '' file; do
+            (cd "$(dirname "${file}")" && sha256sum "$(basename "${file}")" > "$(basename "${file}").sha256.txt")
+          done
+
       - name: Publish release
         shell: bash
         env:
@@ -281,3 +294,78 @@ jobs:
               --target "${GITHUB_SHA}" \
               --latest
           fi
+
+      - name: Prepare latest R2 assets
+        shell: bash
+        run: |
+          rm -rf r2-latest
+          mkdir -p r2-latest
+
+          copy_latest() {
+            local platform="$1"
+            local ext="$2"
+            local src="release-assets/${APP_NAME}-${VERSION}-${platform}.${ext}"
+            local dst="r2-latest/${APP_NAME}-${platform}.${ext}"
+            test -f "${src}"
+            cp "${src}" "${dst}"
+            (cd r2-latest && sha256sum "$(basename "${dst}")" > "$(basename "${dst}").sha256.txt")
+          }
+
+          copy_latest "windows-amd64" "zip"
+          copy_latest "windows-arm64" "zip"
+          copy_latest "ubuntu-amd64" "tar.gz"
+          copy_latest "macos-amd64" "zip"
+          copy_latest "macos-arm64" "zip"
+          copy_latest "android-arm64" "apk"
+
+          printf "%s\n" "${RELEASE_TAG}" > r2-latest/version.txt
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          latest_dir = Path("r2-latest")
+          base_url = os.environ["GONC_GUI_DOWNLOAD_BASE"].rstrip("/")
+          release_tag = os.environ["RELEASE_TAG"]
+          version = os.environ["VERSION"]
+
+          assets = []
+          app_name = os.environ["APP_NAME"]
+          for path in sorted(latest_dir.iterdir()):
+              if not path.is_file() or path.name.endswith(".sha256.txt") or path.name in {"manifest.json", "version.txt"}:
+                  continue
+              versioned_name = f"{app_name}-{version}-{path.name.removeprefix(app_name + '-')}"
+              data = path.read_bytes()
+              assets.append({
+                  "name": path.name,
+                  "url": f"{base_url}/gonc-gui/latest/{path.name}",
+                  "versioned_url": f"{base_url}/gonc-gui/{release_tag}/{versioned_name}",
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "size": path.stat().st_size,
+              })
+
+          manifest = {
+              "app": app_name,
+              "tag": release_tag,
+              "version": version,
+              "assets": assets,
+          }
+          (latest_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload assets to Cloudflare R2
+        if: ${{ env.R2_ACCOUNT_ID != '' && env.R2_ACCESS_KEY_ID != '' && env.R2_SECRET_ACCESS_KEY != '' && env.R2_BUCKET != '' }}
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 sync release-assets/ "s3://${R2_BUCKET}/gonc-gui/${RELEASE_TAG}/" \
+            --endpoint-url "${endpoint}" \
+            --delete
+          aws s3 sync r2-latest/ "s3://${R2_BUCKET}/gonc-gui/latest/" \
+            --endpoint-url "${endpoint}" \
+            --delete
