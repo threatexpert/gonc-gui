@@ -200,7 +200,8 @@ func (s *Session) configureInterfaceMetric() error {
 
 func (s *Session) configureIPv6Address() error {
 	_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd00::2")
-	if err := run("netsh", "interface", "ipv6", "add", "address", "interface="+interfaceName, "address=fd00::2/128"); err != nil {
+	_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd60:173:33::2")
+	if err := run("netsh", "interface", "ipv6", "add", "address", "interface="+interfaceName, "address=fd60:173:33::2/128"); err != nil {
 		return fmt.Errorf("configure VPN IPv6 address: %w", err)
 	}
 	return nil

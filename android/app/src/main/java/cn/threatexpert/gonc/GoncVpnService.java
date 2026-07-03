@@ -394,11 +394,11 @@ public final class GoncVpnService extends VpnService {
         builder.setMtu(mtu);
 
         GoncCrashReporter.stage(this, "vpn builder add ipv4 address");
-        builder.addAddress("10.0.0.2", 32);
+        builder.addAddress("10.60.173.33", 32);
 
         if (enableIpv6) {
             GoncCrashReporter.stage(this, "vpn builder add ipv6 address");
-            builder.addAddress("fd00::2", 128);
+            builder.addAddress("fd60:173:33::2", 128);
         }
 
         addRoutes(builder, routeCidrs, enableIpv6);

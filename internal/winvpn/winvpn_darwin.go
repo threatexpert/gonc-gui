@@ -120,7 +120,7 @@ func (s *Session) configure() error {
 		return fmt.Errorf("configure VPN IPv4 address: %w", err)
 	}
 	if s.config.EnableIPv6 {
-		if err := run("ifconfig", s.ifaceName, "inet6", "fd00::2", "prefixlen", "128", "up"); err != nil {
+		if err := run("ifconfig", s.ifaceName, "inet6", "fd60:173:33::2", "prefixlen", "128", "up"); err != nil {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}

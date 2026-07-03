@@ -96,7 +96,7 @@ func (s *Session) configure() error {
 		return fmt.Errorf("configure VPN IPv4 address: %w", err)
 	}
 	if s.config.EnableIPv6 {
-		if err := run("ip", "-6", "addr", "replace", "fd00::2/128", "dev", interfaceName); err != nil {
+		if err := run("ip", "-6", "addr", "replace", "fd60:173:33::2/128", "dev", interfaceName); err != nil {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}
