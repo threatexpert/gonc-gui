@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/zeebo/blake3"
 )
 
 type FileInfo struct {
@@ -35,6 +37,8 @@ type Config struct {
 	SubPath      string
 	SaveDir      string
 	IncludePaths []string
+	ExcludePaths []string
+	CachedFiles  []FileInfo
 	Concurrency  int
 	Resume       bool
 }
@@ -93,6 +97,20 @@ type httpStatusError struct {
 func (e httpStatusError) Error() string {
 	return fmt.Sprintf("server returned %s for %s", e.status, e.path)
 }
+
+var (
+	errManifestUnsupported = errors.New("BLAKE3 manifest unsupported")
+	errRangeUnsupported    = errors.New("range repair unsupported")
+	errUnsupportedEncoding = errors.New("unsupported content encoding")
+)
+
+const (
+	manifestAlgo             = "blake3"
+	defaultManifestBlockSize = int64(8 * 1024 * 1024)
+	minManifestBlockSize     = int64(64 * 1024)
+	maxManifestBlockSize     = int64(64 * 1024 * 1024)
+	maxRepairRangeCount      = 128
+)
 
 func New(cfg Config) (*Downloader, error) {
 	if cfg.ServerURL == "" {
@@ -170,12 +188,19 @@ func List(ctx context.Context, serverURL, subPath string) ([]FileInfo, error) {
 }
 
 func (d *Downloader) Start(ctx context.Context, sink Sink) error {
-	emit(sink, "status", "info", "fetching remote file list")
-	files, err := d.fetchListWithRetry(ctx, sink)
-	if err != nil {
-		return err
+	var files []FileInfo
+	if len(d.cfg.CachedFiles) > 0 {
+		emit(sink, "status", "info", "using selected remote file list")
+		files = append([]FileInfo(nil), d.cfg.CachedFiles...)
+	} else {
+		emit(sink, "status", "info", "fetching remote file list")
+		var err error
+		files, err = d.fetchListWithRetry(ctx, sink)
+		if err != nil {
+			return err
+		}
 	}
-	files = filterFiles(files, d.cfg.IncludePaths)
+	files = filterFiles(files, d.cfg.IncludePaths, d.cfg.ExcludePaths)
 	files = dropRootDirectoryEntries(files)
 	d.files = files
 	for _, file := range files {
@@ -250,12 +275,12 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 		return ctx.Err()
 	}
 	workerErrMu.Lock()
-	err = workerErr
+	finalErr := workerErr
 	workerErrMu.Unlock()
 	emitProgress(sink, d.progress, "", true)
-	if err != nil {
+	if finalErr != nil {
 		emit(sink, "status", "error", fmt.Sprintf("download finished with %d failed files", d.progress.failedFiles.Load()))
-		return err
+		return finalErr
 	}
 	emit(sink, "status", "info", "download complete")
 	return nil
@@ -339,37 +364,49 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 
 	localExists := false
 	localSize := int64(0)
+	localModTime := time.Time{}
 	if stat, err := os.Stat(localPath); err == nil {
 		localExists = true
 		localSize = stat.Size()
+		localModTime = stat.ModTime()
 	} else if !os.IsNotExist(err) {
 		return err
-	}
-
-	fileMode := os.O_CREATE | os.O_WRONLY
-	if !d.cfg.Resume {
-		fileMode |= os.O_TRUNC
-	}
-	if d.cfg.Resume && localExists && localSize >= file.Size {
-		d.setFileProgress(file.Path, file.Size)
-		d.progress.skippedFiles.Add(1)
-		return nil
-	}
-	resuming := d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size
-	if d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size {
-		fileMode |= os.O_APPEND
 	}
 
 	downloadURL, err := resolveURL(d.cfg.ServerURL, file.Path)
 	if err != nil {
 		return err
 	}
+
+	if d.cfg.Resume && localExists && localSize == file.Size && !file.ModTime.IsZero() && localModTime.Equal(file.ModTime) {
+		d.setFileProgress(file.Path, file.Size)
+		d.progress.skippedFiles.Add(1)
+		return nil
+	}
+
+	if d.cfg.Resume && localExists {
+		repaired, downloadedBytes, err := d.repairFile(ctx, client, downloadURL, localPath, file, localSize, sink)
+		if err != nil {
+			return err
+		}
+		if repaired {
+			if downloadedBytes > 0 {
+				d.progress.resumedFiles.Add(1)
+			} else {
+				d.progress.skippedFiles.Add(1)
+			}
+			return nil
+		}
+		emit(sink, "log", "info", fmt.Sprintf("BLAKE3 repair unavailable or inefficient for %s; re-downloading full file", file.Path))
+	}
+
+	return d.downloadFullFile(ctx, client, downloadURL, localPath, file, sink)
+}
+
+func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, sink Sink) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return err
-	}
-	if d.cfg.Resume && localExists && localSize > 0 && localSize < file.Size {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", localSize))
 	}
 	req.Header.Set("Accept-Encoding", "zstd, gzip")
 
@@ -379,34 +416,19 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	}
 	defer resp.Body.Close()
 
-	responseOffset := int64(0)
-	if resp.StatusCode == http.StatusPartialContent {
-		responseOffset = localSize
-		d.setFileProgress(file.Path, localSize)
-	} else if resp.StatusCode == http.StatusOK {
-		fileMode = os.O_CREATE | os.O_WRONLY
-		if !d.cfg.Resume {
-			fileMode |= os.O_TRUNC
-		}
-		d.setFileProgress(file.Path, 0)
-	} else {
+	if resp.StatusCode != http.StatusOK {
 		return httpStatusError{status: resp.Status, path: file.Path}
 	}
+	d.setFileProgress(file.Path, 0)
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(localPath, fileMode, 0644)
+	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-
-	if responseOffset > 0 {
-		if _, err := out.Seek(responseOffset, io.SeekStart); err != nil {
-			return err
-		}
-	}
 
 	reader, closeReader, err := responseReader(resp)
 	if err != nil {
@@ -421,23 +443,379 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		downloader: d,
 		sink:       sink,
 		file:       file.Path,
-		offset:     responseOffset,
 	}, reader)
 	if err != nil {
 		return err
 	}
 
-	if copied+responseOffset != file.Size {
-		return fmt.Errorf("downloaded size mismatch for %s: got %d, expected %d", file.Path, copied+responseOffset, file.Size)
+	if copied != file.Size {
+		return fmt.Errorf("downloaded size mismatch for %s: got %d, expected %d", file.Path, copied, file.Size)
 	}
 	if !file.ModTime.IsZero() {
 		_ = os.Chtimes(localPath, time.Now(), file.ModTime)
 	}
 	d.setFileProgress(file.Path, file.Size)
-	if resuming {
-		d.progress.resumedFiles.Add(1)
+	return nil
+}
+
+type blake3Manifest struct {
+	Path      string
+	Size      int64
+	ModTime   time.Time
+	BlockSize int64
+	Blocks    []blake3Block
+}
+
+type blake3Block struct {
+	Type   string `json:"type"`
+	Index  int    `json:"index"`
+	Offset int64  `json:"offset"`
+	Size   int64  `json:"size"`
+	Hash   string `json:"hash"`
+}
+
+type repairRange struct {
+	Offset int64
+	Size   int64
+}
+
+func (r repairRange) endInclusive() int64 {
+	return r.Offset + r.Size - 1
+}
+
+func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, localSize int64, sink Sink) (bool, int64, error) {
+	manifest, err := d.fetchManifest(ctx, client, downloadURL)
+	if err != nil {
+		if errors.Is(err, errManifestUnsupported) {
+			emit(sink, "log", "info", fmt.Sprintf("Repair check unavailable for %s: server does not provide BLAKE3 manifest; falling back to full download", file.Path))
+			return false, 0, nil
+		}
+		return false, 0, err
+	}
+	if manifest.Size != file.Size || !manifest.ModTime.Equal(file.ModTime) {
+		file.Size = manifest.Size
+		file.ModTime = manifest.ModTime
+	}
+
+	ranges, transferBytes, err := planRepair(localPath, localSize, manifest)
+	if err != nil {
+		return false, 0, err
+	}
+	if shouldRedownload(manifest.Size, transferBytes, len(ranges)) {
+		emit(sink, "log", "info", fmt.Sprintf("Repair check for %s: local=%s remote=%s, %d changed/missing range(s) totaling %s; full download selected",
+			file.Path, formatBytes(localSize), formatBytes(manifest.Size), len(ranges), formatBytes(transferBytes)))
+		return false, 0, nil
+	}
+
+	keptBytes := manifest.Size - transferBytes
+	if keptBytes < 0 {
+		keptBytes = 0
+	}
+	truncateBytes := int64(0)
+	if localSize > manifest.Size {
+		truncateBytes = localSize - manifest.Size
+	}
+	emit(sink, "log", "info", fmt.Sprintf("Repair plan for %s: local=%s remote=%s, keep %s, download %s in %d range request(s), truncate %s",
+		file.Path, formatBytes(localSize), formatBytes(manifest.Size), formatBytes(keptBytes), formatBytes(transferBytes), len(ranges), formatBytes(truncateBytes)))
+	d.setFileProgress(file.Path, keptBytes)
+
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return false, 0, err
+	}
+	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return false, 0, err
+	}
+	defer out.Close()
+
+	for _, repairRange := range ranges {
+		if err := d.downloadRange(ctx, client, downloadURL, out, file.Path, repairRange, sink); err != nil {
+			if errors.Is(err, errRangeUnsupported) {
+				return false, 0, nil
+			}
+			return false, 0, err
+		}
+	}
+
+	if err := out.Truncate(manifest.Size); err != nil {
+		return false, 0, err
+	}
+	if !manifest.ModTime.IsZero() {
+		_ = os.Chtimes(localPath, time.Now(), manifest.ModTime)
+	}
+	d.setFileProgress(file.Path, manifest.Size)
+	emit(sink, "log", "info", fmt.Sprintf("Repair completed for %s: %d range request(s), downloaded %s, final size %s",
+		file.Path, len(ranges), formatBytes(transferBytes), formatBytes(manifest.Size)))
+	return true, transferBytes, nil
+}
+
+func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, downloadURL string) (*blake3Manifest, error) {
+	manifestURL, err := url.Parse(downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	q := manifestURL.Query()
+	q.Set("manifest", manifestAlgo)
+	q.Set("block_size", fmt.Sprintf("%d", defaultManifestBlockSize))
+	manifestURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Encoding", "zstd, gzip")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errManifestUnsupported
+	}
+
+	reader, closeReader, err := responseReaderStrict(resp)
+	if err != nil {
+		if errors.Is(err, errUnsupportedEncoding) {
+			return nil, errManifestUnsupported
+		}
+		return nil, err
+	}
+	if closeReader != nil {
+		defer closeReader()
+	}
+
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	var manifest blake3Manifest
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var typed struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &typed); err != nil {
+			return nil, errManifestUnsupported
+		}
+		switch typed.Type {
+		case "file":
+			var header struct {
+				Type      string `json:"type"`
+				Path      string `json:"path"`
+				Size      int64  `json:"size"`
+				ModTime   string `json:"mod_time"`
+				Algo      string `json:"algo"`
+				BlockSize int64  `json:"block_size"`
+			}
+			if err := json.Unmarshal(line, &header); err != nil || header.Algo != manifestAlgo {
+				return nil, errManifestUnsupported
+			}
+			modTime, err := time.Parse(time.RFC3339Nano, header.ModTime)
+			if err != nil {
+				return nil, errManifestUnsupported
+			}
+			manifest.Path = header.Path
+			manifest.Size = header.Size
+			manifest.ModTime = modTime
+			manifest.BlockSize = normalizeManifestBlockSize(header.BlockSize)
+		case "block":
+			var block blake3Block
+			if err := json.Unmarshal(line, &block); err != nil {
+				return nil, errManifestUnsupported
+			}
+			manifest.Blocks = append(manifest.Blocks, block)
+		default:
+			return nil, errManifestUnsupported
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if manifest.BlockSize <= 0 && manifest.Size > 0 {
+		return nil, errManifestUnsupported
+	}
+	return &manifest, nil
+}
+
+func planRepair(localPath string, localSize int64, manifest *blake3Manifest) ([]repairRange, int64, error) {
+	compareSize := localSize
+	if compareSize > manifest.Size {
+		compareSize = manifest.Size
+	}
+	localBlocks, err := localBlockHashes(localPath, compareSize, manifest.BlockSize)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var ranges []repairRange
+	for _, remoteBlock := range manifest.Blocks {
+		needsDownload := remoteBlock.Offset+remoteBlock.Size > localSize
+		if !needsDownload {
+			if remoteBlock.Index >= len(localBlocks) {
+				needsDownload = true
+			} else {
+				localBlock := localBlocks[remoteBlock.Index]
+				needsDownload = localBlock.Size != remoteBlock.Size || localBlock.Hash != remoteBlock.Hash
+			}
+		}
+		if needsDownload {
+			ranges = append(ranges, repairRange{Offset: remoteBlock.Offset, Size: remoteBlock.Size})
+		}
+	}
+	ranges = mergeRanges(ranges)
+	var transferBytes int64
+	for _, repairRange := range ranges {
+		transferBytes += repairRange.Size
+	}
+	return ranges, transferBytes, nil
+}
+
+func localBlockHashes(localPath string, fileSize, blockSize int64) ([]blake3Block, error) {
+	if fileSize < 0 {
+		return nil, fmt.Errorf("negative file size")
+	}
+	blockSize = normalizeManifestBlockSize(blockSize)
+	blockCount := int((fileSize + blockSize - 1) / blockSize)
+	blocks := make([]blake3Block, 0, blockCount)
+	file, err := os.Open(localPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	buffer := make([]byte, blockSize)
+	for index := 0; index < blockCount; index++ {
+		offset := int64(index) * blockSize
+		size := blockSize
+		if remaining := fileSize - offset; remaining < size {
+			size = remaining
+		}
+		chunk := buffer[:size]
+		if _, err := io.ReadFull(file, chunk); err != nil {
+			return nil, err
+		}
+		sum := blake3.Sum256(chunk)
+		blocks = append(blocks, blake3Block{
+			Type:   "block",
+			Index:  index,
+			Offset: offset,
+			Size:   size,
+			Hash:   hex.EncodeToString(sum[:]),
+		})
+	}
+	return blocks, nil
+}
+
+func normalizeManifestBlockSize(blockSize int64) int64 {
+	if blockSize <= 0 {
+		return defaultManifestBlockSize
+	}
+	if blockSize < minManifestBlockSize {
+		return minManifestBlockSize
+	}
+	if blockSize > maxManifestBlockSize {
+		return maxManifestBlockSize
+	}
+	return blockSize
+}
+
+func mergeRanges(ranges []repairRange) []repairRange {
+	if len(ranges) < 2 {
+		return ranges
+	}
+	merged := ranges[:0]
+	for _, current := range ranges {
+		if len(merged) == 0 {
+			merged = append(merged, current)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		if last.Offset+last.Size == current.Offset {
+			last.Size += current.Size
+			continue
+		}
+		merged = append(merged, current)
+	}
+	return merged
+}
+
+func shouldRedownload(remoteSize, transferBytes int64, rangeCount int) bool {
+	if remoteSize == 0 {
+		return false
+	}
+	return rangeCount > maxRepairRangeCount || transferBytes*2 > remoteSize
+}
+
+func (d *Downloader) downloadRange(ctx context.Context, client *http.Client, downloadURL string, out *os.File, filePath string, repairRange repairRange, sink Sink) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", repairRange.Offset, repairRange.endInclusive()))
+	req.Header.Set("Accept-Encoding", "zstd, gzip")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		return errRangeUnsupported
+	}
+
+	reader, closeReader, err := responseReaderStrict(resp)
+	if err != nil {
+		return errRangeUnsupported
+	}
+	if closeReader != nil {
+		defer closeReader()
+	}
+
+	writer := &repairProgressWriter{
+		writer:     &writeAtWriter{file: out, offset: repairRange.Offset},
+		downloader: d,
+		sink:       sink,
+		file:       filePath,
+	}
+	written, err := io.Copy(writer, reader)
+	if err != nil {
+		return err
+	}
+	if written != repairRange.Size {
+		return fmt.Errorf("range repair wrote %d bytes for %s range %d-%d, want %d", written, filePath, repairRange.Offset, repairRange.endInclusive(), repairRange.Size)
 	}
 	return nil
+}
+
+type writeAtWriter struct {
+	file   *os.File
+	offset int64
+}
+
+func (w *writeAtWriter) Write(data []byte) (int, error) {
+	n, err := w.file.WriteAt(data, w.offset)
+	w.offset += int64(n)
+	return n, err
+}
+
+type repairProgressWriter struct {
+	writer     io.Writer
+	downloader *Downloader
+	sink       Sink
+	file       string
+	lastEmit   time.Time
+}
+
+func (w *repairProgressWriter) Write(data []byte) (int, error) {
+	n, err := w.writer.Write(data)
+	if n > 0 {
+		w.downloader.addFileProgress(w.file, int64(n))
+		w.downloader.progress.intervalBytes.Add(int64(n))
+		if time.Since(w.lastEmit) > time.Second {
+			w.lastEmit = time.Now()
+			emitProgress(w.sink, w.downloader.progress, w.file, false)
+		}
+	}
+	return n, err
 }
 
 func (d *Downloader) localPath(file FileInfo) (string, error) {
@@ -523,6 +901,16 @@ func (d *Downloader) setFileProgress(file string, absoluteBytes int64) int64 {
 	return delta
 }
 
+func (d *Downloader) addFileProgress(file string, delta int64) {
+	if delta <= 0 {
+		return
+	}
+	d.countedMu.Lock()
+	d.counted[file] += delta
+	d.countedMu.Unlock()
+	d.progress.doneBytes.Add(delta)
+}
+
 type progressWriter struct {
 	writer     io.Writer
 	downloader *Downloader
@@ -549,32 +937,78 @@ func (w *progressWriter) Write(data []byte) (int, error) {
 	return n, err
 }
 
-func filterFiles(files []FileInfo, includePaths []string) []FileInfo {
-	if len(includePaths) == 0 {
-		return files
-	}
-	include := make([]string, 0, len(includePaths))
-	for _, item := range includePaths {
-		normalized := normalizeRemotePath(item)
-		if normalized != "" {
-			include = append(include, normalized)
-		}
-	}
-	if len(include) == 0 {
+func filterFiles(files []FileInfo, includePaths []string, excludePaths []string) []FileInfo {
+	include := normalizePathSet(includePaths)
+	exclude := normalizePathSet(excludePaths)
+	if len(include) == 0 && len(exclude) == 0 {
 		return files
 	}
 
 	var filtered []FileInfo
 	for _, file := range files {
-		filePath := normalizeRemotePath(file.Path)
-		for _, selected := range include {
-			if filePath == selected || strings.HasPrefix(filePath, strings.TrimRight(selected, "/")+"/") {
-				filtered = append(filtered, file)
-				break
-			}
+		if shouldIncludePath(normalizeRemotePath(file.Path), include, exclude) {
+			filtered = append(filtered, file)
 		}
 	}
 	return filtered
+}
+
+func normalizePathSet(paths []string) []string {
+	normalized := make([]string, 0, len(paths))
+	for _, item := range paths {
+		cleaned := normalizeRemotePath(item)
+		if cleaned != "" {
+			cleaned = strings.TrimRight(cleaned, "/")
+			if cleaned == "" {
+				cleaned = "/"
+			}
+			normalized = appendUniquePath(normalized, cleaned)
+		}
+	}
+	return normalized
+}
+
+func appendUniquePath(paths []string, item string) []string {
+	for _, existing := range paths {
+		if existing == item {
+			return paths
+		}
+	}
+	return append(paths, item)
+}
+
+func shouldIncludePath(filePath string, include, exclude []string) bool {
+	includeRank := longestPathMatch(filePath, include)
+	if len(include) > 0 && includeRank < 0 {
+		return false
+	}
+	if len(include) == 0 {
+		includeRank = 0
+	}
+	excludeRank := longestPathMatch(filePath, exclude)
+	return excludeRank < 0 || includeRank > excludeRank
+}
+
+func longestPathMatch(filePath string, paths []string) int {
+	filePath = strings.TrimRight(normalizeRemotePath(filePath), "/")
+	if filePath == "" {
+		filePath = "/"
+	}
+	best := -1
+	for _, item := range paths {
+		if item == "/" {
+			if best < 0 {
+				best = 0
+			}
+			continue
+		}
+		if filePath == item || strings.HasPrefix(filePath, item+"/") {
+			if rank := strings.Count(item, "/") + 1; rank > best {
+				best = rank
+			}
+		}
+	}
+	return best
 }
 
 func dropRootDirectoryEntries(files []FileInfo) []FileInfo {
@@ -616,6 +1050,40 @@ func responseReader(resp *http.Response) (io.Reader, func(), error) {
 	default:
 		return resp.Body, nil, nil
 	}
+}
+
+func responseReaderStrict(resp *http.Response) (io.Reader, func(), error) {
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
+	case "zstd":
+		reader, err := zstd.NewReader(resp.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		return reader, reader.Close, nil
+	case "gzip":
+		reader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		return reader, func() { _ = reader.Close() }, nil
+	case "", "identity":
+		return resp.Body, nil, nil
+	default:
+		return nil, nil, errUnsupportedEncoding
+	}
+}
+
+func formatBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	div, exp := int64(unit), 0
+	for n := value / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(value)/float64(div), "KMGTPE"[exp])
 }
 
 func resolveURL(serverURL, remotePath string) (string, error) {

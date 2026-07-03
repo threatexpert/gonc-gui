@@ -8,29 +8,46 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.util.Log;
 
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.zip.GZIPInputStream;
+
+import com.github.luben.zstd.ZstdInputStream;
+import mobilegonc.Mobilegonc;
 
 final class HttpReceiver {
     private static final String DEFAULT_SAVE_FOLDER = "Gonc";
+    private static final String TAG = "GoncHttpReceiver";
+    private static final String MANIFEST_ALGO = "blake3";
+    private static final long DEFAULT_MANIFEST_BLOCK_SIZE = 8L * 1024L * 1024L;
+    private static final long MIN_MANIFEST_BLOCK_SIZE = 64L * 1024L;
+    private static final long MAX_MANIFEST_BLOCK_SIZE = 64L * 1024L * 1024L;
+    private static final int MAX_REPAIR_RANGE_COUNT = 128;
 
     interface ListCallback {
         void onList(List<RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing);
@@ -41,7 +58,7 @@ final class HttpReceiver {
     interface Callback {
         void onProgress(int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current);
 
-        void onComplete(int totalFiles, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles);
+        void onComplete(int totalFiles, long doneBytes, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles, List<DownloadFailure> failures);
 
         void onError(Throwable error);
     }
@@ -110,6 +127,7 @@ final class HttpReceiver {
             long networkDoneBytes = 0;
             int skippedFiles = 0;
             int resumedFiles = 0;
+            List<DownloadFailure> failures = new ArrayList<>();
             ProgressClock clock = new ProgressClock();
             TargetResolver targetResolver = new TargetResolver(context, saveTreeUri);
             if (callback != null) {
@@ -123,7 +141,20 @@ final class HttpReceiver {
                     targetResolver.ensureDirectory(file.path);
                     continue;
                 }
-                DownloadResult result = downloadOne(context, serverUrl, file, targetResolver, resume, session, callback, clock, doneFiles, totalFiles, doneBytes, networkDoneBytes, totalBytes);
+                DownloadResult result;
+                try {
+                    result = downloadOne(context, serverUrl, file, targetResolver, resume, session, callback, clock, doneFiles, totalFiles, doneBytes, networkDoneBytes, totalBytes);
+                } catch (Throwable error) {
+                    if (session.isStopped()) {
+                        return;
+                    }
+                    doneFiles++;
+                    failures.add(new DownloadFailure(file.path, errorMessage(error)));
+                    if (callback != null) {
+                        callback.onProgress(doneFiles, totalFiles, doneBytes, totalBytes, networkDoneBytes, clock.speedFor(networkDoneBytes), file.path);
+                    }
+                    continue;
+                }
                 doneFiles++;
                 doneBytes += result.doneBytes;
                 networkDoneBytes += result.networkBytes;
@@ -138,13 +169,21 @@ final class HttpReceiver {
                 }
             }
             if (callback != null && !session.isStopped()) {
-                callback.onComplete(totalFiles, totalBytes, networkDoneBytes, skippedFiles, resumedFiles);
+                callback.onComplete(totalFiles, doneBytes, totalBytes, networkDoneBytes, skippedFiles, resumedFiles, failures);
             }
         } catch (Throwable error) {
             if (callback != null && !session.isStopped()) {
                 callback.onError(error);
             }
         }
+    }
+
+    private static String errorMessage(Throwable error) {
+        if (error == null) {
+            return "unknown error";
+        }
+        String message = error.getMessage();
+        return message == null || message.trim().isEmpty() ? error.toString() : message;
     }
 
     private static ListResult listMany(String serverUrl, List<String> subPaths, Session session) throws Exception {
@@ -178,6 +217,7 @@ final class HttpReceiver {
     private static ListResult list(String serverUrl, String subPath, Session session) throws Exception {
         HttpURLConnection conn = open(resolveUrl(serverUrl, subPath));
         conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("Accept-Encoding", "zstd, gzip");
         if (conn.getResponseCode() == HttpURLConnection.HTTP_NOT_FOUND) {
             return new ListResult(new ArrayList<>(), true);
         }
@@ -185,7 +225,8 @@ final class HttpReceiver {
             throw new IllegalStateException("Remote list failed: HTTP " + conn.getResponseCode());
         }
         List<RemoteFile> files = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (InputStream input = decodedInputStream(conn, false);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (session.isStopped()) {
@@ -243,32 +284,35 @@ final class HttpReceiver {
 
     private static DownloadResult downloadOne(Context context, String serverUrl, RemoteFile file, TargetResolver targetResolver, boolean resume, Session session, Callback callback, ProgressClock clock, int doneFiles, int totalFiles, long baseDoneBytes, long baseNetworkBytes, long totalBytes) throws Exception {
         DocumentInfo target = targetResolver.ensureFile(file.path, file.name, !resume);
-        long offset = resume ? Math.max(0, target.size) : 0;
-        if (resume && offset >= file.size && file.size >= 0) {
+        String downloadUrl = resolveUrl(serverUrl, file.path);
+        if (resume && target.size == file.size && file.size >= 0 && target.modifiedMs > 0 && file.modifiedMs > 0 && target.modifiedMs == file.modifiedMs) {
             return new DownloadResult(file.size, 0, true, false);
         }
 
-        HttpURLConnection conn = open(resolveUrl(serverUrl, file.path));
-        session.attach(conn);
-        if (offset > 0) {
-            conn.setRequestProperty("Range", "bytes=" + offset + "-");
+        if (resume && target.size > 0) {
+            DownloadResult repaired = tryRepair(context, downloadUrl, file, target, session, callback, clock, doneFiles, totalFiles, baseDoneBytes, baseNetworkBytes, totalBytes);
+            if (repaired != null) {
+                return repaired;
+            }
+            Log.i(TAG, "BLAKE3 repair unavailable or inefficient for " + file.path + "; re-downloading full file");
         }
+
+        return downloadFull(context, downloadUrl, file, target, session, callback, clock, doneFiles, totalFiles, baseDoneBytes, baseNetworkBytes, totalBytes);
+    }
+
+    private static DownloadResult downloadFull(Context context, String downloadUrl, RemoteFile file, DocumentInfo target, Session session, Callback callback, ProgressClock clock, int doneFiles, int totalFiles, long baseDoneBytes, long baseNetworkBytes, long totalBytes) throws Exception {
+        HttpURLConnection conn = open(downloadUrl);
+        session.attach(conn);
+        conn.setRequestProperty("Accept-Encoding", "zstd, gzip");
         try {
             int status = conn.getResponseCode();
-            boolean resumed = offset > 0 && status == HttpURLConnection.HTTP_PARTIAL;
-            if (offset > 0 && status == HttpURLConnection.HTTP_OK) {
-                offset = 0;
-            } else if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_PARTIAL) {
+            if (status != HttpURLConnection.HTTP_OK) {
                 throw new IllegalStateException("Download failed for " + file.path + ": HTTP " + status);
             }
 
-            long copied = offset;
-            long initialCopied = offset;
-            if (callback != null && offset > 0) {
-                callback.onProgress(doneFiles, totalFiles, baseDoneBytes + offset, totalBytes, baseNetworkBytes, clock.speedFor(baseNetworkBytes), file.path);
-            }
+            long copied = 0;
             ContentResolver resolver = context.getContentResolver();
-            try (InputStream input = conn.getInputStream(); OutputStream output = resolver.openOutputStream(target.uri, offset > 0 ? "wa" : "wt")) {
+            try (InputStream input = decodedInputStream(conn, false); OutputStream output = resolver.openOutputStream(target.uri, "wt")) {
                 if (output == null) {
                     throw new IllegalStateException("Cannot open destination: " + file.path);
                 }
@@ -276,20 +320,333 @@ final class HttpReceiver {
                 int n;
                 while ((n = input.read(buffer)) >= 0) {
                     if (session.isStopped()) {
-                        return new DownloadResult(copied, Math.max(0, copied - initialCopied), false, resumed);
+                        return new DownloadResult(copied, copied, false, false);
                     }
                     output.write(buffer, 0, n);
                     copied += n;
-                    long networkCopied = Math.max(0, copied - initialCopied);
-                    if (callback != null && clock.shouldEmit(baseNetworkBytes + networkCopied)) {
-                        callback.onProgress(doneFiles, totalFiles, baseDoneBytes + copied, totalBytes, baseNetworkBytes + networkCopied, clock.speedFor(baseNetworkBytes + networkCopied), file.path);
+                    if (callback != null && clock.shouldEmit(baseNetworkBytes + copied)) {
+                        callback.onProgress(doneFiles, totalFiles, baseDoneBytes + copied, totalBytes, baseNetworkBytes + copied, clock.speedFor(baseNetworkBytes + copied), file.path);
                     }
                 }
             }
-            return new DownloadResult(copied, Math.max(0, copied - initialCopied), false, resumed);
+            if (file.size >= 0 && copied != file.size) {
+                throw new IllegalStateException("Downloaded size mismatch for " + file.path + ": got " + copied + ", expected " + file.size);
+            }
+            setTargetModifiedMs(context, target.uri, file.modifiedMs, file.path);
+            return new DownloadResult(copied, copied, false, false);
         } finally {
             session.detach(conn);
         }
+    }
+
+    private static DownloadResult tryRepair(Context context, String downloadUrl, RemoteFile file, DocumentInfo target, Session session, Callback callback, ProgressClock clock, int doneFiles, int totalFiles, long baseDoneBytes, long baseNetworkBytes, long totalBytes) throws Exception {
+        RepairManifest manifest = fetchManifest(downloadUrl, session);
+        if (manifest == null) {
+            Log.i(TAG, "Repair check unavailable for " + file.path + ": server does not provide BLAKE3 manifest");
+            return null;
+        }
+        file.size = manifest.size;
+        file.modifiedMs = manifest.modifiedMs;
+
+        RepairPlan plan;
+        try {
+            plan = planRepair(context, target, manifest);
+        } catch (Exception error) {
+            Log.i(TAG, "Repair planning unavailable for " + file.path + ": " + error.getMessage());
+            return null;
+        }
+        if (shouldRedownload(manifest.size, plan.transferBytes, plan.ranges.size())) {
+            Log.i(TAG, "Repair check for " + file.path + ": local=" + formatBytes(target.size) + " remote=" + formatBytes(manifest.size)
+                    + ", " + plan.ranges.size() + " changed/missing range(s) totaling " + formatBytes(plan.transferBytes)
+                    + "; full download selected");
+            return null;
+        }
+
+        long keptBytes = Math.max(0, manifest.size - plan.transferBytes);
+        if (callback != null && keptBytes > 0) {
+            callback.onProgress(doneFiles, totalFiles, baseDoneBytes + keptBytes, totalBytes, baseNetworkBytes, clock.speedFor(baseNetworkBytes), file.path);
+        }
+        Log.i(TAG, "Repair plan for " + file.path + ": local=" + formatBytes(target.size) + " remote=" + formatBytes(manifest.size)
+                + ", keep " + formatBytes(keptBytes) + ", download " + formatBytes(plan.transferBytes)
+                + " in " + plan.ranges.size() + " range request(s)");
+
+        long downloaded = 0;
+        try (ParcelFileDescriptor pfd = context.getContentResolver().openFileDescriptor(target.uri, "rw")) {
+            if (pfd == null) {
+                return null;
+            }
+            try (FileOutputStream stream = new FileOutputStream(pfd.getFileDescriptor()); FileChannel channel = stream.getChannel()) {
+                for (RepairRange range : plan.ranges) {
+                    long written = downloadRange(downloadUrl, file, range, channel, session, callback, clock, doneFiles, totalFiles, baseDoneBytes + keptBytes, baseNetworkBytes, totalBytes, downloaded);
+                    downloaded += written;
+                }
+                channel.truncate(manifest.size);
+            }
+        } catch (Exception error) {
+            Log.i(TAG, "Range repair unavailable for " + file.path + ": " + error.getMessage());
+            return null;
+        }
+
+        if (callback != null) {
+            callback.onProgress(doneFiles, totalFiles, baseDoneBytes + manifest.size, totalBytes, baseNetworkBytes + downloaded, clock.speedFor(baseNetworkBytes + downloaded), file.path);
+        }
+        setTargetModifiedMs(context, target.uri, manifest.modifiedMs, file.path);
+        Log.i(TAG, "Repair completed for " + file.path + ": " + plan.ranges.size() + " range request(s), downloaded " + formatBytes(downloaded));
+        return new DownloadResult(manifest.size, downloaded, downloaded == 0, downloaded > 0);
+    }
+
+    private static void setTargetModifiedMs(Context context, Uri uri, long modifiedMs, String label) {
+        if (uri == null || modifiedMs <= 0) {
+            return;
+        }
+        try {
+            if ("file".equals(uri.getScheme())) {
+                File file = new File(uri.getPath());
+                if (file.exists() && file.setLastModified(modifiedMs)) {
+                    return;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        ContentResolver resolver = context.getContentResolver();
+        if (tryUpdateModifiedMs(resolver, uri, DocumentsContract.Document.COLUMN_LAST_MODIFIED, modifiedMs)) {
+            return;
+        }
+        if (tryUpdateModifiedMs(resolver, uri, MediaStore.MediaColumns.DATE_MODIFIED, modifiedMs / 1000L)) {
+            return;
+        }
+        Log.i(TAG, "Could not set modified time for " + label + " on " + uri);
+    }
+
+    private static boolean tryUpdateModifiedMs(ContentResolver resolver, Uri uri, String column, long value) {
+        try {
+            ContentValues values = new ContentValues();
+            values.put(column, value);
+            return resolver.update(uri, values, null, null) > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static RepairManifest fetchManifest(String downloadUrl, Session session) throws Exception {
+        String manifestUrl = downloadUrl + (downloadUrl.contains("?") ? "&" : "?")
+                + "manifest=blake3&block_size=" + DEFAULT_MANIFEST_BLOCK_SIZE;
+        HttpURLConnection conn = open(manifestUrl);
+        session.attach(conn);
+        conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("Accept-Encoding", "zstd, gzip");
+        try {
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                return null;
+            }
+            RepairManifest manifest = new RepairManifest();
+            try (InputStream input = decodedInputStream(conn, true);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (session.isStopped()) {
+                        return null;
+                    }
+                    line = line.trim();
+                    if (line.isEmpty()) {
+                        continue;
+                    }
+                    JSONObject json = new JSONObject(line);
+                    String type = json.optString("type");
+                    if ("file".equals(type)) {
+                        if (!MANIFEST_ALGO.equals(json.optString("algo"))) {
+                            return null;
+                        }
+                        manifest.path = json.optString("path");
+                        manifest.size = json.optLong("size");
+                        manifest.modifiedMs = parseModTime(json.optString("mod_time"));
+                        manifest.blockSize = normalizeManifestBlockSize(json.optLong("block_size", DEFAULT_MANIFEST_BLOCK_SIZE));
+                    } else if ("block".equals(type)) {
+                        manifest.blocks.add(new ManifestBlock(
+                                json.optInt("index"),
+                                json.optLong("offset"),
+                                json.optLong("size"),
+                                json.optString("hash")));
+                    } else {
+                        return null;
+                    }
+                }
+            }
+            if (manifest.blockSize <= 0 && manifest.size > 0) {
+                return null;
+            }
+            return manifest;
+        } finally {
+            session.detach(conn);
+        }
+    }
+
+    private static RepairPlan planRepair(Context context, DocumentInfo target, RepairManifest manifest) throws Exception {
+        List<ManifestBlock> localBlocks = localBlockHashes(context, target.uri, Math.min(Math.max(0, target.size), manifest.size), manifest.blockSize);
+        List<RepairRange> ranges = new ArrayList<>();
+        for (ManifestBlock remote : manifest.blocks) {
+            boolean needsDownload = remote.offset + remote.size > target.size;
+            if (!needsDownload) {
+                if (remote.index >= localBlocks.size()) {
+                    needsDownload = true;
+                } else {
+                    ManifestBlock local = localBlocks.get(remote.index);
+                    needsDownload = local.size != remote.size || !remote.hash.equals(local.hash);
+                }
+            }
+            if (needsDownload) {
+                ranges.add(new RepairRange(remote.offset, remote.size));
+            }
+        }
+        ranges = mergeRanges(ranges);
+        long transferBytes = 0;
+        for (RepairRange range : ranges) {
+            transferBytes += range.size;
+        }
+        return new RepairPlan(ranges, transferBytes);
+    }
+
+    private static List<ManifestBlock> localBlockHashes(Context context, Uri uri, long fileSize, long blockSize) throws Exception {
+        List<ManifestBlock> blocks = new ArrayList<>();
+        blockSize = normalizeManifestBlockSize(blockSize);
+        int bufferSize = (int) blockSize;
+        try (InputStream input = openLocalInput(context, uri)) {
+            if (input == null) {
+                throw new IllegalStateException("Cannot open local file for repair");
+            }
+            byte[] buffer = new byte[bufferSize];
+            long offset = 0;
+            int index = 0;
+            while (offset < fileSize) {
+                int want = (int) Math.min(blockSize, fileSize - offset);
+                int got = readFully(input, buffer, want);
+                if (got != want) {
+                    throw new IllegalStateException("Local file ended while hashing");
+                }
+                byte[] data = got == buffer.length ? buffer : Arrays.copyOf(buffer, got);
+                blocks.add(new ManifestBlock(index, offset, got, Mobilegonc.blake3Hex(data)));
+                offset += got;
+                index++;
+            }
+        }
+        return blocks;
+    }
+
+    private static InputStream openLocalInput(Context context, Uri uri) throws Exception {
+        if ("file".equals(uri.getScheme())) {
+            return new FileInputStream(new File(uri.getPath()));
+        }
+        return context.getContentResolver().openInputStream(uri);
+    }
+
+    private static int readFully(InputStream input, byte[] buffer, int want) throws Exception {
+        int total = 0;
+        while (total < want) {
+            int n = input.read(buffer, total, want - total);
+            if (n < 0) {
+                break;
+            }
+            total += n;
+        }
+        return total;
+    }
+
+    private static long downloadRange(String downloadUrl, RemoteFile file, RepairRange range, FileChannel channel, Session session, Callback callback, ProgressClock clock, int doneFiles, int totalFiles, long baseDoneBytes, long baseNetworkBytes, long totalBytes, long alreadyDownloaded) throws Exception {
+        HttpURLConnection conn = open(downloadUrl);
+        session.attach(conn);
+        conn.setRequestProperty("Range", "bytes=" + range.offset + "-" + range.endInclusive());
+        conn.setRequestProperty("Accept-Encoding", "zstd, gzip");
+        try {
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_PARTIAL) {
+                throw new IllegalStateException("Range request unsupported: HTTP " + conn.getResponseCode());
+            }
+            channel.position(range.offset);
+            long written = 0;
+            byte[] buffer = new byte[128 * 1024];
+            try (InputStream input = decodedInputStream(conn, true)) {
+                int n;
+                while ((n = input.read(buffer)) >= 0) {
+                    if (session.isStopped()) {
+                        return written;
+                    }
+                    channel.write(ByteBuffer.wrap(buffer, 0, n));
+                    written += n;
+                    if (callback != null && clock.shouldEmit(baseNetworkBytes + alreadyDownloaded + written)) {
+                        callback.onProgress(doneFiles, totalFiles, baseDoneBytes + alreadyDownloaded + written, totalBytes,
+                                baseNetworkBytes + alreadyDownloaded + written,
+                                clock.speedFor(baseNetworkBytes + alreadyDownloaded + written), file.path);
+                    }
+                }
+            }
+            if (written != range.size) {
+                throw new IllegalStateException("Range size mismatch for " + file.path + ": got " + written + ", expected " + range.size);
+            }
+            return written;
+        } finally {
+            session.detach(conn);
+        }
+    }
+
+    private static InputStream decodedInputStream(HttpURLConnection conn, boolean strict) throws Exception {
+        String encoding = conn.getHeaderField("Content-Encoding");
+        if (encoding == null) {
+            return conn.getInputStream();
+        }
+        String normalized = encoding.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty() || "identity".equals(normalized)) {
+            return conn.getInputStream();
+        }
+        if ("zstd".equals(normalized)) {
+            return new ZstdInputStream(conn.getInputStream());
+        }
+        if ("gzip".equals(normalized)) {
+            return new GZIPInputStream(conn.getInputStream());
+        }
+        if (strict) {
+            throw new IllegalStateException("Unsupported Content-Encoding: " + encoding);
+        }
+        return conn.getInputStream();
+    }
+
+    private static long normalizeManifestBlockSize(long blockSize) {
+        if (blockSize <= 0) {
+            return DEFAULT_MANIFEST_BLOCK_SIZE;
+        }
+        if (blockSize < MIN_MANIFEST_BLOCK_SIZE) {
+            return MIN_MANIFEST_BLOCK_SIZE;
+        }
+        if (blockSize > MAX_MANIFEST_BLOCK_SIZE) {
+            return MAX_MANIFEST_BLOCK_SIZE;
+        }
+        return blockSize;
+    }
+
+    private static List<RepairRange> mergeRanges(List<RepairRange> ranges) {
+        if (ranges.size() < 2) {
+            return ranges;
+        }
+        List<RepairRange> merged = new ArrayList<>();
+        for (RepairRange current : ranges) {
+            if (merged.isEmpty()) {
+                merged.add(current);
+                continue;
+            }
+            RepairRange last = merged.get(merged.size() - 1);
+            if (last.offset + last.size == current.offset) {
+                last.size += current.size;
+            } else {
+                merged.add(current);
+            }
+        }
+        return merged;
+    }
+
+    private static boolean shouldRedownload(long remoteSize, long transferBytes, int rangeCount) {
+        if (remoteSize == 0) {
+            return false;
+        }
+        return rangeCount > MAX_REPAIR_RANGE_COUNT || transferBytes * 2 > remoteSize;
     }
 
     private static HttpURLConnection open(String url) throws Exception {
@@ -645,13 +1002,13 @@ final class HttpReceiver {
                 return null;
             }
             Uri uri = Uri.parse(uriStr);
-            long size = uriSize(uri);
-            if (size < 0) {
+            DocumentInfo info = uriInfo(uri);
+            if (info == null || info.size < 0) {
                 // The file is gone (user deleted it / record stale) — forget it.
                 targetPrefs.edit().remove(targetKey(remotePath)).apply();
                 return null;
             }
-            return new DocumentInfo(uri, size);
+            return info;
         }
 
         private void rememberTarget(String remotePath, Uri uri) {
@@ -660,27 +1017,57 @@ final class HttpReceiver {
             }
         }
 
-        private long uriSize(Uri uri) {
+        private DocumentInfo uriInfo(Uri uri) {
             try {
                 if ("file".equals(uri.getScheme())) {
                     File file = new File(uri.getPath());
-                    return file.exists() ? file.length() : -1;
+                    return file.exists() ? new DocumentInfo(uri, file.length(), file.lastModified()) : null;
                 }
                 Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.SIZE}, null, null, null);
                 if (cursor == null) {
-                    return -1;
+                    return null;
                 }
+                long size;
                 try {
                     if (cursor.moveToFirst()) {
-                        return cursor.isNull(0) ? 0 : cursor.getLong(0);
+                        size = cursor.isNull(0) ? 0 : cursor.getLong(0);
+                    } else {
+                        return null;
                     }
-                    return -1;
                 } finally {
                     cursor.close();
                 }
+                return new DocumentInfo(uri, size, queryModifiedMs(uri));
             } catch (Exception error) {
-                return -1;
+                return null;
             }
+        }
+
+        private long queryModifiedMs(Uri uri) {
+            long documentMs = queryLongColumn(uri, DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+            if (documentMs > 0) {
+                return documentMs;
+            }
+            long mediaSeconds = queryLongColumn(uri, MediaStore.MediaColumns.DATE_MODIFIED);
+            return mediaSeconds > 0 ? mediaSeconds * 1000L : 0;
+        }
+
+        private long queryLongColumn(Uri uri, String column) {
+            try {
+                Cursor cursor = resolver.query(uri, new String[]{column}, null, null, null);
+                if (cursor == null) {
+                    return 0;
+                }
+                try {
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                        return cursor.getLong(0);
+                    }
+                } finally {
+                    cursor.close();
+                }
+            } catch (Exception ignored) {
+            }
+            return 0;
         }
 
         DocumentInfo ensureFile(String remotePath, String fallbackName, boolean replaceExisting) throws Exception {
@@ -766,7 +1153,8 @@ final class HttpReceiver {
             String[] columns = {
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                     DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_SIZE
+                    DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED
             };
             Cursor cursor = resolver.query(children, columns, null, null, null);
             if (cursor != null) {
@@ -777,8 +1165,9 @@ final class HttpReceiver {
                             continue;
                         }
                         long size = cursor.isNull(2) ? 0 : cursor.getLong(2);
+                        long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3);
                         Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0));
-                        childrenMap.put(childName, new DocumentInfo(childUri, size));
+                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs));
                     }
                 } finally {
                     cursor.close();
@@ -852,7 +1241,8 @@ final class HttpReceiver {
             String[] columns = {
                     MediaStore.Downloads._ID,
                     MediaStore.Downloads.DISPLAY_NAME,
-                    MediaStore.Downloads.SIZE
+                    MediaStore.Downloads.SIZE,
+                    MediaStore.MediaColumns.DATE_MODIFIED
             };
             // Some devices store RELATIVE_PATH with a trailing slash, some without; match both.
             String withoutSlash = normalizedDir.endsWith("/") ? normalizedDir.substring(0, normalizedDir.length() - 1) : normalizedDir;
@@ -868,8 +1258,9 @@ final class HttpReceiver {
                         }
                         long id = cursor.getLong(0);
                         long size = cursor.isNull(2) ? 0 : cursor.getLong(2);
+                        long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3) * 1000L;
                         Uri uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, String.valueOf(id));
-                        files.put(name, new DocumentInfo(uri, size));
+                        files.put(name, new DocumentInfo(uri, size, modifiedMs));
                     }
                 } finally {
                     cursor.close();
@@ -977,6 +1368,16 @@ final class HttpReceiver {
         long modifiedMs; // epoch millis of last modification; 0 when unknown
     }
 
+    static final class DownloadFailure {
+        final String path;
+        final String message;
+
+        DownloadFailure(String path, String message) {
+            this.path = path == null || path.trim().isEmpty() ? "(unknown)" : path;
+            this.message = message == null || message.trim().isEmpty() ? "unknown error" : message;
+        }
+    }
+
     private static final class ListResult {
         final List<RemoteFile> files;
         final boolean missing;
@@ -987,13 +1388,65 @@ final class HttpReceiver {
         }
     }
 
+    private static final class RepairManifest {
+        String path;
+        long size;
+        long modifiedMs;
+        long blockSize;
+        final List<ManifestBlock> blocks = new ArrayList<>();
+    }
+
+    private static final class ManifestBlock {
+        final int index;
+        final long offset;
+        final long size;
+        final String hash;
+
+        ManifestBlock(int index, long offset, long size, String hash) {
+            this.index = index;
+            this.offset = offset;
+            this.size = size;
+            this.hash = hash == null ? "" : hash;
+        }
+    }
+
+    private static final class RepairRange {
+        final long offset;
+        long size;
+
+        RepairRange(long offset, long size) {
+            this.offset = offset;
+            this.size = size;
+        }
+
+        long endInclusive() {
+            return offset + size - 1;
+        }
+    }
+
+    private static final class RepairPlan {
+        final List<RepairRange> ranges;
+        final long transferBytes;
+
+        RepairPlan(List<RepairRange> ranges, long transferBytes) {
+            this.ranges = ranges;
+            this.transferBytes = transferBytes;
+        }
+    }
+
     private static final class DocumentInfo {
         final Uri uri;
         final long size;
+        final long modifiedMs;
 
         DocumentInfo(Uri uri, long size) {
+            this(uri, size, 0);
+        }
+
+        DocumentInfo(Uri uri, long size, long modifiedMs) {
             this.uri = uri;
             this.size = size;
+            this.modifiedMs = modifiedMs;
         }
     }
 

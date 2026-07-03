@@ -280,6 +280,7 @@ const text = {
     files: '个文件',
     folders: '个目录',
     selected: '已选',
+    excluded: '排除',
     completed: '完成',
     skipped: '跳过',
     resumed: '续传',
@@ -446,6 +447,7 @@ const text = {
     files: 'files',
     folders: 'folders',
     selected: 'selected',
+    excluded: 'excluded',
     completed: 'Done',
     skipped: 'Skipped',
     resumed: 'Resumed',
@@ -516,6 +518,7 @@ function App() {
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [remoteListLoading, setRemoteListLoading] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
   const [downloadError, setDownloadError] = useState('');
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
@@ -550,9 +553,10 @@ function App() {
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
 
-  const visibleEntries = useMemo(() => shallowEntries(remoteList?.files || [], currentRemotePath), [remoteList, currentRemotePath]);
+  const remoteFiles = useMemo(() => remoteListFiles(remoteList), [remoteList]);
+  const visibleEntries = useMemo(() => safeShallowEntries(remoteFiles, currentRemotePath), [remoteFiles, currentRemotePath]);
   const currentRemoteBreadcrumbs = useMemo(() => remoteBreadcrumbs(currentRemotePath), [currentRemotePath]);
-  const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteList?.files || [], selectedPaths), [remoteList, selectedPaths]);
+  const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteFiles, selectedPaths, excludedPaths), [remoteFiles, selectedPaths, excludedPaths]);
   const activeSpeed = Math.max(
     freshSpeed(downloadProgress?.time, downloadProgress?.bytesPerSecond, nowTick),
     freshSpeed(receiveTraffic?.time, receiveTraffic?.inBps, nowTick),
@@ -1132,6 +1136,7 @@ function App() {
       setRemoteList(null);
       setRemoteListLoading(false);
       setSelectedPaths(new Set());
+      setExcludedPaths(new Set());
       setDownloadProgress(null);
       ClearTaskbarProgress().catch(() => undefined);
       setReceiveTraffic(null);
@@ -1226,18 +1231,28 @@ function App() {
     }
   }
 
-  async function loadRemoteFiles(path = currentRemotePath, silent = false) {
+  async function loadRemoteFiles(path = currentRemotePath, silent = false, clearSelection = false) {
     if (!silent) {
       setError('');
       setDownloadError('');
+    }
+    if (clearSelection) {
+      setSelectedPaths(new Set());
+      setExcludedPaths(new Set());
     }
     setRemoteListLoading(true);
     try {
       const normalized = normalizeRemotePath(path);
       const list = await RemoteFiles(normalized);
       setCurrentRemotePath(normalized);
-      setSelectedPaths(new Set());
-      setRemoteList(list);
+      setRemoteList((current) => {
+        try {
+          return mergeRemoteList(current, list, normalized);
+        } catch (mergeError) {
+          appendLog('status', 'warn', `文件列表解析失败：${localizeError(String(mergeError))}`);
+          return current || recalculateRemoteList('', []);
+        }
+      });
     } catch (err) {
       if (!silent) {
         setDownloadError(localizeError(String(err)));
@@ -1247,6 +1262,12 @@ function App() {
     } finally {
       setRemoteListLoading(false);
     }
+  }
+
+  function browseRemotePath(path: string) {
+    setError('');
+    setDownloadError('');
+    setCurrentRemotePath(normalizeRemotePath(path));
   }
 
   function applyVpnProfile(profile: VPNProfile) {
@@ -1382,7 +1403,7 @@ function App() {
       return;
     }
     try {
-      await StartHTTPDownload(saveDir, currentRemotePath, Array.from(selectedPaths), downloadMode === 'resume');
+      await StartHTTPDownload(saveDir, '/', Array.from(selectedPaths), Array.from(excludedPaths), remoteFiles as any, downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
@@ -1393,7 +1414,7 @@ function App() {
     setError('');
     setDownloadError('');
     try {
-      await StartHTTPDownload(saveDir, currentRemotePath, [], downloadMode === 'resume');
+      await StartHTTPDownload(saveDir, currentRemotePath, [], [], [], downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
@@ -1507,43 +1528,53 @@ function App() {
   }
 
   function toggleSelected(path: string) {
-    setSelectedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
+    const normalized = normalizeRemotePath(path);
+    const nextSelected = new Set(selectedPaths);
+    const nextExcluded = new Set(excludedPaths);
+    if (isEffectivelySelected(normalized, nextSelected, nextExcluded)) {
+      nextSelected.delete(normalized);
+      nextExcluded.add(normalized);
+    } else {
+      nextExcluded.delete(normalized);
+      nextSelected.add(normalized);
+    }
+    setSelectedPaths(nextSelected);
+    setExcludedPaths(nextExcluded);
   }
 
   function selectVisibleRemoteFiles() {
     if (!visibleEntries.length) {
       return;
     }
-    setSelectedPaths((current) => {
-      const next = new Set(current);
-      visibleEntries.forEach((file) => next.add(file.path));
-      return next;
+    const nextSelected = new Set(selectedPaths);
+    const nextExcluded = new Set(excludedPaths);
+    visibleEntries.forEach((file) => {
+      const path = normalizeRemotePath(file.path);
+      nextExcluded.delete(path);
+      nextSelected.add(path);
     });
+    setSelectedPaths(nextSelected);
+    setExcludedPaths(nextExcluded);
   }
 
   function invertVisibleRemoteFiles() {
     if (!visibleEntries.length) {
       return;
     }
-    setSelectedPaths((current) => {
-      const next = new Set(current);
-      visibleEntries.forEach((file) => {
-        if (next.has(file.path)) {
-          next.delete(file.path);
-        } else {
-          next.add(file.path);
-        }
-      });
-      return next;
+    const nextSelected = new Set(selectedPaths);
+    const nextExcluded = new Set(excludedPaths);
+    visibleEntries.forEach((file) => {
+      const path = normalizeRemotePath(file.path);
+      if (isEffectivelySelected(path, nextSelected, nextExcluded)) {
+        nextSelected.delete(path);
+        nextExcluded.add(path);
+      } else {
+        nextExcluded.delete(path);
+        nextSelected.add(path);
+      }
     });
+    setSelectedPaths(nextSelected);
+    setExcludedPaths(nextExcluded);
   }
 
   function localizeError(message: string) {
@@ -1991,7 +2022,7 @@ function App() {
                       className={index === currentRemoteBreadcrumbs.length - 1 ? 'active' : ''}
                       disabled={index === currentRemoteBreadcrumbs.length - 1 || remoteListLoading}
                       key={part.path}
-                      onClick={() => loadRemoteFiles(part.path)}
+                      onClick={() => browseRemotePath(part.path)}
                     >
                       {part.name}
                     </button>
@@ -2000,10 +2031,14 @@ function App() {
                 <div className="remote-tools">
                   <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
                   <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
-                  <span>{selectedPaths.size} {t.selected}{selectedRemoteBytes > 0 ? ` · ${formatBytes(selectedRemoteBytes)}` : ''}</span>
+                  <span>
+                    {selectedPaths.size} {t.selected}
+                    {excludedPaths.size > 0 ? ` · ${excludedPaths.size} ${t.excluded}` : ''}
+                    {selectedRemoteBytes > 0 ? ` · ${formatBytes(selectedRemoteBytes)}` : ''}
+                  </span>
                   <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={selectVisibleRemoteFiles}>{t.selectAll}</button>
                   <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={invertVisibleRemoteFiles}>{t.invertSelection}</button>
-                  <button className="quiet-action" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles()}>{t.refresh}</button>
+                  <button className="quiet-action" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles(currentRemotePath, false, true)}>{t.refresh}</button>
                 </div>
               </div>
               {downloadError && <div className="remote-error">{downloadError}</div>}
@@ -2037,12 +2072,12 @@ function App() {
                       <div className="remote-row" key={file.path}>
                         <input
                           type="checkbox"
-                          checked={selectedPaths.has(file.path)}
+                          checked={isEffectivelySelected(file.path, selectedPaths, excludedPaths)}
                           onChange={() => toggleSelected(file.path)}
                         />
                         <span className={`type-icon ${file.is_dir ? 'folder' : 'file'}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file} />
                         {file.is_dir ? (
-                          <button className="folder-link" onClick={() => loadRemoteFiles(file.path)}>{file.name}</button>
+                          <button className="folder-link" onClick={() => browseRemotePath(file.path)}>{file.name}</button>
                         ) : (
                           <strong>{file.name}</strong>
                         )}
@@ -2372,10 +2407,19 @@ function multiClientActivityStatus(latest: P2PReport | null, reports: P2PReport[
   return {label: t.waitingConnection, tone: 'waiting'};
 }
 
+function safeShallowEntries(files: RemoteFile[], currentPath: string): VisibleEntry[] {
+  try {
+    return shallowEntries(files, currentPath);
+  } catch {
+    return [];
+  }
+}
+
 function shallowEntries(files: RemoteFile[], currentPath: string): VisibleEntry[] {
   const current = normalizeRemotePath(currentPath);
   const byPath = new Map<string, VisibleEntry>();
-  for (const file of files) {
+  for (const item of files || []) {
+    const file = normalizeRemoteFile(item);
     const filePath = normalizeRemotePath(file.path);
     if (filePath === current) {
       if (current === '/' && !file.is_dir) {
@@ -2406,6 +2450,70 @@ function shallowEntries(files: RemoteFile[], currentPath: string): VisibleEntry[
     }
     return a.name.localeCompare(b.name);
   });
+}
+
+function mergeRemoteList(current: RemoteList | null, fresh: RemoteList, refreshPath: string): RemoteList {
+  const freshFiles = remoteListFiles(fresh);
+  if (!current || normalizeRemotePath(refreshPath) === '/') {
+    return recalculateRemoteList(fresh?.serverUrl || current?.serverUrl || '', freshFiles);
+  }
+  const target = normalizeRemotePath(refreshPath);
+  const byPath = new Map<string, RemoteFile>();
+  for (const item of remoteListFiles(current)) {
+    const file = normalizeRemoteFile(item);
+    const path = normalizeRemotePath(file.path);
+    if (path === target || path.startsWith(`${target}/`)) {
+      continue;
+    }
+    byPath.set(path, {...file, path});
+  }
+  for (const item of freshFiles) {
+    const file = normalizeRemoteFile(item);
+    const path = normalizeRemotePath(file.path);
+    byPath.set(path, {...file, path});
+  }
+  return recalculateRemoteList(fresh?.serverUrl || current.serverUrl, Array.from(byPath.values()));
+}
+
+function recalculateRemoteList(serverUrl: string, files: RemoteFile[]): RemoteList {
+  let fileCount = 0;
+  let dirCount = 0;
+  let totalSize = 0;
+  const normalizedFiles = (files || []).map(normalizeRemoteFile);
+  for (const file of normalizedFiles) {
+    if (file.is_dir) {
+      dirCount += 1;
+    } else {
+      fileCount += 1;
+      totalSize += file.size || 0;
+    }
+  }
+  return {serverUrl, files: normalizedFiles, fileCount, dirCount, totalSize};
+}
+
+function remoteListFiles(list: RemoteList | null | undefined): RemoteFile[] {
+  const files = (list as any)?.files ?? (list as any)?.Files;
+  return Array.isArray(files) ? files : [];
+}
+
+function normalizeRemoteFile(file: RemoteFile): RemoteFile {
+  const item = (file || {}) as any;
+  const path = normalizeRemotePath(item.path ?? item.Path ?? '/');
+  return {
+    name: String(item.name ?? item.Name ?? remoteBaseName(path)),
+    is_dir: Boolean(item.is_dir ?? item.IsDir),
+    mod_time: item.mod_time ?? item.ModTime ?? '',
+    size: Number(item.size ?? item.Size ?? 0),
+    path,
+  };
+}
+
+function remoteBaseName(path: string) {
+  const normalized = normalizeRemotePath(path);
+  if (normalized === '/') {
+    return '/';
+  }
+  return normalized.slice(normalized.lastIndexOf('/') + 1);
 }
 
 function normalizeRemotePath(value: string) {
@@ -2451,11 +2559,10 @@ function remoteBreadcrumbs(value: string) {
   return breadcrumbs;
 }
 
-function selectedRemoteSize(files: RemoteFile[], selectedPaths: Set<string>) {
+function selectedRemoteSize(files: RemoteFile[], selectedPaths: Set<string>, excludedPaths: Set<string>) {
   if (files.length === 0 || selectedPaths.size === 0) {
     return 0;
   }
-  const selected = Array.from(selectedPaths).map(normalizeRemotePath);
   const counted = new Set<string>();
   let total = 0;
   for (const file of files) {
@@ -2463,14 +2570,39 @@ function selectedRemoteSize(files: RemoteFile[], selectedPaths: Set<string>) {
       continue;
     }
     const filePath = normalizeRemotePath(file.path);
-    const matched = selected.some((path) => filePath === path || filePath.startsWith(`${path}/`));
-    if (!matched || counted.has(filePath)) {
+    if (!isEffectivelySelected(filePath, selectedPaths, excludedPaths) || counted.has(filePath)) {
       continue;
     }
     counted.add(filePath);
     total += file.size || 0;
   }
   return total;
+}
+
+function isEffectivelySelected(path: string, selectedPaths: Set<string>, excludedPaths: Set<string>) {
+  const normalized = normalizeRemotePath(path);
+  const selectedRank = longestRemoteRuleMatch(normalized, selectedPaths);
+  if (selectedRank < 0) {
+    return false;
+  }
+  const excludedRank = longestRemoteRuleMatch(normalized, excludedPaths);
+  return excludedRank < 0 || selectedRank > excludedRank;
+}
+
+function longestRemoteRuleMatch(path: string, rules: Set<string>) {
+  const normalized = normalizeRemotePath(path).replace(/\/+$/, '') || '/';
+  let best = -1;
+  rules.forEach((rule) => {
+    const item = normalizeRemotePath(rule).replace(/\/+$/, '') || '/';
+    if (item === '/') {
+      best = Math.max(best, 0);
+      return;
+    }
+    if (normalized === item || normalized.startsWith(`${item}/`)) {
+      best = Math.max(best, item.split('/').filter(Boolean).length + 1);
+    }
+  });
+  return best;
 }
 
 function formatBytes(value: number) {

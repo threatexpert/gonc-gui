@@ -21,6 +21,7 @@
     <string name="remove">移除</string>
     <string name="clear">清空</string>
     <string name="source">关于</string>
+    <string name="screen_stays_on">任务运行时保持屏幕常亮</string>
     <string name="passphrase">口令</string>
     <string name="passphrase_hint">推荐随机生成，并以安全方式分享给对方。口令相同即可连接，谁生成，谁扫码都行</string>
     <string name="passphrase_input_hint">输入口令，或点「随机」生成高强度口令</string>
@@ -159,13 +160,16 @@
     <string name="selected_folder">已选择的目录</string>
     <string name="files_summary">%1$d 个文件  %2$d 个目录  %3$s  已选 %4$d</string>
     <string name="selection_summary">已选 %1$d 项 · %2$s</string>
+    <string name="selection_excluded">排除 %1$d 项</string>
     <string name="remote_total_summary">共 %1$d 个文件 · %2$d 个目录 · %3$s</string>
     <string name="progress_detail">%1$s  %2$d/%3$d 个文件  %4$s / %5$s</string>
     <string name="progress_detail_extra">%1$s  跳过 %2$d  续传 %3$d</string>
+    <string name="progress_detail_failed_extra">%1$s  失败 %2$d</string>
     <string name="progress_speed">速度 %1$s</string>
     <string name="progress_remaining">预计剩余 %1$s</string>
     <string name="progress_remaining_estimating">正在估算剩余时间</string>
     <string name="progress_completed_summary">平均 %2$s  |  耗时 %1$s</string>
+    <string name="progress_completed_with_failures_summary">失败 %1$d 个  |  平均 %3$s  |  耗时 %2$s</string>
     <string name="progress_stopped_summary">已停止，耗时 %1$s</string>
     <string name="status_idle">空闲</string>
     <string name="status_preparing">准备中</string>
@@ -175,6 +179,7 @@
     <string name="status_preparing_download">准备下载</string>
     <string name="status_receiving">正在接收 %1$s</string>
     <string name="status_receive_complete">接收完成</string>
+    <string name="status_receive_complete_with_failures">接收完成，部分失败</string>
     <string name="status_receive_failed">接收失败</string>
     <string name="status_stopped">已停止</string>
     <string name="status_connecting">连接中</string>

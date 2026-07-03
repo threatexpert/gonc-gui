@@ -54,6 +54,7 @@ final class ReceiveController {
     private boolean remoteCurrentPathMissing;
     private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
     private final Set<String> selectedRemotePaths = new HashSet<>();
+    private final Set<String> excludedRemotePaths = new HashSet<>();
     private int remoteFileCount;
     private int remoteDirCount;
     private long remoteTotalBytes;
@@ -67,6 +68,7 @@ final class ReceiveController {
     private double downloadBytesPerSecond;
     private int downloadSkippedFiles;
     private int downloadResumedFiles;
+    private int downloadFailedFiles;
     private long downloadStartedAtMs;
     private long downloadFinishedAtMs;
     private String receiveStatus = "Idle";
@@ -202,6 +204,7 @@ final class ReceiveController {
         remoteCurrentPathMissing = false;
         remoteFiles.clear();
         selectedRemotePaths.clear();
+        excludedRemotePaths.clear();
         remoteFileCount = 0;
         remoteDirCount = 0;
         remoteTotalBytes = 0;
@@ -215,6 +218,7 @@ final class ReceiveController {
         downloadBytesPerSecond = 0;
         downloadSkippedFiles = 0;
         downloadResumedFiles = 0;
+        downloadFailedFiles = 0;
         downloadStartedAtMs = 0;
         downloadFinishedAtMs = 0;
         receiveStatus = "Idle";
@@ -419,11 +423,11 @@ final class ReceiveController {
             downloadSelectedButton = selected;
             boolean canDownloadSelected = canStartRemoteDownload() && !selectedRemotePaths.isEmpty();
             setControlEnabled(selected, canDownloadSelected);
-            selected.setOnClickListener(v -> refreshAndStartDownload(new ArrayList<>(selectedRemotePaths)));
+            selected.setOnClickListener(v -> startSelectedDownload());
 
             Button all = primaryButton(string(R.string.receive_all));
             setControlEnabled(all, canStartRemoteDownload());
-            all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths()));
+            all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths(), false));
 
             actions.addView(selected, new LinearLayout.LayoutParams(0, dp(42), 1));
             actions.addView(all, actionParams(dp(42)));
@@ -466,7 +470,7 @@ final class ReceiveController {
         row.setBackground(rounded(file.isDir ? Color.rgb(246, 250, 255) : Color.WHITE, dp(7), Color.rgb(226, 232, 240), 1));
 
         CheckBox checkBox = new CheckBox(context());
-        checkBox.setChecked(selectedRemotePaths.contains(normalizedPath));
+        checkBox.setChecked(isPathSelectedForDownload(normalizedPath));
         remoteFileCheckboxes.put(normalizedPath, checkBox);
         setControlEnabled(checkBox, canClickRemoteAction());
         checkBox.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -477,9 +481,11 @@ final class ReceiveController {
                 return;
             }
             if (isChecked) {
+                excludedRemotePaths.remove(normalizedPath);
                 selectedRemotePaths.add(normalizedPath);
             } else {
                 selectedRemotePaths.remove(normalizedPath);
+                excludedRemotePaths.add(normalizedPath);
             }
             updateRemoteSelectionViews();
         });
@@ -587,7 +593,7 @@ final class ReceiveController {
         updatingRemoteSelectionViews = true;
         try {
             for (Map.Entry<String, CheckBox> entry : remoteFileCheckboxes.entrySet()) {
-                entry.getValue().setChecked(selectedRemotePaths.contains(entry.getKey()));
+                entry.getValue().setChecked(isPathSelectedForDownload(entry.getKey()));
             }
         } finally {
             updatingRemoteSelectionViews = false;
@@ -605,7 +611,11 @@ final class ReceiveController {
 
     private String selectionSummaryText() {
         SelectionSummary selected = selectedRemoteSummary();
-        return string(R.string.selection_summary, selectedRemotePaths.size(), formatBytes(selected.bytes));
+        String summary = string(R.string.selection_summary, selectedRemotePaths.size(), formatBytes(selected.bytes));
+        if (!excludedRemotePaths.isEmpty()) {
+            summary += " · " + string(R.string.selection_excluded, excludedRemotePaths.size());
+        }
+        return summary;
     }
 
     private String remoteTotalSummaryText() {
@@ -633,6 +643,7 @@ final class ReceiveController {
     private boolean shouldShowDownloadProgress() {
         return receiveDownload != null
                 || "Receive complete".equals(downloadStatus)
+                || "Receive complete with failures".equals(downloadStatus)
                 || "Receive failed".equals(downloadStatus);
     }
 
@@ -727,6 +738,9 @@ final class ReceiveController {
         if ("Receive complete".equals(status)) {
             return string(R.string.status_receive_complete);
         }
+        if ("Receive complete with failures".equals(status)) {
+            return string(R.string.status_receive_complete_with_failures);
+        }
         if ("Receive failed".equals(status)) {
             return string(R.string.status_receive_failed);
         }
@@ -789,32 +803,104 @@ final class ReceiveController {
         return paths;
     }
 
+    private void startSelectedDownload() {
+        if (receiveEndpoint == null || !receiveEndpoint.startsWith("http://")) {
+            remoteListStatus = "Waiting for peer";
+            host.toast(R.string.toast_peer_not_connected);
+            host.requestRender();
+            return;
+        }
+        if (!"connected".equals(receiveConnectionState())) {
+            remoteListStatus = "Waiting for peer";
+            host.toast(R.string.toast_peer_not_connected);
+            host.requestRender();
+            return;
+        }
+        if (selectedRemotePaths.isEmpty()) {
+            host.toast(R.string.toast_select_download_files);
+            return;
+        }
+        if (!ensureDefaultSavePermission()) {
+            return;
+        }
+        List<HttpReceiver.RemoteFile> files = selectedRemoteFiles();
+        if (files.isEmpty()) {
+            host.toast(R.string.toast_no_remote_files);
+            return;
+        }
+        remoteListStatus = "Remote list ready";
+        startReceiveDownload(receiveEndpoint, receiveRunId, files);
+        host.requestRender();
+    }
+
     private List<HttpReceiver.RemoteFile> selectedRemoteFiles() {
         List<HttpReceiver.RemoteFile> files = new ArrayList<>();
         for (HttpReceiver.RemoteFile file : remoteFiles) {
-            if (isSelectedForDownload(file)) {
+            if (isPathSelectedForDownload(file.path)) {
                 files.add(file);
             }
         }
         return files;
     }
 
-    private boolean isSelectedForDownload(HttpReceiver.RemoteFile file) {
-        String path = normalizeRemotePath(file.path);
-        if (selectedRemotePaths.contains(path)) {
-            return true;
+    private List<HttpReceiver.RemoteFile> filterSelectedRemoteFiles(List<HttpReceiver.RemoteFile> files) {
+        List<HttpReceiver.RemoteFile> selected = new ArrayList<>();
+        if (files == null || files.isEmpty()) {
+            return selected;
         }
-        for (String selected : selectedRemotePaths) {
-            if (!path.isEmpty() && selected != null && path.startsWith(selected + "/")) {
-                return true;
+        for (HttpReceiver.RemoteFile file : files) {
+            if (isPathSelectedForDownload(file.path)) {
+                selected.add(file);
             }
         }
-        return false;
+        return selected;
+    }
+
+    private boolean isPathSelectedForDownload(String path) {
+        String normalized = normalizeRemotePath(path);
+        int selectedRank = longestPathRuleMatch(normalized, selectedRemotePaths);
+        if (selectedRank < 0) {
+            return false;
+        }
+        int excludedRank = longestPathRuleMatch(normalized, excludedRemotePaths);
+        return excludedRank < 0 || selectedRank > excludedRank;
+    }
+
+    private int longestPathRuleMatch(String path, Set<String> rules) {
+        String normalized = normalizeRemotePath(path);
+        int best = -1;
+        for (String rule : rules) {
+            String item = normalizeRemotePath(rule);
+            if (item.isEmpty()) {
+                best = Math.max(best, 0);
+                continue;
+            }
+            if (normalized.equals(item) || normalized.startsWith(item + "/")) {
+                best = Math.max(best, pathRuleRank(item));
+            }
+        }
+        return best;
+    }
+
+    private int pathRuleRank(String path) {
+        String normalized = normalizeRemotePath(path);
+        if (normalized.isEmpty()) {
+            return 0;
+        }
+        int rank = 1;
+        for (int i = 0; i < normalized.length(); i++) {
+            if (normalized.charAt(i) == '/') {
+                rank++;
+            }
+        }
+        return rank + 1;
     }
 
     private void selectVisibleRemoteFiles() {
         for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
-            selectedRemotePaths.add(normalizeRemotePath(file.path));
+            String path = normalizeRemotePath(file.path);
+            excludedRemotePaths.remove(path);
+            selectedRemotePaths.add(path);
         }
         updateRemoteSelectionViews();
     }
@@ -822,9 +908,11 @@ final class ReceiveController {
     private void invertVisibleRemoteFiles() {
         for (HttpReceiver.RemoteFile file : visibleRemoteFiles()) {
             String path = normalizeRemotePath(file.path);
-            if (selectedRemotePaths.contains(path)) {
+            if (isPathSelectedForDownload(path)) {
                 selectedRemotePaths.remove(path);
+                excludedRemotePaths.add(path);
             } else {
+                excludedRemotePaths.remove(path);
                 selectedRemotePaths.add(path);
             }
         }
@@ -1115,6 +1203,7 @@ final class ReceiveController {
         downloadBytesPerSecond = 0;
         downloadSkippedFiles = 0;
         downloadResumedFiles = 0;
+        downloadFailedFiles = 0;
         downloadStartedAtMs = 0;
         downloadFinishedAtMs = 0;
         receiveEndpoint = "";
@@ -1122,6 +1211,7 @@ final class ReceiveController {
         remoteCurrentPathMissing = false;
         remoteFiles.clear();
         selectedRemotePaths.clear();
+        excludedRemotePaths.clear();
         remoteFileCount = 0;
         remoteDirCount = 0;
         remoteTotalBytes = 0;
@@ -1266,7 +1356,7 @@ final class ReceiveController {
             host.requestRender();
             return;
         }
-        loadRemoteFiles(receiveEndpoint, receiveRunId, subPath, false, false);
+        loadRemoteFiles(receiveEndpoint, receiveRunId, subPath, true, false);
     }
 
     private void loadRemoteFiles(String endpoint, long runId, String subPath, boolean clearSelection, boolean replaceAll) {
@@ -1289,6 +1379,7 @@ final class ReceiveController {
         }
         if (clearSelection) {
             selectedRemotePaths.clear();
+            excludedRemotePaths.clear();
         }
         remoteListSession = HttpReceiver.startList(endpoint, targetPath, new HttpReceiver.ListCallback() {
             @Override
@@ -1384,7 +1475,7 @@ final class ReceiveController {
         remoteTotalBytes = totalBytes;
     }
 
-    private void refreshAndStartDownload(List<String> paths) {
+    private void refreshAndStartDownload(List<String> paths, boolean applySelectionRules) {
         if (receiveEndpoint == null || !receiveEndpoint.startsWith("http://")) {
             remoteListStatus = "Waiting for peer";
             host.toast(R.string.toast_peer_not_connected);
@@ -1430,14 +1521,15 @@ final class ReceiveController {
                     remoteCurrentPathMissing = missing && normalizedPaths.size() == 1 && normalizeRemotePath(remoteCurrentPath).equals(normalizedPaths.get(0)) && !remoteCurrentPath.isEmpty();
                     remoteListStatus = remoteCurrentPathMissing ? "Remote path missing" : (files.isEmpty() ? "No remote files" : "Remote list refreshed");
                     host.refreshForegroundService();
-                    if (files.isEmpty()) {
+                    List<HttpReceiver.RemoteFile> downloadFiles = applySelectionRules ? filterSelectedRemoteFiles(files) : files;
+                    if (downloadFiles.isEmpty()) {
                         downloadStatus = "Idle";
                         host.toast(R.string.toast_no_remote_files);
                         host.requestRender();
                         return;
                     }
                     host.log("info", "Remote list refreshed before download: " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
-                    startReceiveDownload(receiveEndpoint, receiveRunId, files);
+                    startReceiveDownload(receiveEndpoint, receiveRunId, downloadFiles);
                     host.requestRender();
                 });
             }
@@ -1486,6 +1578,7 @@ final class ReceiveController {
         downloadBytesPerSecond = 0;
         downloadSkippedFiles = 0;
         downloadResumedFiles = 0;
+        downloadFailedFiles = 0;
         downloadStartedAtMs = System.currentTimeMillis();
         downloadFinishedAtMs = 0;
         receiveDownload = HttpReceiver.start(context(), endpoint, saveTreeUri, files, resumeDownloads, new HttpReceiver.Callback() {
@@ -1495,7 +1588,7 @@ final class ReceiveController {
             }
 
             @Override
-            public void onComplete(int totalFiles, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles) {
+            public void onComplete(int totalFiles, long doneBytes, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles, List<HttpReceiver.DownloadFailure> failures) {
                 host.mainHandler().post(() -> {
                     if (!isCurrentRun(runId)) {
                         return;
@@ -1506,7 +1599,7 @@ final class ReceiveController {
                     receiveDownload = null;
                     downloadDoneFiles = totalFiles;
                     downloadTotalFiles = totalFiles;
-                    downloadDoneBytes = totalBytes;
+                    downloadDoneBytes = doneBytes;
                     downloadTotalBytes = totalBytes;
                     downloadNetworkBytes = networkBytes;
                     downloadBytesPerSecond = 0;
@@ -1516,9 +1609,20 @@ final class ReceiveController {
                     receiveMetrics.inBps = 0;
                     receiveMetrics.outBps = 0;
                     receiveMetrics.lastTrafficMs = 0;
-                    downloadStatus = "Receive complete";
+                    int failedFiles = failures == null ? 0 : failures.size();
+                    downloadFailedFiles = failedFiles;
+                    downloadStatus = failedFiles > 0 ? "Receive complete with failures" : "Receive complete";
                     host.refreshForegroundService();
-                    host.log("info", "Receive complete: " + totalFiles + " file(s), " + HttpReceiver.formatBytes(totalBytes) + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
+                    if (failedFiles > 0) {
+                        host.log("error", "Receive completed with " + failedFiles + " failed file(s): " + totalFiles + " total, "
+                                + HttpReceiver.formatBytes(doneBytes) + " / " + HttpReceiver.formatBytes(totalBytes)
+                                + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
+                        for (HttpReceiver.DownloadFailure failure : failures) {
+                            host.log("error", "Receive failed: " + failure.path + " - " + failure.message);
+                        }
+                    } else {
+                        host.log("info", "Receive complete: " + totalFiles + " file(s), " + HttpReceiver.formatBytes(totalBytes) + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
+                    }
                     host.requestRender();
                 });
             }
@@ -1672,10 +1776,19 @@ final class ReceiveController {
         if (downloadSkippedFiles > 0 || downloadResumedFiles > 0) {
             detailText = string(R.string.progress_detail_extra, detailText, downloadSkippedFiles, downloadResumedFiles);
         }
+        if (downloadFailedFiles > 0) {
+            detailText = string(R.string.progress_detail_failed_extra, detailText, downloadFailedFiles);
+        }
         return detailText;
     }
 
     private String downloadProgressSummary(long done, long total) {
+        if ("Receive complete with failures".equals(downloadStatus)) {
+            return string(R.string.progress_completed_with_failures_summary,
+                    downloadFailedFiles,
+                    formatDuration(downloadElapsedSeconds()),
+                    formatRate(downloadAverageBytesPerSecond()));
+        }
         if ("Receive complete".equals(downloadStatus)) {
             return string(R.string.progress_completed_summary,
                     formatDuration(downloadElapsedSeconds()),

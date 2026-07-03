@@ -295,7 +295,7 @@ func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
 	return resp, nil
 }
 
-func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, resume bool) error {
+func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, excludePaths []string, cachedFiles []httpdownload.FileInfo, resume bool) error {
 	if saveDir == "" {
 		saveDir = defaultSaveDir()
 	}
@@ -320,6 +320,8 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 		SubPath:      subPath,
 		SaveDir:      saveDir,
 		IncludePaths: includePaths,
+		ExcludePaths: excludePaths,
+		CachedFiles:  cachedFiles,
 		Concurrency:  4,
 		Resume:       resume,
 	})

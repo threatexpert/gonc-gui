@@ -34,6 +34,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -114,6 +115,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private long pauseAutoRenderUntilMs;
     private long lastBackgroundRenderMs;
     private boolean backgroundRenderPending;
+    private boolean keepScreenIndicatorVisible;
     private TextView activitySummaryTextView;
     private LinearLayout activityLogContentView;
     private TextView activityP2PStatusValueView;
@@ -192,6 +194,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     protected void onResume() {
         super.onResume();
         vpnClient.syncLogs();
+        updateKeepScreenOn();
         renderAfterBackgroundUpdate();
         if (!pendingVpnStartAfterBatterySettings) {
             return;
@@ -311,6 +314,7 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     protected void onDestroy() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         // On a config change the controllers are retained, so leave them and
         // their sessions running; only tear down on a real destroy.
         if (!isChangingConfigurations()) {
@@ -461,11 +465,28 @@ public final class MainActivity extends Activity implements ModuleHost {
         titles.addView(text(getString(R.string.app_subtitle), 13, muted(), Typeface.NORMAL));
         header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
+        if (isAnySessionRunning()) {
+            View keepAwake = keepScreenIndicator();
+            LinearLayout.LayoutParams indicatorParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+            indicatorParams.setMargins(0, 0, dp(6), 0);
+            header.addView(keepAwake, indicatorParams);
+        }
+
         Button source = ghostButton(getString(R.string.source));
         source.setOnClickListener(v -> showSourceDialog());
         header.addView(source, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
 
         return header;
+    }
+
+    private View keepScreenIndicator() {
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_keep_screen_on);
+        icon.setPadding(dp(7), dp(7), dp(7), dp(7));
+        icon.setBackground(rounded(Color.rgb(223, 243, 236), dp(8), Color.rgb(143, 211, 189), 1));
+        icon.setContentDescription(getString(R.string.screen_stays_on));
+        icon.setOnClickListener(v -> Toast.makeText(this, R.string.screen_stays_on, Toast.LENGTH_SHORT).show());
+        return icon;
     }
 
     private View modeSwitch() {
@@ -1558,6 +1579,8 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void refreshForegroundService() {
+        boolean wasKeepScreenVisible = keepScreenIndicatorVisible;
+        updateKeepScreenOn();
         // The VPN client is excluded on purpose: it has its own GoncVpnService.
         java.util.EnumMap<GoncForegroundService.Module, GoncForegroundService.State> active =
                 new java.util.EnumMap<>(GoncForegroundService.Module.class);
@@ -1575,6 +1598,18 @@ public final class MainActivity extends Activity implements ModuleHost {
             ensureNotificationPermission();
         }
         GoncForegroundService.apply(this, active);
+        if (keepScreenIndicatorVisible != wasKeepScreenVisible && root != null) {
+            render();
+        }
+    }
+
+    private void updateKeepScreenOn() {
+        keepScreenIndicatorVisible = isAnySessionRunning();
+        if (keepScreenIndicatorVisible) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
     }
 
     /**

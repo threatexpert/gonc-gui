@@ -2,6 +2,7 @@ package httpdownload
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,9 +12,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/zeebo/blake3"
 )
 
-func TestDownloaderRetriesAndResumesInterruptedFile(t *testing.T) {
+func TestDownloaderRetriesInterruptedOldServerWithFullRedownload(t *testing.T) {
 	content := []byte("0123456789")
 	var hits atomic.Int32
 	var resumeRange atomic.Value
@@ -35,6 +38,10 @@ func TestDownloaderRetriesAndResumesInterruptedFile(t *testing.T) {
 		}
 
 		resumeRange.Store(r.Header.Get("Range"))
+		if r.Header.Get("Range") == "" {
+			_, _ = w.Write(content)
+			return
+		}
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes 5-%d/%d", len(content)-1, len(content)))
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(content[5:])
@@ -80,8 +87,77 @@ func TestDownloaderRetriesAndResumesInterruptedFile(t *testing.T) {
 	if hits.Load() != 2 {
 		t.Fatalf("download attempts = %d, want 2", hits.Load())
 	}
-	if got, _ := resumeRange.Load().(string); got != "bytes=5-" {
-		t.Fatalf("resume range = %q, want %q", got, "bytes=5-")
+	if got, _ := resumeRange.Load().(string); got != "" {
+		t.Fatalf("resume range = %q, want empty Range after manifest fallback", got)
+	}
+}
+
+func TestDownloaderRepairsDirtyBlockWithBlake3Manifest(t *testing.T) {
+	content := make([]byte, 3*64*1024)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	modTime := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	blockSize := int64(64 * 1024)
+	var ranges []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			if r.URL.Query().Get("manifest") == "blake3" {
+				writeBlake3Manifest(t, w, "/file.bin", content, modTime, blockSize)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"name":"file.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/file.bin"}`+"\n", modTime.Format(time.RFC3339Nano), len(content))
+			return
+		}
+		if r.URL.Path != "/file.bin" {
+			http.NotFound(w, r)
+			return
+		}
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			ranges = append(ranges, rangeHeader)
+			wantRange := fmt.Sprintf("bytes=%d-%d", blockSize, 2*blockSize-1)
+			if rangeHeader != wantRange {
+				t.Fatalf("Range = %q, want %s", rangeHeader, wantRange)
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", blockSize, 2*blockSize-1, len(content)))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(content[blockSize : 2*blockSize])
+			return
+		}
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	localPath := filepath.Join(root, "file.bin")
+	localContent := append([]byte(nil), content...)
+	localContent[blockSize] ^= 0xff
+	if err := os.WriteFile(localPath, localContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := downloader.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("downloaded content = %q, want %q", data, content)
+	}
+	if len(ranges) != 1 {
+		t.Fatalf("range requests = %v, want one repair range", ranges)
 	}
 }
 
@@ -131,10 +207,11 @@ func TestDownloaderDoesNotRetryHTTPStatusError(t *testing.T) {
 func TestDownloaderProgressReportsSkippedAndFailedFiles(t *testing.T) {
 	skipContent := []byte("already here")
 	freshContent := []byte("new content")
+	modTime := time.Date(2026, 7, 3, 13, 0, 0, 0, time.UTC)
 	var skipHits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Accept"), "application/json") {
-			now := time.Now().Format(time.RFC3339)
+			now := modTime.Format(time.RFC3339)
 			_, _ = fmt.Fprintf(w, `{"name":"root","is_dir":true,"mod_time":"%s","size":0,"path":"/root"}`+"\n", now)
 			_, _ = fmt.Fprintf(w, `{"name":"skip.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/skip.bin"}`+"\n", now, len(skipContent))
 			_, _ = fmt.Fprintf(w, `{"name":"fresh.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/fresh.bin"}`+"\n", now, len(freshContent))
@@ -158,6 +235,9 @@ func TestDownloaderProgressReportsSkippedAndFailedFiles(t *testing.T) {
 
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "skip.bin"), skipContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(root, "skip.bin"), time.Now(), modTime); err != nil {
 		t.Fatal(err)
 	}
 	downloader, err := New(Config{
@@ -254,6 +334,30 @@ func TestDownloaderDoesNotCreateSingleRootDirectoryPlaceholder(t *testing.T) {
 	}
 	if lastProgress.TotalFiles != 1 || lastProgress.DoneFiles != 1 {
 		t.Fatalf("file progress = %d/%d, want 1/1", lastProgress.DoneFiles, lastProgress.TotalFiles)
+	}
+}
+
+func TestFilterFilesIncludeExcludeMostSpecificRuleWins(t *testing.T) {
+	files := []FileInfo{
+		{Path: "/dir/a.bin"},
+		{Path: "/dir/b.bin"},
+		{Path: "/dir/sub/drop.bin"},
+		{Path: "/dir/sub/keep.bin"},
+		{Path: "/other.bin"},
+	}
+
+	filtered := filterFiles(files,
+		[]string{"/dir", "/dir/sub/keep.bin"},
+		[]string{"/dir/a.bin", "/dir/sub"},
+	)
+
+	var got []string
+	for _, file := range filtered {
+		got = append(got, file.Path)
+	}
+	want := []string{"/dir/b.bin", "/dir/sub/keep.bin"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("filtered paths = %v, want %v", got, want)
 	}
 }
 
@@ -377,5 +481,21 @@ func TestSingleFileNameCannotEscapeSaveDirectory(t *testing.T) {
 	}
 	if rel, err := filepath.Rel(root, localPath); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 		t.Fatalf("local path escapes root: %q", localPath)
+	}
+}
+
+func writeBlake3Manifest(t *testing.T, w http.ResponseWriter, remotePath string, content []byte, modTime time.Time, blockSize int64) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	_, _ = fmt.Fprintf(w, `{"type":"file","path":%q,"size":%d,"mod_time":%q,"algo":"blake3","block_size":%d}`+"\n",
+		remotePath, len(content), modTime.Format(time.RFC3339Nano), blockSize)
+	for index, offset := 0, 0; offset < len(content); index, offset = index+1, offset+int(blockSize) {
+		end := offset + int(blockSize)
+		if end > len(content) {
+			end = len(content)
+		}
+		sum := blake3.Sum256(content[offset:end])
+		_, _ = fmt.Fprintf(w, `{"type":"block","index":%d,"offset":%d,"size":%d,"hash":%q}`+"\n",
+			index, offset, end-offset, hex.EncodeToString(sum[:]))
 	}
 }

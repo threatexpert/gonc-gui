@@ -20,6 +20,7 @@
     <string name="remove">Remove</string>
     <string name="clear">Clear</string>
     <string name="source">About</string>
+    <string name="screen_stays_on">Screen stays on while tasks are running</string>
     <string name="passphrase">Passphrase</string>
     <string name="passphrase_hint">We recommend generating a random passphrase and sharing it securely. Matching passphrases connect; either side can generate or scan.</string>
     <string name="passphrase_input_hint">Enter a passphrase, or tap Random to generate a strong one.</string>
@@ -163,13 +164,16 @@
     <string name="selected_folder">Selected folder</string>
     <string name="files_summary">%1$d files  %2$d folders  %3$s  selected %4$d</string>
     <string name="selection_summary">Selected %1$d items · %2$s</string>
+    <string name="selection_excluded">Excluded %1$d items</string>
     <string name="remote_total_summary">Total %1$d files · %2$d folders · %3$s</string>
     <string name="progress_detail">%1$s  %2$d/%3$d files  %4$s / %5$s</string>
     <string name="progress_detail_extra">%1$s  skipped %2$d  resumed %3$d</string>
+    <string name="progress_detail_failed_extra">%1$s  failed %2$d</string>
     <string name="progress_speed">Speed %1$s</string>
     <string name="progress_remaining">About %1$s left</string>
     <string name="progress_remaining_estimating">Estimating time left</string>
     <string name="progress_completed_summary">Average %2$s  |  Completed in %1$s</string>
+    <string name="progress_completed_with_failures_summary">%1$d failed  |  Average %3$s  |  Finished in %2$s</string>
     <string name="progress_stopped_summary">Stopped after %1$s</string>
     <string name="status_idle">Idle</string>
     <string name="status_preparing">Preparing</string>
@@ -179,6 +183,7 @@
     <string name="status_preparing_download">Preparing download</string>
     <string name="status_receiving">Receiving %1$s</string>
     <string name="status_receive_complete">Receive complete</string>
+    <string name="status_receive_complete_with_failures">Receive complete with failures</string>
     <string name="status_receive_failed">Receive failed</string>
     <string name="status_stopped">Stopped</string>
     <string name="status_connecting">connecting</string>
