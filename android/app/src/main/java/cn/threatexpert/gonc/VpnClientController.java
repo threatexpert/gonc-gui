@@ -60,6 +60,11 @@ final class VpnClientController {
     private boolean passwordVisible;
     private boolean advancedExpanded;
     private long lastLogId;
+    private boolean lastRenderedRunning;
+    private String lastRenderedStatus = "";
+    private View sessionDotView;
+    private TextView sessionLabelView;
+    private Button sessionDisconnectButton;
     private GoncVpnState.Listener listener;
 
     VpnClientController(ModuleHost host) {
@@ -84,7 +89,11 @@ final class VpnClientController {
             public void onVpnStateChanged() {
                 host.mainHandler().post(() -> {
                     host.refreshForegroundService();
-                    host.requestRender();
+                    if (needsStateStructureRender()) {
+                        host.requestRender();
+                    } else {
+                        host.requestBackgroundRender();
+                    }
                 });
             }
 
@@ -124,6 +133,8 @@ final class VpnClientController {
     void resetForFreshLaunch() {
         selectedIndex = 0;
         passwordVisible = false;
+        lastRenderedRunning = GoncVpnState.isRunning();
+        lastRenderedStatus = GoncVpnState.status();
     }
 
     TransferMetrics metrics() {
@@ -157,6 +168,8 @@ final class VpnClientController {
 
     View panel() {
         UiKit u = host.ui();
+        lastRenderedRunning = GoncVpnState.isRunning();
+        lastRenderedStatus = GoncVpnState.status();
         LinearLayout card = u.card();
         boolean running = GoncVpnState.isRunning();
         String error = GoncVpnState.error().trim();
@@ -167,6 +180,9 @@ final class VpnClientController {
             }
             return card;
         }
+        sessionDotView = null;
+        sessionLabelView = null;
+        sessionDisconnectButton = null;
 
         // Surface the last failure (e.g. a quick exit from a bad link/extra-args
         // config) above the form — otherwise the UI just flashes back here silently.
@@ -205,6 +221,34 @@ final class VpnClientController {
             card.addView(routeCidrsField(), u.blockParams(u.dp(10)));
         }
         return card;
+    }
+
+    private boolean needsStateStructureRender() {
+        boolean running = GoncVpnState.isRunning();
+        String status = GoncVpnState.status();
+        boolean statusStructureChanged = running != lastRenderedRunning
+                || GoncVpnState.ERROR.equals(status)
+                || GoncVpnState.ERROR.equals(lastRenderedStatus);
+        if (statusStructureChanged) {
+            lastRenderedRunning = running;
+            lastRenderedStatus = status;
+            return true;
+        }
+        lastRenderedStatus = status;
+        return false;
+    }
+
+    void updateDynamicViews() {
+        UiKit u = host.ui();
+        if (sessionDotView != null) {
+            sessionDotView.setBackground(u.rounded(connectionColor(), u.dp(6), 0, 0));
+        }
+        if (sessionLabelView != null) {
+            sessionLabelView.setText(sessionLabelText());
+        }
+        if (sessionDisconnectButton != null) {
+            u.setControlEnabled(sessionDisconnectButton, !GoncVpnState.STOPPING.equals(GoncVpnState.status()));
+        }
     }
 
     private View profileSelector() {
@@ -524,14 +568,12 @@ final class VpnClientController {
 
         View dot = new View(host.context());
         dot.setBackground(u.rounded(connectionColor(), u.dp(6), 0, 0));
+        sessionDotView = dot;
         row.addView(dot, new LinearLayout.LayoutParams(u.dp(12), u.dp(12)));
 
-        String activeProfile = GoncVpnState.profileName();
-        if (activeProfile.trim().isEmpty()) {
-            activeProfile = currentProfile().displayName(host.context());
-        }
-        TextView label = u.text(connectionLabel() + "\n" + string(R.string.vpn_active_profile, activeProfile), 14, u.ink(), Typeface.BOLD);
+        TextView label = u.text(sessionLabelText(), 14, u.ink(), Typeface.BOLD);
         label.setSingleLine(false);
+        sessionLabelView = label;
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         labelParams.setMargins(u.dp(10), 0, u.dp(8), 0);
         row.addView(label, labelParams);
@@ -540,10 +582,19 @@ final class VpnClientController {
         disconnect.setTextSize(14);
         disconnect.setOnClickListener(v -> host.stopVpnClient());
         u.setControlEnabled(disconnect, !GoncVpnState.STOPPING.equals(GoncVpnState.status()));
+        sessionDisconnectButton = disconnect;
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(38));
         disconnectParams.setMargins(u.dp(8), 0, 0, 0);
         row.addView(disconnect, disconnectParams);
         return row;
+    }
+
+    private String sessionLabelText() {
+        String activeProfile = GoncVpnState.profileName();
+        if (activeProfile.trim().isEmpty()) {
+            activeProfile = currentProfile().displayName(host.context());
+        }
+        return connectionLabel() + "\n" + string(R.string.vpn_active_profile, activeProfile);
     }
 
     private View errorBanner(String message) {

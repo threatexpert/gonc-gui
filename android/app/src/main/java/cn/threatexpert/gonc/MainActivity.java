@@ -115,7 +115,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     private long pauseAutoRenderUntilMs;
     private long lastBackgroundRenderMs;
     private boolean backgroundRenderPending;
-    private boolean renderDeferredForTextInput;
     private boolean keepScreenIndicatorVisible;
     private TextView activitySummaryTextView;
     private LinearLayout activityLogContentView;
@@ -406,7 +405,6 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void render() {
-        renderDeferredForTextInput = false;
         root.removeAllViews();
         root.addView(header());
         root.addView(modeSwitch());
@@ -429,37 +427,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         updateBackgroundDynamicViews();
     }
 
-    private void requestRenderOrDeferForTextInput() {
-        if (!isTextInputFocused()) {
-            render();
-            return;
-        }
-        updateBackgroundDynamicViews();
-        if (renderDeferredForTextInput) {
-            return;
-        }
-        renderDeferredForTextInput = true;
-        mainHandler.postDelayed(this::flushDeferredRenderForTextInput, 500);
-    }
-
-    private void flushDeferredRenderForTextInput() {
-        if (!renderDeferredForTextInput) {
-            return;
-        }
-        if (isTextInputFocused()) {
-            updateBackgroundDynamicViews();
-            mainHandler.postDelayed(this::flushDeferredRenderForTextInput, 500);
-            return;
-        }
-        render();
-    }
-
-    private boolean isTextInputFocused() {
-        return getCurrentFocus() instanceof EditText;
-    }
-
     private void updateBackgroundDynamicViews() {
         receiveController.updateDynamicViews();
+        vpnClient.updateDynamicViews();
         if (activitySummaryTextView != null) {
             activitySummaryTextView.setText(activitySummary(currentMetrics()));
         }
@@ -1495,7 +1465,7 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void requestRender() {
-        requestRenderOrDeferForTextInput();
+        render();
     }
 
     @Override
