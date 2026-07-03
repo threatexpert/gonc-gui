@@ -34,6 +34,7 @@
     <string name="remote_files">Peer shared files</string>
     <string name="stop_download">Stop download</string>
     <string name="receive_all">Download all</string>
+    <string name="receive_current_dir">Download current folder</string>
     <string name="download_selected">Download selected</string>
     <string name="select_all">Select all</string>
     <string name="invert_selection">Invert</string>

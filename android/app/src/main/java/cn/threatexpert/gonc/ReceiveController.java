@@ -425,7 +425,7 @@ final class ReceiveController {
             setControlEnabled(selected, canDownloadSelected);
             selected.setOnClickListener(v -> startSelectedDownload());
 
-            Button all = primaryButton(string(R.string.receive_all));
+            Button all = primaryButton(receiveAllButtonLabel());
             setControlEnabled(all, canStartRemoteDownload());
             all.setOnClickListener(v -> refreshAndStartDownload(currentDownloadPaths(), false));
 
@@ -434,6 +434,12 @@ final class ReceiveController {
         }
         box.addView(actions, blockParams(dp(10)));
         return box;
+    }
+
+    private String receiveAllButtonLabel() {
+        return normalizeRemotePath(remoteCurrentPath).isEmpty()
+                ? string(R.string.receive_all)
+                : string(R.string.receive_current_dir);
     }
 
     private View parentDirectoryRow() {
@@ -485,7 +491,11 @@ final class ReceiveController {
                 selectedRemotePaths.add(normalizedPath);
             } else {
                 selectedRemotePaths.remove(normalizedPath);
-                excludedRemotePaths.add(normalizedPath);
+                if (hasSelectedParent(normalizedPath)) {
+                    excludedRemotePaths.add(normalizedPath);
+                } else {
+                    excludedRemotePaths.remove(normalizedPath);
+                }
             }
             updateRemoteSelectionViews();
         });
@@ -866,6 +876,11 @@ final class ReceiveController {
         return excludedRank < 0 || selectedRank > excludedRank;
     }
 
+    private boolean hasSelectedParent(String path) {
+        String parent = parentPath(path);
+        return !parent.equals(normalizeRemotePath(path)) && longestPathRuleMatch(parent, selectedRemotePaths) >= 0;
+    }
+
     private int longestPathRuleMatch(String path, Set<String> rules) {
         String normalized = normalizeRemotePath(path);
         int best = -1;
@@ -910,7 +925,11 @@ final class ReceiveController {
             String path = normalizeRemotePath(file.path);
             if (isPathSelectedForDownload(path)) {
                 selectedRemotePaths.remove(path);
-                excludedRemotePaths.add(path);
+                if (hasSelectedParent(path)) {
+                    excludedRemotePaths.add(path);
+                } else {
+                    excludedRemotePaths.remove(path);
+                }
             } else {
                 excludedRemotePaths.remove(path);
                 selectedRemotePaths.add(path);

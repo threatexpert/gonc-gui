@@ -35,6 +35,7 @@
     <string name="remote_files">对方分享的文件</string>
     <string name="stop_download">停止下载</string>
     <string name="receive_all">下载全部</string>
+    <string name="receive_current_dir">下载当前目录</string>
     <string name="download_selected">下载选中</string>
     <string name="select_all">全选</string>
     <string name="invert_selection">反选</string>

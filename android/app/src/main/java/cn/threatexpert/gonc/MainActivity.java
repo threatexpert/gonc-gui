@@ -115,6 +115,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private long pauseAutoRenderUntilMs;
     private long lastBackgroundRenderMs;
     private boolean backgroundRenderPending;
+    private boolean renderDeferredForTextInput;
     private boolean keepScreenIndicatorVisible;
     private TextView activitySummaryTextView;
     private LinearLayout activityLogContentView;
@@ -405,6 +406,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void render() {
+        renderDeferredForTextInput = false;
         root.removeAllViews();
         root.addView(header());
         root.addView(modeSwitch());
@@ -424,15 +426,36 @@ public final class MainActivity extends Activity implements ModuleHost {
         if (System.currentTimeMillis() < pauseAutoRenderUntilMs) {
             return;
         }
-        if (isRemoteFilesPanelVisible()) {
+        updateBackgroundDynamicViews();
+    }
+
+    private void requestRenderOrDeferForTextInput() {
+        if (!isTextInputFocused()) {
+            render();
+            return;
+        }
+        updateBackgroundDynamicViews();
+        if (renderDeferredForTextInput) {
+            return;
+        }
+        renderDeferredForTextInput = true;
+        mainHandler.postDelayed(this::flushDeferredRenderForTextInput, 500);
+    }
+
+    private void flushDeferredRenderForTextInput() {
+        if (!renderDeferredForTextInput) {
+            return;
+        }
+        if (isTextInputFocused()) {
             updateBackgroundDynamicViews();
+            mainHandler.postDelayed(this::flushDeferredRenderForTextInput, 500);
             return;
         }
         render();
     }
 
-    private boolean isRemoteFilesPanelVisible() {
-        return !vpnMode && !vpnServerMode && !sendMode && receiveController.shouldShowRemoteFilesPanel();
+    private boolean isTextInputFocused() {
+        return getCurrentFocus() instanceof EditText;
     }
 
     private void updateBackgroundDynamicViews() {
@@ -1472,6 +1495,11 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void requestRender() {
+        requestRenderOrDeferForTextInput();
+    }
+
+    @Override
+    public void requestImmediateRender() {
         render();
     }
 

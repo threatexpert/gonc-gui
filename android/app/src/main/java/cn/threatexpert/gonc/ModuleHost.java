@@ -56,6 +56,9 @@ interface ModuleHost {
     /** Full rebuild of the visible screen. */
     void requestRender();
 
+    /** Full rebuild for an explicit user action; bypasses text-input deferral. */
+    void requestImmediateRender();
+
     /** Throttled rebuild for high-frequency background updates (logs/metrics). */
     void requestBackgroundRender();
 

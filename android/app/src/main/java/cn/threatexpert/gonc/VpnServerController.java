@@ -206,7 +206,7 @@ final class VpnServerController {
                 : string(R.string.vpn_advanced_settings));
         advancedToggle.setOnClickListener(v -> {
             advancedExpanded = !advancedExpanded;
-            host.requestRender();
+            host.requestImmediateRender();
         });
         card.addView(advancedToggle, u.blockParams(u.dp(12)));
 

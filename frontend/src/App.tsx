@@ -158,6 +158,7 @@ const text = {
     startVpnClient: '连接 VPN',
     vpnConnectAdminPrompt: '将请求管理员权限',
     receiveAll: '接收全部',
+    receiveCurrentDir: '接收当前目录',
     connectedReceivers: '已连接',
     connectingReceivers: '正在建立',
     connections: '连接',
@@ -325,6 +326,7 @@ const text = {
     startVpnClient: 'Connect VPN',
     vpnConnectAdminPrompt: 'Administrator permission required',
     receiveAll: 'Receive All',
+    receiveCurrentDir: 'Receive Current Folder',
     connectedReceivers: 'Connected',
     connectingReceivers: 'Establishing',
     connections: 'Connections',
@@ -1533,7 +1535,11 @@ function App() {
     const nextExcluded = new Set(excludedPaths);
     if (isEffectivelySelected(normalized, nextSelected, nextExcluded)) {
       nextSelected.delete(normalized);
-      nextExcluded.add(normalized);
+      if (hasSelectedParent(normalized, nextSelected)) {
+        nextExcluded.add(normalized);
+      } else {
+        nextExcluded.delete(normalized);
+      }
     } else {
       nextExcluded.delete(normalized);
       nextSelected.add(normalized);
@@ -1567,7 +1573,11 @@ function App() {
       const path = normalizeRemotePath(file.path);
       if (isEffectivelySelected(path, nextSelected, nextExcluded)) {
         nextSelected.delete(path);
-        nextExcluded.add(path);
+        if (hasSelectedParent(path, nextSelected)) {
+          nextExcluded.add(path);
+        } else {
+          nextExcluded.delete(path);
+        }
       } else {
         nextExcluded.delete(path);
         nextSelected.add(path);
@@ -2009,7 +2019,9 @@ function App() {
                     <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
                   ) : (
                     <>
-                      <button className="primary" disabled={!canDownloadAll} onClick={startDownloadAll}>{t.receiveAll}</button>
+                      <button className="primary" disabled={!canDownloadAll} onClick={startDownloadAll}>
+                        {currentRemotePath === '/' ? t.receiveAll : t.receiveCurrentDir}
+                      </button>
                       <button className="secondary" disabled={!canDownload} onClick={startDownload}>{t.downloadSelected}</button>
                     </>
                   )}
@@ -2587,6 +2599,11 @@ function isEffectivelySelected(path: string, selectedPaths: Set<string>, exclude
   }
   const excludedRank = longestRemoteRuleMatch(normalized, excludedPaths);
   return excludedRank < 0 || selectedRank > excludedRank;
+}
+
+function hasSelectedParent(path: string, selectedPaths: Set<string>) {
+  const parent = parentPath(path);
+  return parent !== path && longestRemoteRuleMatch(parent, selectedPaths) >= 0;
 }
 
 function longestRemoteRuleMatch(path: string, rules: Set<string>) {

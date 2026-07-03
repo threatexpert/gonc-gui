@@ -32,6 +32,8 @@ const (
 	dnsLeakRuleUDPHigh = "Gonc VPN DNS Leak Protection Dnscache UDP 53 non-VPN local high"
 	dnsLeakRuleTCPLow  = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local low"
 	dnsLeakRuleTCPHigh = "Gonc VPN DNS Leak Protection Dnscache TCP 53 non-VPN local high"
+	dnsLeakRuleUDPIPv6 = "Gonc VPN DNS Leak Protection Dnscache UDP 53 IPv6"
+	dnsLeakRuleTCPIPv6 = "Gonc VPN DNS Leak Protection Dnscache TCP 53 IPv6"
 )
 
 type Session struct {
@@ -221,6 +223,8 @@ func (s *Session) configureDNSLeakProtection(trace func(string)) error {
 		{dnsLeakRuleUDPHigh, "block", "UDP", "128.0.0.0-255.255.255.255"},
 		{dnsLeakRuleTCPLow, "block", "TCP", "0.0.0.0-126.255.255.255"},
 		{dnsLeakRuleTCPHigh, "block", "TCP", "128.0.0.0-255.255.255.255"},
+		{dnsLeakRuleUDPIPv6, "block", "UDP", "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+		{dnsLeakRuleTCPIPv6, "block", "TCP", "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
 	}
 
 	type ruleResult struct {
@@ -298,6 +302,8 @@ func cleanupDNSLeakFirewallRules() error {
 		dnsLeakRuleUDPHigh,
 		dnsLeakRuleTCPLow,
 		dnsLeakRuleTCPHigh,
+		dnsLeakRuleUDPIPv6,
+		dnsLeakRuleTCPIPv6,
 		"Gonc VPN DNS Leak Protection Dnscache UDP 53 loopback DNS proxy allow",
 		"Gonc VPN DNS Leak Protection Dnscache TCP 53 loopback DNS proxy allow",
 	} {
