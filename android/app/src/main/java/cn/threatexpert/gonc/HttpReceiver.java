@@ -48,6 +48,9 @@ final class HttpReceiver {
     private static final long MIN_MANIFEST_BLOCK_SIZE = 64L * 1024L;
     private static final long MAX_MANIFEST_BLOCK_SIZE = 64L * 1024L * 1024L;
     private static final int MAX_REPAIR_RANGE_COUNT = 128;
+    private static final int REPAIR_PLAN_SPARSE = 1;
+    private static final int REPAIR_PLAN_TAIL_RESUME = 2;
+    private static final int REPAIR_PLAN_TRUNCATE_ONLY = 3;
 
     interface ListCallback {
         void onList(List<RemoteFile> files, int fileCount, int dirCount, long totalBytes, boolean missing);
@@ -340,7 +343,45 @@ final class HttpReceiver {
     }
 
     private static DownloadResult tryRepair(Context context, String downloadUrl, RemoteFile file, DocumentInfo target, Session session, Callback callback, ProgressClock clock, int doneFiles, int totalFiles, long baseDoneBytes, long baseNetworkBytes, long totalBytes) throws Exception {
-        RepairManifest manifest = fetchManifest(downloadUrl, session);
+        RepairManifest manifest = null;
+        RepairPlan plan = null;
+
+        if (target.size < file.size) {
+            manifest = fetchManifest(downloadUrl, session, target.size);
+            if (manifest == null) {
+                manifest = fetchManifest(downloadUrl, session, 0);
+            }
+            if (manifest == null) {
+                Log.i(TAG, "Repair check unavailable for " + file.path + ": server does not provide BLAKE3 manifest");
+                return null;
+            }
+            file.size = manifest.size;
+            file.modifiedMs = manifest.modifiedMs;
+            if (target.size < manifest.size) {
+                try {
+                    plan = planTailResume(context, target, manifest);
+                } catch (Exception error) {
+                    Log.i(TAG, "Tail resume planning unavailable for " + file.path + ": " + error.getMessage());
+                    plan = null;
+                }
+                if (plan == null) {
+                    Log.i(TAG, "Tail resume check for " + file.path + " did not prove a clean prefix; requesting full repair manifest");
+                    if (!manifest.isFull()) {
+                        manifest = fetchManifest(downloadUrl, session, 0);
+                        if (manifest == null) {
+                            Log.i(TAG, "Repair check unavailable for " + file.path + ": server does not provide BLAKE3 manifest");
+                            return null;
+                        }
+                        file.size = manifest.size;
+                        file.modifiedMs = manifest.modifiedMs;
+                    }
+                }
+            }
+        }
+
+        if (manifest == null) {
+            manifest = fetchManifest(downloadUrl, session, 0);
+        }
         if (manifest == null) {
             Log.i(TAG, "Repair check unavailable for " + file.path + ": server does not provide BLAKE3 manifest");
             return null;
@@ -348,16 +389,17 @@ final class HttpReceiver {
         file.size = manifest.size;
         file.modifiedMs = manifest.modifiedMs;
 
-        RepairPlan plan;
-        try {
-            plan = planRepair(context, target, manifest);
-        } catch (Exception error) {
-            Log.i(TAG, "Repair planning unavailable for " + file.path + ": " + error.getMessage());
-            return null;
+        if (plan == null) {
+            try {
+                plan = planRepair(context, target, manifest);
+            } catch (Exception error) {
+                Log.i(TAG, "Repair planning unavailable for " + file.path + ": " + error.getMessage());
+                return null;
+            }
         }
-        if (shouldRedownload(manifest.size, plan.transferBytes, plan.ranges.size())) {
+        if (plan.kind == REPAIR_PLAN_SPARSE && shouldRedownload(manifest.size, plan.dirtyBytes, plan.dirtyRangeCount)) {
             Log.i(TAG, "Repair check for " + file.path + ": local=" + formatBytes(target.size) + " remote=" + formatBytes(manifest.size)
-                    + ", " + plan.ranges.size() + " changed/missing range(s) totaling " + formatBytes(plan.transferBytes)
+                    + ", " + plan.dirtyRangeCount + " dirty range(s) totaling " + formatBytes(plan.dirtyBytes)
                     + "; full download selected");
             return null;
         }
@@ -366,9 +408,11 @@ final class HttpReceiver {
         if (callback != null && keptBytes > 0) {
             callback.onProgress(doneFiles, totalFiles, baseDoneBytes + keptBytes, totalBytes, baseNetworkBytes, clock.speedFor(baseNetworkBytes), file.path);
         }
-        Log.i(TAG, "Repair plan for " + file.path + ": local=" + formatBytes(target.size) + " remote=" + formatBytes(manifest.size)
+        Log.i(TAG, "Repair plan for " + file.path + ": kind=" + repairPlanKindName(plan.kind)
+                + ", local=" + formatBytes(target.size) + " remote=" + formatBytes(manifest.size)
                 + ", keep " + formatBytes(keptBytes) + ", download " + formatBytes(plan.transferBytes)
-                + " in " + plan.ranges.size() + " range request(s)");
+                + " in " + plan.ranges.size() + " range request(s), dirty " + formatBytes(plan.dirtyBytes)
+                + " in " + plan.dirtyRangeCount + " range(s)");
 
         long downloaded = 0;
         try (ParcelFileDescriptor pfd = context.getContentResolver().openFileDescriptor(target.uri, "rw")) {
@@ -429,9 +473,12 @@ final class HttpReceiver {
         }
     }
 
-    private static RepairManifest fetchManifest(String downloadUrl, Session session) throws Exception {
+    private static RepairManifest fetchManifest(String downloadUrl, Session session, long limitSize) throws Exception {
         String manifestUrl = downloadUrl + (downloadUrl.contains("?") ? "&" : "?")
                 + "manifest=blake3&block_size=" + DEFAULT_MANIFEST_BLOCK_SIZE;
+        if (limitSize > 0) {
+            manifestUrl += "&limit_size=" + limitSize;
+        }
         HttpURLConnection conn = open(manifestUrl);
         session.attach(conn);
         conn.setRequestProperty("Accept", "application/json");
@@ -462,6 +509,8 @@ final class HttpReceiver {
                         manifest.size = json.optLong("size");
                         manifest.modifiedMs = parseModTime(json.optString("mod_time"));
                         manifest.blockSize = normalizeManifestBlockSize(json.optLong("block_size", DEFAULT_MANIFEST_BLOCK_SIZE));
+                        manifest.manifestSize = json.optLong("manifest_size", 0);
+                        manifest.limitSize = json.optLong("limit_size", 0);
                     } else if ("block".equals(type)) {
                         manifest.blocks.add(new ManifestBlock(
                                 json.optInt("index"),
@@ -482,29 +531,83 @@ final class HttpReceiver {
         }
     }
 
+    private static RepairPlan planTailResume(Context context, DocumentInfo target, RepairManifest manifest) throws Exception {
+        if (target.size >= manifest.size) {
+            return null;
+        }
+        long blockSize = normalizeManifestBlockSize(manifest.blockSize);
+        long prefixSize = (target.size / blockSize) * blockSize;
+        List<ManifestBlock> localBlocks = localBlockHashes(context, target.uri, prefixSize, blockSize);
+        for (ManifestBlock local : localBlocks) {
+            ManifestBlock remote = findManifestBlock(manifest.blocks, local.index);
+            if (remote == null || remote.offset != local.offset || remote.size != local.size || !remote.hash.equals(local.hash)) {
+                return null;
+            }
+        }
+        long transferBytes = manifest.size - prefixSize;
+        List<RepairRange> ranges = new ArrayList<>();
+        if (transferBytes > 0) {
+            ranges.add(new RepairRange(prefixSize, transferBytes));
+        }
+        return new RepairPlan(ranges, transferBytes, 0, 0, REPAIR_PLAN_TAIL_RESUME);
+    }
+
+    private static ManifestBlock findManifestBlock(List<ManifestBlock> blocks, int index) {
+        for (ManifestBlock block : blocks) {
+            if (block.index == index) {
+                return block;
+            }
+        }
+        return null;
+    }
+
     private static RepairPlan planRepair(Context context, DocumentInfo target, RepairManifest manifest) throws Exception {
         List<ManifestBlock> localBlocks = localBlockHashes(context, target.uri, Math.min(Math.max(0, target.size), manifest.size), manifest.blockSize);
         List<RepairRange> ranges = new ArrayList<>();
+        List<RepairRange> dirtyRanges = new ArrayList<>();
         for (ManifestBlock remote : manifest.blocks) {
             boolean needsDownload = remote.offset + remote.size > target.size;
+            boolean dirty = false;
             if (!needsDownload) {
                 if (remote.index >= localBlocks.size()) {
                     needsDownload = true;
+                    dirty = true;
                 } else {
                     ManifestBlock local = localBlocks.get(remote.index);
                     needsDownload = local.size != remote.size || !remote.hash.equals(local.hash);
+                    dirty = needsDownload;
                 }
             }
             if (needsDownload) {
-                ranges.add(new RepairRange(remote.offset, remote.size));
+                RepairRange range = new RepairRange(remote.offset, remote.size);
+                ranges.add(range);
+                if (dirty) {
+                    dirtyRanges.add(range);
+                }
             }
         }
         ranges = mergeRanges(ranges);
+        dirtyRanges = mergeRanges(dirtyRanges);
         long transferBytes = 0;
         for (RepairRange range : ranges) {
             transferBytes += range.size;
         }
-        return new RepairPlan(ranges, transferBytes);
+        long dirtyBytes = 0;
+        for (RepairRange range : dirtyRanges) {
+            dirtyBytes += range.size;
+        }
+        int kind = transferBytes == 0 && target.size > manifest.size ? REPAIR_PLAN_TRUNCATE_ONLY : REPAIR_PLAN_SPARSE;
+        return new RepairPlan(ranges, transferBytes, dirtyBytes, dirtyRanges.size(), kind);
+    }
+
+    private static String repairPlanKindName(int kind) {
+        if (kind == REPAIR_PLAN_TAIL_RESUME) {
+            return "TailResume";
+        }
+        if (kind == REPAIR_PLAN_TRUNCATE_ONLY) {
+            return "TruncateOnly";
+        }
+        return "SparseRepair";
     }
 
     private static List<ManifestBlock> localBlockHashes(Context context, Uri uri, long fileSize, long blockSize) throws Exception {
@@ -1393,7 +1496,13 @@ final class HttpReceiver {
         long size;
         long modifiedMs;
         long blockSize;
+        long manifestSize;
+        long limitSize;
         final List<ManifestBlock> blocks = new ArrayList<>();
+
+        boolean isFull() {
+            return manifestSize <= 0 || manifestSize >= size;
+        }
     }
 
     private static final class ManifestBlock {
@@ -1427,10 +1536,16 @@ final class HttpReceiver {
     private static final class RepairPlan {
         final List<RepairRange> ranges;
         final long transferBytes;
+        final long dirtyBytes;
+        final int dirtyRangeCount;
+        final int kind;
 
-        RepairPlan(List<RepairRange> ranges, long transferBytes) {
+        RepairPlan(List<RepairRange> ranges, long transferBytes, long dirtyBytes, int dirtyRangeCount, int kind) {
             this.ranges = ranges;
             this.transferBytes = transferBytes;
+            this.dirtyBytes = dirtyBytes;
+            this.dirtyRangeCount = dirtyRangeCount;
+            this.kind = kind;
         }
     }
 

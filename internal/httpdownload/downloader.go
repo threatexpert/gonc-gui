@@ -459,11 +459,13 @@ func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, 
 }
 
 type blake3Manifest struct {
-	Path      string
-	Size      int64
-	ModTime   time.Time
-	BlockSize int64
-	Blocks    []blake3Block
+	Path         string
+	Size         int64
+	ModTime      time.Time
+	BlockSize    int64
+	ManifestSize int64
+	LimitSize    int64
+	Blocks       []blake3Block
 }
 
 type blake3Block struct {
@@ -479,12 +481,28 @@ type repairRange struct {
 	Size   int64
 }
 
+type repairPlanKind string
+
+const (
+	repairPlanSparse       repairPlanKind = "SparseRepair"
+	repairPlanTailResume   repairPlanKind = "TailResume"
+	repairPlanTruncateOnly repairPlanKind = "TruncateOnly"
+)
+
+type repairPlan struct {
+	Ranges          []repairRange
+	TransferBytes   int64
+	DirtyBytes      int64
+	DirtyRangeCount int
+	Kind            repairPlanKind
+}
+
 func (r repairRange) endInclusive() int64 {
 	return r.Offset + r.Size - 1
 }
 
 func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, localSize int64, sink Sink) (bool, int64, error) {
-	manifest, err := d.fetchManifest(ctx, client, downloadURL)
+	manifest, plan, err := d.prepareRepairPlan(ctx, client, downloadURL, localPath, file, localSize, sink)
 	if err != nil {
 		if errors.Is(err, errManifestUnsupported) {
 			emit(sink, "log", "info", fmt.Sprintf("Repair check unavailable for %s: server does not provide BLAKE3 manifest; falling back to full download", file.Path))
@@ -492,22 +510,13 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 		}
 		return false, 0, err
 	}
-	if manifest.Size != file.Size || !manifest.ModTime.Equal(file.ModTime) {
-		file.Size = manifest.Size
-		file.ModTime = manifest.ModTime
-	}
-
-	ranges, transferBytes, err := planRepair(localPath, localSize, manifest)
-	if err != nil {
-		return false, 0, err
-	}
-	if shouldRedownload(manifest.Size, transferBytes, len(ranges)) {
-		emit(sink, "log", "info", fmt.Sprintf("Repair check for %s: local=%s remote=%s, %d changed/missing range(s) totaling %s; full download selected",
-			file.Path, formatBytes(localSize), formatBytes(manifest.Size), len(ranges), formatBytes(transferBytes)))
+	if plan.Kind == repairPlanSparse && shouldRedownload(manifest.Size, plan.DirtyBytes, plan.DirtyRangeCount) {
+		emit(sink, "log", "info", fmt.Sprintf("Repair check for %s: local=%s remote=%s, %d dirty range(s) totaling %s; full download selected",
+			file.Path, formatBytes(localSize), formatBytes(manifest.Size), plan.DirtyRangeCount, formatBytes(plan.DirtyBytes)))
 		return false, 0, nil
 	}
 
-	keptBytes := manifest.Size - transferBytes
+	keptBytes := manifest.Size - plan.TransferBytes
 	if keptBytes < 0 {
 		keptBytes = 0
 	}
@@ -515,8 +524,8 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	if localSize > manifest.Size {
 		truncateBytes = localSize - manifest.Size
 	}
-	emit(sink, "log", "info", fmt.Sprintf("Repair plan for %s: local=%s remote=%s, keep %s, download %s in %d range request(s), truncate %s",
-		file.Path, formatBytes(localSize), formatBytes(manifest.Size), formatBytes(keptBytes), formatBytes(transferBytes), len(ranges), formatBytes(truncateBytes)))
+	emit(sink, "log", "info", fmt.Sprintf("Repair plan for %s: kind=%s, local=%s remote=%s, keep %s, download %s in %d range request(s), dirty %s in %d range(s), truncate %s",
+		file.Path, plan.Kind, formatBytes(localSize), formatBytes(manifest.Size), formatBytes(keptBytes), formatBytes(plan.TransferBytes), len(plan.Ranges), formatBytes(plan.DirtyBytes), plan.DirtyRangeCount, formatBytes(truncateBytes)))
 	d.setFileProgress(file.Path, keptBytes)
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
@@ -528,7 +537,7 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	}
 	defer out.Close()
 
-	for _, repairRange := range ranges {
+	for _, repairRange := range plan.Ranges {
 		if err := d.downloadRange(ctx, client, downloadURL, out, file.Path, repairRange, sink); err != nil {
 			if errors.Is(err, errRangeUnsupported) {
 				return false, 0, nil
@@ -545,11 +554,64 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	}
 	d.setFileProgress(file.Path, manifest.Size)
 	emit(sink, "log", "info", fmt.Sprintf("Repair completed for %s: %d range request(s), downloaded %s, final size %s",
-		file.Path, len(ranges), formatBytes(transferBytes), formatBytes(manifest.Size)))
-	return true, transferBytes, nil
+		file.Path, len(plan.Ranges), formatBytes(plan.TransferBytes), formatBytes(manifest.Size)))
+	return true, plan.TransferBytes, nil
 }
 
-func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, downloadURL string) (*blake3Manifest, error) {
+func (d *Downloader) prepareRepairPlan(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, localSize int64, sink Sink) (*blake3Manifest, repairPlan, error) {
+	manifestLimit := int64(0)
+	if localSize < file.Size {
+		manifestLimit = localSize
+	}
+
+	manifest, err := d.fetchManifest(ctx, client, downloadURL, manifestLimit)
+	if err != nil && manifestLimit > 0 && errors.Is(err, errManifestUnsupported) {
+		manifest, err = d.fetchManifest(ctx, client, downloadURL, 0)
+	}
+	if err != nil {
+		return nil, repairPlan{}, err
+	}
+	if manifest.Size != file.Size || !manifest.ModTime.Equal(file.ModTime) {
+		file.Size = manifest.Size
+		file.ModTime = manifest.ModTime
+	}
+
+	if localSize < manifest.Size {
+		plan, ok, err := planTailResume(localPath, localSize, manifest)
+		if err != nil {
+			return nil, repairPlan{}, err
+		}
+		if ok {
+			return manifest, plan, nil
+		}
+		emit(sink, "log", "info", fmt.Sprintf("Tail resume check for %s did not prove a clean prefix; requesting full repair manifest", file.Path))
+		if !manifest.isFull() {
+			manifest, err = d.fetchManifest(ctx, client, downloadURL, 0)
+			if err != nil {
+				return nil, repairPlan{}, err
+			}
+			if manifest.Size != file.Size || !manifest.ModTime.Equal(file.ModTime) {
+				file.Size = manifest.Size
+				file.ModTime = manifest.ModTime
+			}
+		}
+	}
+
+	plan, err := planRepair(localPath, localSize, manifest)
+	if err != nil {
+		return nil, repairPlan{}, err
+	}
+	return manifest, plan, nil
+}
+
+func (m *blake3Manifest) isFull() bool {
+	if m == nil {
+		return false
+	}
+	return m.ManifestSize <= 0 || m.ManifestSize >= m.Size
+}
+
+func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, downloadURL string, limitSize int64) (*blake3Manifest, error) {
 	manifestURL, err := url.Parse(downloadURL)
 	if err != nil {
 		return nil, err
@@ -557,6 +619,9 @@ func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, dow
 	q := manifestURL.Query()
 	q.Set("manifest", manifestAlgo)
 	q.Set("block_size", fmt.Sprintf("%d", defaultManifestBlockSize))
+	if limitSize > 0 {
+		q.Set("limit_size", fmt.Sprintf("%d", limitSize))
+	}
 	manifestURL.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL.String(), nil)
@@ -600,12 +665,14 @@ func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, dow
 		switch typed.Type {
 		case "file":
 			var header struct {
-				Type      string `json:"type"`
-				Path      string `json:"path"`
-				Size      int64  `json:"size"`
-				ModTime   string `json:"mod_time"`
-				Algo      string `json:"algo"`
-				BlockSize int64  `json:"block_size"`
+				Type         string `json:"type"`
+				Path         string `json:"path"`
+				Size         int64  `json:"size"`
+				ModTime      string `json:"mod_time"`
+				Algo         string `json:"algo"`
+				BlockSize    int64  `json:"block_size"`
+				ManifestSize int64  `json:"manifest_size"`
+				LimitSize    int64  `json:"limit_size"`
 			}
 			if err := json.Unmarshal(line, &header); err != nil || header.Algo != manifestAlgo {
 				return nil, errManifestUnsupported
@@ -618,6 +685,8 @@ func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, dow
 			manifest.Size = header.Size
 			manifest.ModTime = modTime
 			manifest.BlockSize = normalizeManifestBlockSize(header.BlockSize)
+			manifest.ManifestSize = header.ManifestSize
+			manifest.LimitSize = header.LimitSize
 		case "block":
 			var block blake3Block
 			if err := json.Unmarshal(line, &block); err != nil {
@@ -637,37 +706,91 @@ func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, dow
 	return &manifest, nil
 }
 
-func planRepair(localPath string, localSize int64, manifest *blake3Manifest) ([]repairRange, int64, error) {
+func planTailResume(localPath string, localSize int64, manifest *blake3Manifest) (repairPlan, bool, error) {
+	if manifest == nil || localSize >= manifest.Size {
+		return repairPlan{}, false, nil
+	}
+	blockSize := normalizeManifestBlockSize(manifest.BlockSize)
+	prefixSize := localSize / blockSize * blockSize
+	localBlocks, err := localBlockHashes(localPath, prefixSize, blockSize)
+	if err != nil {
+		return repairPlan{}, false, err
+	}
+	remoteBlocks := make(map[int]blake3Block, len(manifest.Blocks))
+	for _, block := range manifest.Blocks {
+		remoteBlocks[block.Index] = block
+	}
+	for _, localBlock := range localBlocks {
+		remoteBlock, ok := remoteBlocks[localBlock.Index]
+		if !ok || remoteBlock.Offset != localBlock.Offset || remoteBlock.Size != localBlock.Size || remoteBlock.Hash != localBlock.Hash {
+			return repairPlan{}, false, nil
+		}
+	}
+	transferBytes := manifest.Size - prefixSize
+	if transferBytes <= 0 {
+		return repairPlan{Kind: repairPlanTailResume}, true, nil
+	}
+	return repairPlan{
+		Ranges:        []repairRange{{Offset: prefixSize, Size: transferBytes}},
+		TransferBytes: transferBytes,
+		Kind:          repairPlanTailResume,
+	}, true, nil
+}
+
+func planRepair(localPath string, localSize int64, manifest *blake3Manifest) (repairPlan, error) {
 	compareSize := localSize
 	if compareSize > manifest.Size {
 		compareSize = manifest.Size
 	}
 	localBlocks, err := localBlockHashes(localPath, compareSize, manifest.BlockSize)
 	if err != nil {
-		return nil, 0, err
+		return repairPlan{}, err
 	}
 
 	var ranges []repairRange
+	var dirtyRanges []repairRange
 	for _, remoteBlock := range manifest.Blocks {
 		needsDownload := remoteBlock.Offset+remoteBlock.Size > localSize
+		dirty := false
 		if !needsDownload {
 			if remoteBlock.Index >= len(localBlocks) {
 				needsDownload = true
+				dirty = true
 			} else {
 				localBlock := localBlocks[remoteBlock.Index]
 				needsDownload = localBlock.Size != remoteBlock.Size || localBlock.Hash != remoteBlock.Hash
+				dirty = needsDownload
 			}
 		}
 		if needsDownload {
-			ranges = append(ranges, repairRange{Offset: remoteBlock.Offset, Size: remoteBlock.Size})
+			repairRange := repairRange{Offset: remoteBlock.Offset, Size: remoteBlock.Size}
+			ranges = append(ranges, repairRange)
+			if dirty {
+				dirtyRanges = append(dirtyRanges, repairRange)
+			}
 		}
 	}
 	ranges = mergeRanges(ranges)
+	dirtyRanges = mergeRanges(dirtyRanges)
 	var transferBytes int64
 	for _, repairRange := range ranges {
 		transferBytes += repairRange.Size
 	}
-	return ranges, transferBytes, nil
+	var dirtyBytes int64
+	for _, repairRange := range dirtyRanges {
+		dirtyBytes += repairRange.Size
+	}
+	kind := repairPlanSparse
+	if transferBytes == 0 && localSize > manifest.Size {
+		kind = repairPlanTruncateOnly
+	}
+	return repairPlan{
+		Ranges:          ranges,
+		TransferBytes:   transferBytes,
+		DirtyBytes:      dirtyBytes,
+		DirtyRangeCount: len(dirtyRanges),
+		Kind:            kind,
+	}, nil
 }
 
 func localBlockHashes(localPath string, fileSize, blockSize int64) ([]blake3Block, error) {

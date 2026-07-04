@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -158,6 +159,174 @@ func TestDownloaderRepairsDirtyBlockWithBlake3Manifest(t *testing.T) {
 	}
 	if len(ranges) != 1 {
 		t.Fatalf("range requests = %v, want one repair range", ranges)
+	}
+}
+
+func TestDownloaderTailResumeBypassesFullRedownloadThreshold(t *testing.T) {
+	blockSize := int64(64 * 1024)
+	content := make([]byte, 5*int(blockSize))
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	modTime := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	localSize := blockSize + blockSize/2
+	var manifestLimit string
+	var ranges []string
+	var fullDownloads int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			if r.URL.Query().Get("manifest") == "blake3" {
+				manifestLimit = r.URL.Query().Get("limit_size")
+				writeBlake3ManifestLimited(t, w, "/file.bin", content, modTime, blockSize, localSize)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"name":"file.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/file.bin"}`+"\n", modTime.Format(time.RFC3339Nano), len(content))
+			return
+		}
+		if r.URL.Path != "/file.bin" {
+			http.NotFound(w, r)
+			return
+		}
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			ranges = append(ranges, rangeHeader)
+			wantRange := fmt.Sprintf("bytes=%d-%d", blockSize, len(content)-1)
+			if rangeHeader != wantRange {
+				t.Fatalf("Range = %q, want %s", rangeHeader, wantRange)
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", blockSize, len(content)-1, len(content)))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(content[blockSize:])
+			return
+		}
+		fullDownloads++
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	localPath := filepath.Join(root, "file.bin")
+	if err := os.WriteFile(localPath, content[:localSize], 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := downloader.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("downloaded content mismatch")
+	}
+	if manifestLimit != fmt.Sprint(localSize) {
+		t.Fatalf("manifest limit_size = %q, want %d", manifestLimit, localSize)
+	}
+	if len(ranges) != 1 {
+		t.Fatalf("range requests = %v, want one tail range", ranges)
+	}
+	if fullDownloads != 0 {
+		t.Fatalf("full downloads = %d, want 0", fullDownloads)
+	}
+}
+
+func TestDownloaderSparseRepairThresholdIgnoresMissingTail(t *testing.T) {
+	blockSize := int64(64 * 1024)
+	content := make([]byte, 8*int(blockSize))
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	modTime := time.Date(2026, 7, 4, 13, 0, 0, 0, time.UTC)
+	localSize := 3 * blockSize
+	var ranges []string
+	var fullDownloads int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			if r.URL.Query().Get("manifest") == "blake3" {
+				if r.URL.Query().Get("limit_size") != "" {
+					writeBlake3ManifestLimited(t, w, "/file.bin", content, modTime, blockSize, localSize)
+					return
+				}
+				writeBlake3Manifest(t, w, "/file.bin", content, modTime, blockSize)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"name":"file.bin","is_dir":false,"mod_time":"%s","size":%d,"path":"/file.bin"}`+"\n", modTime.Format(time.RFC3339Nano), len(content))
+			return
+		}
+		if r.URL.Path != "/file.bin" {
+			http.NotFound(w, r)
+			return
+		}
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			ranges = append(ranges, rangeHeader)
+			switch rangeHeader {
+			case fmt.Sprintf("bytes=%d-%d", 0, blockSize-1):
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", 0, blockSize-1, len(content)))
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(content[:blockSize])
+			case fmt.Sprintf("bytes=%d-%d", localSize, len(content)-1):
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", localSize, len(content)-1, len(content)))
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(content[localSize:])
+			default:
+				t.Fatalf("unexpected Range = %q", rangeHeader)
+			}
+			return
+		}
+		fullDownloads++
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	root := t.TempDir()
+	localPath := filepath.Join(root, "file.bin")
+	localContent := append([]byte(nil), content[:localSize]...)
+	localContent[0] ^= 0xff
+	if err := os.WriteFile(localPath, localContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	downloader, err := New(Config{
+		ServerURL:   server.URL,
+		SaveDir:     root,
+		Concurrency: 1,
+		Resume:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := downloader.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("downloaded content mismatch")
+	}
+	wantRanges := []string{
+		fmt.Sprintf("bytes=%d-%d", 0, blockSize-1),
+		fmt.Sprintf("bytes=%d-%d", localSize, len(content)-1),
+	}
+	if !reflect.DeepEqual(ranges, wantRanges) {
+		t.Fatalf("range requests = %v, want %v", ranges, wantRanges)
+	}
+	if fullDownloads != 0 {
+		t.Fatalf("full downloads = %d, want 0", fullDownloads)
 	}
 }
 
@@ -493,6 +662,26 @@ func writeBlake3Manifest(t *testing.T, w http.ResponseWriter, remotePath string,
 		end := offset + int(blockSize)
 		if end > len(content) {
 			end = len(content)
+		}
+		sum := blake3.Sum256(content[offset:end])
+		_, _ = fmt.Fprintf(w, `{"type":"block","index":%d,"offset":%d,"size":%d,"hash":%q}`+"\n",
+			index, offset, end-offset, hex.EncodeToString(sum[:]))
+	}
+}
+
+func writeBlake3ManifestLimited(t *testing.T, w http.ResponseWriter, remotePath string, content []byte, modTime time.Time, blockSize, limitSize int64) {
+	t.Helper()
+	manifestSize := ((limitSize + blockSize - 1) / blockSize) * blockSize
+	if manifestSize > int64(len(content)) {
+		manifestSize = int64(len(content))
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	_, _ = fmt.Fprintf(w, `{"type":"file","path":%q,"size":%d,"mod_time":%q,"algo":"blake3","block_size":%d,"manifest_size":%d,"limit_size":%d}`+"\n",
+		remotePath, len(content), modTime.Format(time.RFC3339Nano), blockSize, manifestSize, limitSize)
+	for index, offset := 0, 0; offset < int(manifestSize); index, offset = index+1, offset+int(blockSize) {
+		end := offset + int(blockSize)
+		if end > int(manifestSize) {
+			end = int(manifestSize)
 		}
 		sum := blake3.Sum256(content[offset:end])
 		_, _ = fmt.Fprintf(w, `{"type":"block","index":%d,"offset":%d,"size":%d,"hash":%q}`+"\n",
