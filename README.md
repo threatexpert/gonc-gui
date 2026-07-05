@@ -111,12 +111,39 @@ configure routes and DNS protection.
 ## Privacy And Security
 
 - Gonc does not require user accounts.
-- Files are not uploaded to cloud storage by the GUI.
-- The shared passphrase is the connection secret. Gonc derives the TLS
-  certificates from it and requires mutual authentication, so share the
-  passphrase through a trusted channel.
-- P2P connection metadata is encrypted before being sent through signaling.
+- File data is transferred only after the TLS 1.3 secure connection is
+  established. Even when a SOCKS5 server is used as a relay path, it only sees
+  TLS-encrypted traffic and cannot read or tamper with file contents.
+- The shared passphrase is the connection secret. Anyone who has it can connect
+  and receive your shared files, so use the randomly generated high-strength
+  passphrase each time and do not reuse passphrases that have already been
+  shared.
+- Gonc derives the TLS certificates from the passphrase and requires mutual
+  authentication, so no CA certificate is required.
+- Gonc uses public third-party STUN servers to discover NAT addresses and public
+  MQTT servers for signaling. Peers meet on MQTT using a passphrase-derived
+  hash, and network addresses are exchanged as AES-GCM encrypted data derived
+  from the passphrase. MQTT servers cannot see the passphrase or decrypt the
+  exchanged addresses.
 - File repair uses BLAKE3 block hashes to avoid trusting stale local data.
+
+Public servers used for STUN and signaling:
+
+```text
+STUN:
+tcp://turn.cloudflare.com:80
+udp://turn.cloudflare.com:53
+udp://stun.l.google.com:19302
+stun.gonc.cc:3478
+global.turn.twilio.com:3478
+stun.nextcloud.com:443
+
+MQTT:
+tcp://broker.hivemq.com:1883
+tcp://broker.emqx.io:1883
+tcp://test.mosquitto.org:1883
+tcp://mqtt.gonc.cc:1883
+```
 
 ## Troubleshooting
 
