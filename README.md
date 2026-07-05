@@ -7,7 +7,7 @@ files directly whenever the network allows it. No account, no cloud upload, no
 file size gate. It also includes a VPN mode for building an encrypted tunnel
 between your own devices.
 
-![Gonc desktop file sender](ui-pc1.jpg)
+![Gonc desktop file sender](ui-pc.gif)
 
 <p>
   <img src="ui-android1.jpg" alt="Gonc Android file sender" width="360">
