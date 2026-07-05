@@ -19,16 +19,19 @@ between your own devices.
 - **Send files and folders directly** - Share multiple files or whole
   directories between desktop and Android.
 - **No accounts** - A shared passphrase is enough to connect both sides.
-- **End-to-end encrypted** - The passphrase is used for mutual authentication
-  and encrypted connection setup.
+- **End-to-end encrypted** - Traffic is protected by TLS 1.3. The TLS
+  certificates are automatically derived from the shared passphrase and mutual
+  authentication is mandatory, so no CA certificate is required and
+  man-in-the-middle eavesdropping or tampering is prevented.
 - **True P2P when connected** - A successful transfer uses a real peer-to-peer
   connection. Gonc does not provide an official relay service by default.
 - **Reliable receive mode** - Browse the remote file list, download everything
   or selected paths, and resume interrupted downloads with BLAKE3 block repair.
 - **Android and desktop UI** - The same workflow is available on Windows and
   Android.
-- **VPN tunnel** - Run a VPN server on one side and connect from another device
-  with saved profiles and QR import/export.
+- **Easy VPN deployment** - Run `gonc -p2p <passphrase> -linkagent` on many
+  device architectures, then connect remotely from the desktop or Android VPN
+  client.
 - **IPv4 and IPv6 aware** - VPN mode supports IPv6 routing checks and DNS leak
   protection options on Windows.
 
@@ -86,7 +89,14 @@ instead of blindly trusting the local file size.
 
 ## VPN Tunnel
 
-Gonc can also run a VPN tunnel between devices:
+Gonc can also run a VPN tunnel between devices. Deploying the server is meant to
+be simple: on a remote device, run:
+
+```text
+gonc -p2p <passphrase> -linkagent
+```
+
+Then connect to it from the desktop or Android VPN client.
 
 - **VPN Server** runs a `linkagent` endpoint and can expose this device as the
   traffic exit.
@@ -102,8 +112,9 @@ configure routes and DNS protection.
 
 - Gonc does not require user accounts.
 - Files are not uploaded to cloud storage by the GUI.
-- The shared passphrase is the connection secret; share it through a trusted
-  channel.
+- The shared passphrase is the connection secret. Gonc derives the TLS
+  certificates from it and requires mutual authentication, so share the
+  passphrase through a trusted channel.
 - P2P connection metadata is encrypted before being sent through signaling.
 - File repair uses BLAKE3 block hashes to avoid trusting stale local data.
 
