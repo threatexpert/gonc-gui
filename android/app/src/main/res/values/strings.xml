@@ -69,6 +69,13 @@
     <string name="vpn_notification_channel">Gonc VPN</string>
     <string name="vpn_status_connecting">Connecting VPN</string>
     <string name="vpn_status_connected">VPN connected</string>
+    <string name="vpn_service_enabled">VPN enabled</string>
+    <string name="vpn_service_starting">VPN starting</string>
+    <string name="vpn_service_socks_ready">SOCKS5 ready</string>
+    <string name="vpn_service_stopping">VPN stopping</string>
+    <string name="vpn_service_reconnecting">VPN reconnecting</string>
+    <string name="vpn_service_disconnected">VPN disconnected</string>
+    <string name="vpn_service_error">VPN connection problem</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
     <string name="vpn_route_ipv6_hint">When enabled, the app checks remote IPv6 first and only adds IPv6 routes if available.</string>
     <string name="vpn_endpoint">SOCKS5 endpoint</string>
@@ -88,6 +95,7 @@
     <string name="vpn_profile_name">Name</string>
     <string name="vpn_profile_name_hint">Profile name</string>
     <string name="vpn_active_profile">Profile: %1$s</string>
+    <string name="vpn_p2p_status_line">P2P: %1$s</string>
     <string name="vpn_dns_servers">DNS</string>
     <string name="vpn_dns_hint">One DNS server per line. Leave blank to use Google DNS.</string>
     <string name="vpn_route_cidrs">Route CIDR</string>

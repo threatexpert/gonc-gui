@@ -62,8 +62,11 @@ final class VpnClientController {
     private long lastLogId;
     private boolean lastRenderedRunning;
     private String lastRenderedStatus = "";
+    private boolean lastRenderedEndpointVisible;
+    private long lastRenderedP2PReportVersion;
     private View sessionDotView;
-    private TextView sessionLabelView;
+    private TextView sessionServiceLabelView;
+    private TextView sessionP2PLabelView;
     private Button sessionDisconnectButton;
     private GoncVpnState.Listener listener;
 
@@ -135,6 +138,8 @@ final class VpnClientController {
         passwordVisible = false;
         lastRenderedRunning = GoncVpnState.isRunning();
         lastRenderedStatus = GoncVpnState.status();
+        lastRenderedEndpointVisible = hasVpnEndpoint();
+        lastRenderedP2PReportVersion = GoncVpnState.p2pReportVersion();
     }
 
     TransferMetrics metrics() {
@@ -170,10 +175,13 @@ final class VpnClientController {
         UiKit u = host.ui();
         lastRenderedRunning = GoncVpnState.isRunning();
         lastRenderedStatus = GoncVpnState.status();
+        lastRenderedEndpointVisible = hasVpnEndpoint();
+        lastRenderedP2PReportVersion = GoncVpnState.p2pReportVersion();
         LinearLayout card = u.card();
         boolean running = GoncVpnState.isRunning();
         String error = GoncVpnState.error().trim();
         if (running) {
+            card.addView(activeProfileBadge(), u.blockParams(0));
             card.addView(sessionBarView());
             if (!error.isEmpty()) {
                 card.addView(errorBanner(error), u.blockParams(u.dp(8)));
@@ -181,7 +189,8 @@ final class VpnClientController {
             return card;
         }
         sessionDotView = null;
-        sessionLabelView = null;
+        sessionServiceLabelView = null;
+        sessionP2PLabelView = null;
         sessionDisconnectButton = null;
 
         // Surface the last failure (e.g. a quick exit from a bad link/extra-args
@@ -226,16 +235,36 @@ final class VpnClientController {
     private boolean needsStateStructureRender() {
         boolean running = GoncVpnState.isRunning();
         String status = GoncVpnState.status();
+        boolean endpointVisible = hasVpnEndpoint();
+        long p2pReportVersion = GoncVpnState.p2pReportVersion();
         boolean statusStructureChanged = running != lastRenderedRunning
+                || !safeEquals(status, lastRenderedStatus)
+                || endpointVisible != lastRenderedEndpointVisible
+                || p2pReportVersion != lastRenderedP2PReportVersion
                 || GoncVpnState.ERROR.equals(status)
                 || GoncVpnState.ERROR.equals(lastRenderedStatus);
         if (statusStructureChanged) {
             lastRenderedRunning = running;
             lastRenderedStatus = status;
+            lastRenderedEndpointVisible = endpointVisible;
+            lastRenderedP2PReportVersion = p2pReportVersion;
             return true;
         }
         lastRenderedStatus = status;
+        lastRenderedEndpointVisible = endpointVisible;
+        lastRenderedP2PReportVersion = p2pReportVersion;
         return false;
+    }
+
+    private boolean hasVpnEndpoint() {
+        return !GoncVpnState.endpoint().trim().isEmpty();
+    }
+
+    private boolean safeEquals(String left, String right) {
+        if (left == null) {
+            return right == null;
+        }
+        return left.equals(right);
     }
 
     void updateDynamicViews() {
@@ -243,8 +272,11 @@ final class VpnClientController {
         if (sessionDotView != null) {
             sessionDotView.setBackground(u.rounded(connectionColor(), u.dp(6), 0, 0));
         }
-        if (sessionLabelView != null) {
-            sessionLabelView.setText(sessionLabelText());
+        if (sessionServiceLabelView != null) {
+            sessionServiceLabelView.setText(serviceLabel());
+        }
+        if (sessionP2PLabelView != null) {
+            sessionP2PLabelView.setText(string(R.string.vpn_p2p_status_line, p2pLabel()));
         }
         if (sessionDisconnectButton != null) {
             u.setControlEnabled(sessionDisconnectButton, !GoncVpnState.STOPPING.equals(GoncVpnState.status()));
@@ -571,12 +603,20 @@ final class VpnClientController {
         sessionDotView = dot;
         row.addView(dot, new LinearLayout.LayoutParams(u.dp(12), u.dp(12)));
 
-        TextView label = u.text(sessionLabelText(), 14, u.ink(), Typeface.BOLD);
-        label.setSingleLine(false);
-        sessionLabelView = label;
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-        labelParams.setMargins(u.dp(10), 0, u.dp(8), 0);
-        row.addView(label, labelParams);
+        LinearLayout labels = u.column();
+        TextView service = u.text(serviceLabel(), 14, u.ink(), Typeface.BOLD);
+        service.setSingleLine(false);
+        sessionServiceLabelView = service;
+        labels.addView(service);
+
+        TextView p2p = u.text(string(R.string.vpn_p2p_status_line, p2pLabel()), 12, u.muted(), Typeface.NORMAL);
+        p2p.setSingleLine(false);
+        sessionP2PLabelView = p2p;
+        labels.addView(p2p);
+
+        LinearLayout.LayoutParams labelsParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        labelsParams.setMargins(u.dp(10), 0, u.dp(8), 0);
+        row.addView(labels, labelsParams);
 
         Button disconnect = u.dangerButton(string(R.string.disconnect));
         disconnect.setTextSize(14);
@@ -589,12 +629,20 @@ final class VpnClientController {
         return row;
     }
 
-    private String sessionLabelText() {
+    private View activeProfileBadge() {
+        UiKit u = host.ui();
+        TextView profile = u.text(activeProfileName(), 11, Color.rgb(121, 139, 163), Typeface.NORMAL);
+        profile.setSingleLine(true);
+        profile.setPadding(u.dp(2), 0, u.dp(2), u.dp(6));
+        return profile;
+    }
+
+    private String activeProfileName() {
         String activeProfile = GoncVpnState.profileName();
         if (activeProfile.trim().isEmpty()) {
             activeProfile = currentProfile().displayName(host.context());
         }
-        return connectionLabel() + "\n" + string(R.string.vpn_active_profile, activeProfile);
+        return activeProfile;
     }
 
     private View errorBanner(String message) {
@@ -611,8 +659,43 @@ final class VpnClientController {
         return host.ui().connectionLabel(metrics());
     }
 
+    private String p2pLabel() {
+        return connectionLabel();
+    }
+
+    private String serviceLabel() {
+        String status = GoncVpnState.status();
+        if (GoncVpnState.ERROR.equals(status)) {
+            return string(R.string.connection_failed);
+        }
+        if (GoncVpnState.STOPPING.equals(status)) {
+            return string(R.string.vpn_service_stopping);
+        }
+        if (GoncVpnState.systemVpnReady()) {
+            return string(R.string.vpn_service_enabled);
+        }
+        if (GoncVpnState.tunnelOnly() && GoncVpnState.socksReady()) {
+            return string(R.string.vpn_service_socks_ready);
+        }
+        return string(R.string.vpn_service_starting);
+    }
+
     private int connectionColor() {
-        return host.ui().connectionColor(host.ui().connectionState(metrics()));
+        String status = GoncVpnState.status();
+        if (GoncVpnState.ERROR.equals(status)) {
+            return Color.rgb(201, 63, 63);
+        }
+        if (GoncVpnState.STOPPING.equals(status)) {
+            return Color.rgb(222, 153, 42);
+        }
+        String p2pState = host.ui().connectionState(metrics());
+        if ("failed".equals(p2pState)) {
+            return Color.rgb(201, 63, 63);
+        }
+        if (GoncVpnState.serviceReady() && "connected".equals(p2pState)) {
+            return Color.rgb(18, 151, 101);
+        }
+        return Color.rgb(222, 153, 42);
     }
 
     // --- scan + QR --------------------------------------------------------

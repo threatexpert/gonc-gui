@@ -1264,7 +1264,7 @@ final class ReceiveController {
                         return;
                     }
                     host.updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
-                    host.requestBackgroundRender();
+                    host.requestRender();
                     host.refreshForegroundService();
                 });
             }

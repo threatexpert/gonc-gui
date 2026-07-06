@@ -38,6 +38,9 @@ final class GoncVpnState {
     private static String peer = "-";
     private static String peerIpv6 = "-";
     private static String profileName = "";
+    private static boolean tunnelOnly;
+    private static boolean systemVpnReady;
+    private static long p2pReportVersion;
     private static long inBytes;
     private static long outBytes;
     private static double inBps;
@@ -103,6 +106,26 @@ final class GoncVpnState {
         return profileName;
     }
 
+    static synchronized long p2pReportVersion() {
+        return p2pReportVersion;
+    }
+
+    static synchronized boolean tunnelOnly() {
+        return tunnelOnly;
+    }
+
+    static synchronized boolean socksReady() {
+        return !endpoint.trim().isEmpty();
+    }
+
+    static synchronized boolean systemVpnReady() {
+        return systemVpnReady;
+    }
+
+    static synchronized boolean serviceReady() {
+        return systemVpnReady || (tunnelOnly && !endpoint.trim().isEmpty());
+    }
+
     static synchronized long inBytes() {
         return inBytes;
     }
@@ -137,7 +160,7 @@ final class GoncVpnState {
         return result;
     }
 
-    static void startConnecting(String nextProfileName) {
+    static void startConnecting(String nextProfileName, boolean nextTunnelOnly) {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             status = CONNECTING;
@@ -151,6 +174,8 @@ final class GoncVpnState {
             peer = "-";
             peerIpv6 = "-";
             profileName = nextProfileName == null ? "" : nextProfileName.trim();
+            tunnelOnly = nextTunnelOnly;
+            systemVpnReady = false;
             inBytes = 0;
             outBytes = 0;
             inBps = 0;
@@ -178,6 +203,8 @@ final class GoncVpnState {
                 peer = "-";
                 peerIpv6 = "-";
                 profileName = "";
+                tunnelOnly = false;
+                systemVpnReady = false;
                 inBytes = 0;
                 outBytes = 0;
                 inBps = 0;
@@ -219,6 +246,7 @@ final class GoncVpnState {
             if (nextPeer != null && !nextPeer.trim().isEmpty()) {
                 peer = nextPeer.trim();
             }
+            p2pReportVersion++;
             snapshot = listener;
         }
         if (snapshot != null) {
@@ -252,11 +280,26 @@ final class GoncVpnState {
         }
     }
 
+    static void setSystemVpnReady(boolean ready) {
+        Listener snapshot;
+        synchronized (GoncVpnState.class) {
+            systemVpnReady = ready;
+            if (ready) {
+                status = CONNECTED;
+            }
+            snapshot = listener;
+        }
+        if (snapshot != null) {
+            snapshot.onVpnStateChanged();
+        }
+    }
+
     static void setError(String message) {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             status = ERROR;
             error = message == null ? "" : message;
+            systemVpnReady = false;
             snapshot = listener;
         }
         if (snapshot != null) {

@@ -120,7 +120,7 @@ public final class GoncVpnService extends VpnService {
                 }
                 GoncCrashReporter.stage(this, "start gonc tunnel");
                 TunnelReadySignal tunnelReady = new TunnelReadySignal();
-                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback(tunnelReady));
+                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback(tunnelReady, tunnelOnly));
                 boolean stopSessionNow = false;
                 synchronized (lock) {
                     if (stopRequested) {
@@ -142,7 +142,7 @@ public final class GoncVpnService extends VpnService {
 
                 if (tunnelOnly) {
                     // No system VPN interface / tun2socks: the SOCKS5 tunnel is the whole
-                    // job. We report "connected" once gonc reports the SOCKS5 endpoint ready.
+                    // job. SOCKS5 readiness is the point where the tunnel is usable.
                     GoncVpnState.setPeerIpv6("-");
                     return;
                 }
@@ -200,6 +200,7 @@ public final class GoncVpnService extends VpnService {
                         shouldStopAfterStart = stopRequested;
                     }
                     log("info", "tun2socks started");
+                    markConnected();
                 } finally {
                     if (!startedTun2Socks) {
                         closeDetachedFd(tun2socksFd);
@@ -482,7 +483,7 @@ public final class GoncVpnService extends VpnService {
         return source.trim().split("\\r?\\n");
     }
 
-    private Callback vpnCallback(TunnelReadySignal tunnelReady) {
+    private Callback vpnCallback(TunnelReadySignal tunnelReady, boolean tunnelOnly) {
         return new Callback() {
             @Override
             public void event(String level, String message) {
@@ -499,12 +500,7 @@ public final class GoncVpnService extends VpnService {
                 if (isStopRequested()) {
                     return;
                 }
-                if ("connected".equalsIgnoreCase(status)) {
-                    markConnected();
-                } else {
-                    // P2P link is not (yet) up: show "connecting" with a yellow dot.
-                    updateNotification(connectingText());
-                }
+                updateNotification(notificationStatusText());
             }
 
             @Override
@@ -517,7 +513,10 @@ public final class GoncVpnService extends VpnService {
                 if (endpoint != null && endpoint.startsWith("socks5://")) {
                     GoncVpnState.setEndpoint(endpoint);
                     tunnelReady.markReady(endpoint);
-                    markConnected();
+                    if (tunnelOnly) {
+                        GoncVpnState.setStatus(GoncVpnState.CONNECTED);
+                        updateNotification(notificationStatusText());
+                    }
                 }
             }
 
@@ -585,18 +584,59 @@ public final class GoncVpnService extends VpnService {
                 return;
             }
         }
-        GoncVpnState.setStatus(GoncVpnState.CONNECTED);
-        updateNotification(connectedText());
+        GoncVpnState.setSystemVpnReady(true);
+        updateNotification(notificationStatusText());
     }
 
     private String connectingText() {
         // yellow circle U+1F7E1
-        return new String(Character.toChars(0x1F7E1)) + " " + getString(R.string.vpn_status_connecting);
+        return new String(Character.toChars(0x1F7E1)) + " " + getString(R.string.vpn_service_starting);
     }
 
-    private String connectedText() {
-        // green circle U+1F7E2
-        return new String(Character.toChars(0x1F7E2)) + " " + getString(R.string.vpn_status_connected);
+    private String notificationStatusText() {
+        String status = GoncVpnState.status();
+        if (GoncVpnState.ERROR.equals(status)) {
+            return redText(R.string.vpn_service_error);
+        }
+        if (GoncVpnState.STOPPING.equals(status)) {
+            return yellowText(R.string.vpn_service_stopping);
+        }
+        String p2p = normalizeP2PStatus(GoncVpnState.p2pStatus());
+        if (p2p.startsWith("error") || p2p.startsWith("failed")) {
+            return redText(R.string.vpn_service_error);
+        }
+        if ("connected".equals(p2p)) {
+            if (GoncVpnState.systemVpnReady()) {
+                return greenText(R.string.vpn_status_connected);
+            }
+            if (GoncVpnState.tunnelOnly() && GoncVpnState.socksReady()) {
+                return greenText(R.string.vpn_service_socks_ready);
+            }
+            return yellowText(R.string.vpn_service_starting);
+        }
+        if (GoncVpnState.serviceReady()) {
+            if ("disconnected".equals(p2p) || "idle".equals(p2p) || "stopped".equals(p2p)) {
+                return yellowText(R.string.vpn_service_disconnected);
+            }
+            return yellowText(R.string.vpn_service_reconnecting);
+        }
+        return yellowText(R.string.vpn_service_starting);
+    }
+
+    private String normalizeP2PStatus(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private String yellowText(int resId) {
+        return new String(Character.toChars(0x1F7E1)) + " " + getString(resId);
+    }
+
+    private String greenText(int resId) {
+        return new String(Character.toChars(0x1F7E2)) + " " + getString(resId);
+    }
+
+    private String redText(int resId) {
+        return new String(Character.toChars(0x1F534)) + " " + getString(resId);
     }
 
     private void stopVpn() {

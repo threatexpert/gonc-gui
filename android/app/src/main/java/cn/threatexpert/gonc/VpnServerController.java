@@ -564,7 +564,7 @@ final class VpnServerController {
                         return;
                     }
                     host.updateMetricsFromReport(metrics, topic, reportStatus, network, mode, peer);
-                    host.requestBackgroundRender();
+                    host.requestRender();
                     host.refreshForegroundService();
                 });
             }

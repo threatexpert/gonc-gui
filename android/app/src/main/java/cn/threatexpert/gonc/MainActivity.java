@@ -421,13 +421,16 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void renderAfterBackgroundUpdate() {
-        if (System.currentTimeMillis() < pauseAutoRenderUntilMs) {
+        long now = System.currentTimeMillis();
+        if (now < pauseAutoRenderUntilMs) {
+            scheduleBackgroundRender(Math.max(50, pauseAutoRenderUntilMs - now));
             return;
         }
         updateBackgroundDynamicViews();
     }
 
     private void updateBackgroundDynamicViews() {
+        vpnClient.syncLogs();
         receiveController.updateDynamicViews();
         vpnClient.updateDynamicViews();
         if (activitySummaryTextView != null) {
@@ -706,7 +709,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         if (vpnMode && !GoncVpnState.endpoint().trim().isEmpty()) {
             box.addView(metricBox(getString(R.string.vpn_endpoint), GoncVpnState.endpoint(), METRIC_REF_ENDPOINT), blockParams(dp(8)));
-        } else if (!receiveController.endpoint().trim().isEmpty()) {
+        } else if (isReceiveMode() && !receiveController.endpoint().trim().isEmpty()) {
             box.addView(metricBox(getString(R.string.file_endpoint), receiveController.endpoint(), METRIC_REF_ENDPOINT), blockParams(dp(8)));
         }
         return box;
@@ -773,8 +776,12 @@ public final class MainActivity extends Activity implements ModuleHost {
             activityPeerIpv6ValueView.setText(displayPeerIpv6(GoncVpnState.peerIpv6()));
         }
         if (activityEndpointValueView != null) {
-            activityEndpointValueView.setText(vpnMode ? GoncVpnState.endpoint() : receiveController.endpoint());
+            activityEndpointValueView.setText(vpnMode ? GoncVpnState.endpoint() : (isReceiveMode() ? receiveController.endpoint() : ""));
         }
+    }
+
+    private boolean isReceiveMode() {
+        return !vpnMode && !vpnServerMode && !sendMode;
     }
 
     private String displayPeerIpv6(String value) {
@@ -963,7 +970,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         intent.putExtra(GoncVpnService.EXTRA_EXTRA_ARGS, profile.extraArgs == null ? "" : profile.extraArgs.trim());
         intent.putExtra(GoncVpnService.EXTRA_TUNNEL_ONLY, profile.tunnelOnly);
         appendLog("info", "VPN start requested: " + profile.displayName(this) + (profile.tunnelOnly ? " (tunnel only)" : ""));
-        GoncVpnState.startConnecting(profile.displayName(this));
+        GoncVpnState.startConnecting(profile.displayName(this), profile.tunnelOnly);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {
@@ -1486,6 +1493,10 @@ public final class MainActivity extends Activity implements ModuleHost {
             renderAfterBackgroundUpdate();
             return;
         }
+        scheduleBackgroundRender(Math.max(50, BACKGROUND_RENDER_INTERVAL_MS - elapsed));
+    }
+
+    private void scheduleBackgroundRender(long delayMs) {
         if (backgroundRenderPending) {
             return;
         }
@@ -1494,7 +1505,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             backgroundRenderPending = false;
             lastBackgroundRenderMs = System.currentTimeMillis();
             renderAfterBackgroundUpdate();
-        }, Math.max(50, BACKGROUND_RENDER_INTERVAL_MS - elapsed));
+        }, delayMs);
     }
 
     @Override
