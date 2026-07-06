@@ -558,12 +558,19 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private View metricBox(String label, String value, int ref) {
-        LinearLayout box = column();
+        LinearLayout box = row();
+        box.setGravity(Gravity.CENTER_VERTICAL);
         box.setPadding(dp(10), dp(8), dp(10), dp(8));
         box.setBackground(rounded(Color.rgb(251, 253, 255), dp(7), Color.rgb(226, 232, 240), 1));
-        box.addView(text(label, 11, muted(), Typeface.BOLD));
+        TextView title = text(label, 11, muted(), Typeface.BOLD);
+        title.setSingleLine(false);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2);
+        titleParams.setMargins(0, 0, dp(8), 0);
+        box.addView(title, titleParams);
         TextView content = text(value, 14, ink(), Typeface.BOLD);
         bindMetricRef(ref, content);
+        content.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        content.setSingleLine(false);
         content.setTextIsSelectable(true);
         content.setOnLongClickListener(v -> {
             pauseAutoRender();
@@ -574,7 +581,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             }
             return false;
         });
-        box.addView(content);
+        box.addView(content, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3));
         return box;
     }
 
