@@ -1,6 +1,7 @@
 ﻿import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent} from 'react';
 import QRCode from 'qrcode';
-import jsQR from 'jsqr';
+import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader';
+import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import './App.css';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
@@ -134,6 +135,25 @@ const defaultVpnRoutes = '0.0.0.0/1\n128.0.0.0/1\n::/0';
 const privateLanRoutes = '10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16';
 const defaultVpnMTU = 1400;
 const defaultVpnRouteMetric = 1;
+const scanDecodeTargetSize = 480;
+const scanTileSizes = [960, 640, 420];
+const scanTileOverlap = 0.35;
+const zxingReaderOptions: ReaderOptions = {
+  formats: ['QRCode'],
+  tryHarder: true,
+  tryRotate: true,
+  tryInvert: true,
+  tryDownscale: true,
+  tryDenoise: true,
+  maxNumberOfSymbols: 1,
+  textMode: 'Plain',
+};
+
+prepareZXingModule({
+  overrides: {
+    locateFile: (path: string, prefix: string) => path.endsWith('.wasm') ? zxingReaderWasmUrl : prefix + path,
+  },
+});
 
 const text = {
   zh: {
@@ -477,6 +497,140 @@ const text = {
 function detectLang(): Lang {
   const lang = navigator.language.toLowerCase();
   return lang === 'zh-cn' || lang.startsWith('zh-hans') ? 'zh' : 'en';
+}
+
+async function decodeQrFromImageRegion(img: HTMLImageElement, sx: number, sy: number, sw: number, sh: number): Promise<string | null> {
+  const source = cropImageRegion(img, sx, sy, sw, sh);
+  const attempts: HTMLCanvasElement[] = [source, withWhiteBorder(source)];
+  const smallestSide = Math.min(source.width, source.height);
+  if (smallestSide > 0 && smallestSide < scanDecodeTargetSize) {
+    const scale = Math.min(5, Math.ceil(scanDecodeTargetSize / smallestSide));
+    const scaled = scaleCanvas(source, scale);
+    attempts.push(scaled, withWhiteBorder(scaled));
+  }
+  attempts.push(...scanTileCanvases(source));
+
+  for (const canvas of attempts) {
+    const decoded = await decodeQrCanvas(canvas);
+    if (decoded) {
+      return decoded;
+    }
+  }
+  return null;
+}
+
+function cropImageRegion(img: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) {
+  const pad = Math.max(16, Math.round(Math.min(sw, sh) * 0.1));
+  const x = Math.max(0, Math.floor(sx - pad));
+  const y = Math.max(0, Math.floor(sy - pad));
+  const right = Math.min(img.naturalWidth, Math.ceil(sx + sw + pad));
+  const bottom = Math.min(img.naturalHeight, Math.ceil(sy + sh + pad));
+  const width = Math.max(1, right - x);
+  const height = Math.max(1, bottom - y);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas is unavailable');
+  }
+  ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+  return canvas;
+}
+
+async function decodeQrCanvas(canvas: HTMLCanvasElement): Promise<string | null> {
+  const ctx = canvas.getContext('2d', {willReadFrequently: true});
+  if (!ctx) {
+    throw new Error('canvas is unavailable');
+  }
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  try {
+    const results = await readBarcodes(imageData, zxingReaderOptions);
+    const result = results.find(item => item.isValid && item.text);
+    return result?.text || null;
+  } catch {
+    return null;
+  }
+}
+
+function scanTileCanvases(source: HTMLCanvasElement) {
+  if (Math.max(source.width, source.height) <= scanTileSizes[0]) {
+    return [];
+  }
+  const tiles: HTMLCanvasElement[] = [];
+  const seen = new Set<string>();
+  for (const requestedSize of scanTileSizes) {
+    const tileWidth = Math.min(requestedSize, source.width);
+    const tileHeight = Math.min(requestedSize, source.height);
+    if (tileWidth < 120 || tileHeight < 120) {
+      continue;
+    }
+    const stepX = Math.max(80, Math.round(tileWidth * (1 - scanTileOverlap)));
+    const stepY = Math.max(80, Math.round(tileHeight * (1 - scanTileOverlap)));
+    for (const y of scanStarts(source.height, tileHeight, stepY)) {
+      for (const x of scanStarts(source.width, tileWidth, stepX)) {
+        const key = `${x},${y},${tileWidth},${tileHeight}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        tiles.push(withWhiteBorder(copyCanvasRegion(source, x, y, tileWidth, tileHeight)));
+      }
+    }
+  }
+  return tiles;
+}
+
+function scanStarts(total: number, size: number, step: number) {
+  if (size >= total) {
+    return [0];
+  }
+  const starts: number[] = [];
+  for (let value = 0; value + size < total; value += step) {
+    starts.push(value);
+  }
+  starts.push(total - size);
+  return starts;
+}
+
+function copyCanvasRegion(source: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = sw;
+  canvas.height = sh;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas is unavailable');
+  }
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas;
+}
+
+function withWhiteBorder(source: HTMLCanvasElement) {
+  const margin = Math.max(16, Math.round(Math.min(source.width, source.height) * 0.1));
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width + margin * 2;
+  canvas.height = source.height + margin * 2;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas is unavailable');
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, margin, margin);
+  return canvas;
+}
+
+function scaleCanvas(source: HTMLCanvasElement, scale: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width * scale;
+  canvas.height = source.height * scale;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('canvas is unavailable');
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 function App() {
@@ -1036,18 +1190,9 @@ function App() {
     setScanBusy(true);
     setScanError('');
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(sw);
-      canvas.height = Math.round(sh);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error('canvas is unavailable');
-      }
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const result = jsQR(data.data, data.width, data.height);
-      if (result && result.data) {
-        const decoded = result.data.trim();
+      const result = await decodeQrFromImageRegion(img, sx, sy, sw, sh);
+      if (result) {
+        const decoded = result.trim();
         if (scanPurpose === 'vpnProfile') {
           if (!importVpnProfileFromQr(decoded)) {
             return;
