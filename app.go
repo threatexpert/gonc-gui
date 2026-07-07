@@ -6,7 +6,9 @@ import (
 	"errors"
 	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,7 @@ type App struct {
 	receiveLocalHTTPURL string
 	downloadCancel      context.CancelFunc
 	downloadID          int64
+	startupSharePaths   []string
 }
 
 type TransferRequest struct {
@@ -75,12 +78,13 @@ type RemoteListResponse struct {
 type VPNProfile = vpnprofile.Profile
 type VPNProfileStore = vpnprofile.Store
 
-func NewApp() *App {
+func NewApp(startupSharePaths []string) *App {
 	return &App{
-		sendRunner:      goncrunner.New(),
-		receiveRunner:   goncrunner.New(),
-		vpnServerRunner: goncrunner.New(),
-		vpnClientRunner: goncrunner.New(),
+		sendRunner:        goncrunner.New(),
+		receiveRunner:     goncrunner.New(),
+		vpnServerRunner:   goncrunner.New(),
+		vpnClientRunner:   goncrunner.New(),
+		startupSharePaths: append([]string(nil), startupSharePaths...),
 	}
 }
 
@@ -105,6 +109,37 @@ func (a *App) SelectFolder(title string) (string, error) {
 	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: title,
 	})
+}
+
+func (a *App) StartupSharePaths() []string {
+	return append([]string(nil), a.startupSharePaths...)
+}
+
+func (a *App) OpenSaveDir(saveDir string) (string, error) {
+	if strings.TrimSpace(saveDir) == "" {
+		saveDir = defaultSaveDir()
+	}
+	dir, err := filepath.Abs(saveDir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer.exe", dir)
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	default:
+		cmd = exec.Command("xdg-open", dir)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 func (a *App) GeneratePassword() (string, error) {

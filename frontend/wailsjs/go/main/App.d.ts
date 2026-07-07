@@ -14,6 +14,8 @@ export function IsAdministrator():Promise<boolean>;
 
 export function LoadVPNProfiles():Promise<vpnprofile.Store>;
 
+export function OpenSaveDir(arg1:string):Promise<string>;
+
 export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 
 export function SaveVPNProfiles(arg1:vpnprofile.Store):Promise<void>;
@@ -27,6 +29,8 @@ export function SetTaskbarProgress(arg1:number,arg2:number):Promise<void>;
 export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>,arg4:Array<string>,arg5:Array<httpdownload.FileInfo>,arg6:boolean):Promise<void>;
 
 export function StartTransfer(arg1:main.TransferRequest):Promise<void>;
+
+export function StartupSharePaths():Promise<Array<string>>;
 
 export function Status():Promise<main.AppStatus>;
 

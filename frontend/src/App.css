@@ -25,14 +25,10 @@
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 34px;
   height: 34px;
-  border-radius: 8px;
-  background: #1b8f6a;
-  color: #ffffff;
-  font-weight: 800;
+  border-radius: 7px;
+  object-fit: contain;
 }
 
 .brand h1,

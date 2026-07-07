@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gonc-gui/internal/vpnhelper"
 
@@ -21,7 +23,7 @@ func main() {
 		os.Exit(code)
 	}
 	// Create an instance of the app structure
-	app := NewApp()
+	app := NewApp(collectStartupSharePaths(os.Args[1:]))
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -45,6 +47,30 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+func collectStartupSharePaths(args []string) []string {
+	var paths []string
+	seen := make(map[string]struct{})
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		path, err := filepath.Abs(arg)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func maybeRunVPNHelper() (bool, int) {

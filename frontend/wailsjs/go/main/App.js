@@ -22,6 +22,10 @@ export function LoadVPNProfiles() {
   return window['go']['main']['App']['LoadVPNProfiles']();
 }
 
+export function OpenSaveDir(arg1) {
+  return window['go']['main']['App']['OpenSaveDir'](arg1);
+}
+
 export function RemoteFiles(arg1) {
   return window['go']['main']['App']['RemoteFiles'](arg1);
 }
@@ -48,6 +52,10 @@ export function StartHTTPDownload(arg1, arg2, arg3, arg4, arg5, arg6) {
 
 export function StartTransfer(arg1) {
   return window['go']['main']['App']['StartTransfer'](arg1);
+}
+
+export function StartupSharePaths() {
+  return window['go']['main']['App']['StartupSharePaths']();
 }
 
 export function Status() {

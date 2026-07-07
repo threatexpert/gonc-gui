@@ -2,6 +2,7 @@
 import QRCode from 'qrcode';
 import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader';
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
+import appIconUrl from './assets/images/appicon.png';
 import './App.css';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
@@ -10,6 +11,7 @@ import {
   GeneratePassword,
   IsAdministrator,
   LoadVPNProfiles,
+  OpenSaveDir,
   RemoteFiles,
   SaveVPNProfiles,
   SelectFiles,
@@ -17,6 +19,7 @@ import {
   StartHTTPDownload,
   StartTransfer,
   Status,
+  StartupSharePaths,
   StopHTTPDownload,
   StopTransfer,
   SetTaskbarProgress,
@@ -245,6 +248,7 @@ const text = {
     saveDir: '保存目录',
     savePlaceholder: '选择下载文件保存的位置',
     choose: '选择',
+    openFolder: '打开目录',
     currentDir: '当前目录',
     parent: '上级目录',
     useUDP: '使用 UDP 协议',
@@ -413,6 +417,7 @@ const text = {
     saveDir: 'Save directory',
     savePlaceholder: 'Choose where downloaded files will be saved',
     choose: 'Choose',
+    openFolder: 'Open Folder',
     currentDir: 'Current directory',
     parent: 'Parent directory',
     useUDP: 'Use UDP protocol',
@@ -825,6 +830,22 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    StartupSharePaths()
+      .then((paths) => {
+        if (cancelled || !paths || paths.length === 0) {
+          return;
+        }
+        setMode('send');
+        appendSharePaths(paths);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
     Environment()
       .then((env) => {
         if (!cancelled) {
@@ -1011,6 +1032,18 @@ function App() {
     const selected = await SelectFolder(t.saveDir);
     if (selected) {
       setSaveDir(selected);
+    }
+  }
+
+  async function openSaveDir() {
+    setError('');
+    try {
+      const opened = await OpenSaveDir(saveDir);
+      if (opened) {
+        setSaveDir(opened);
+      }
+    } catch (err) {
+      setError(localizeError(String(err)));
     }
   }
 
@@ -1744,15 +1777,15 @@ function App() {
       <section className="workspace">
         <header className="app-header">
           <div className="brand">
-          <div className="brand-mark">G</div>
-          <div>
-            <div className="brand-title">
-              <h1>{t.brand}</h1>
-              <span>{appVersion}</span>
+            <img className="brand-mark" src={appIconUrl} alt="" aria-hidden="true" />
+            <div>
+              <div className="brand-title">
+                <h1>{t.brand}</h1>
+                <span>{appVersion}</span>
+              </div>
+              <p>{t.subtitle}</p>
             </div>
-            <p>{t.subtitle}</p>
           </div>
-        </div>
         {(mode === 'send' || mode === 'vpnServer' || mode === 'vpnClient') && (
           <div className={`status-block ${statusTone}`}>
             <span className={`dot ${statusTone}`} />
@@ -1812,6 +1845,7 @@ function App() {
                   <div className="inline">
                     <input value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
                     <button className="secondary" onClick={chooseSaveDir}>{t.choose}</button>
+                    <button className="secondary" onClick={openSaveDir}>{t.openFolder}</button>
                   </div>
                 </div>
               </>
