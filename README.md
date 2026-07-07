@@ -67,6 +67,29 @@ passphrase and cannot decrypt the exchanged network information.
 If both peers are behind restrictive IPv4 NATs, NAT traversal may fail. In that
 case, use a SOCKS5 proxy server as a relay path.
 
+### NAT Traversal Support
+
+If both peers have IPv6 connectivity, direct P2P connection is usually the
+easiest case.
+
+For IPv4, NAT traversal behavior depends on the NAT type on each side:
+
+| Type | NAT type | P2P traversal difficulty |
+| --- | --- | --- |
+| 1 | Full Cone NAT | Easiest |
+| 2 | Restricted Cone NAT | Easy |
+| 3 | Port Restricted Cone NAT | Medium |
+| 4 | Symmetric NAT | Hardest |
+
+Gonc's expected IPv4 traversal support:
+
+| Peer A NAT | Peer B NAT | Expected result |
+| --- | --- | --- |
+| Type 1 | Type 1, 2, 3, or 4 | Works with TCP and UDP |
+| Type 2 | Type 2, 3, or 4 | Works with TCP and UDP |
+| Type 3 | Type 3 or 4 | Works with UDP |
+| Type 4 | Type 4 | Does not work directly; connect through a user-provided SOCKS5 proxy server that supports UDP ASSOCIATE |
+
 ## Send Files
 
 1. Open **Send Files**.
@@ -161,8 +184,8 @@ optimization or set the app battery mode to unrestricted.
 ### Transfer Cannot Connect
 
 - Make sure both sides use the exact same passphrase.
-- If both sides are behind NAT4 networks, configure a SOCKS5 proxy server as a
-  relay.
+- If both sides are behind type 4 / Symmetric NAT, configure your own SOCKS5
+  proxy server with UDP ASSOCIATE support so Gonc can use it as the relay path.
 
 
 ## Development
