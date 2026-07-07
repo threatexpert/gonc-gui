@@ -1,5 +1,7 @@
 # Gonc
 
+[中文说明](README_zh.md)
+
 Point-to-point secure file transfer and VPN tunneling for desktop and Android.
 
 Gonc helps two devices find each other with a shared passphrase and establish a
