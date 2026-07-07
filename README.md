@@ -4,10 +4,12 @@
 
 Point-to-point secure file transfer and VPN tunneling for desktop and Android.
 
-Gonc helps two devices find each other with a shared passphrase and establish a
-peer-to-peer direct connection through NAT traversal and hole punching. No
-account, no cloud upload, no file size gate. Gonc also includes a VPN mode for
-building an encrypted tunnel between your own devices.
+Gonc helps two devices find each other with a shared passphrase. On the same
+LAN, peers can quickly discover each other and connect directly over the local
+network. Across different networks, Gonc uses NAT traversal and hole punching to
+establish a peer-to-peer direct connection. No account, no cloud upload, no file
+size gate. Gonc also includes a VPN mode for building an encrypted tunnel
+between your own devices.
 
 ![Gonc desktop file sender](ui-pc.gif)
 
