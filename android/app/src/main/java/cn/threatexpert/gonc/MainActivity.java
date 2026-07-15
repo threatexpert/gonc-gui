@@ -105,6 +105,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private ReceiveController receiveController;
     private java.util.function.Consumer<String> pendingScanCallback;
     private boolean pendingScanIsProfile;
+    private int aboutUpdateGeneration;
 
     private LinearLayout root;
     private boolean sendMode = true;
@@ -1067,10 +1068,21 @@ public final class MainActivity extends Activity implements ModuleHost {
         Toast.makeText(this, R.string.toast_passphrase_copied, Toast.LENGTH_SHORT).show();
     }
 
+    static int updateFailureMessage(AndroidUpdateChecker.FailureKind kind) {
+        if (kind == AndroidUpdateChecker.FailureKind.UNSUPPORTED_PLATFORM) {
+            return R.string.update_platform_error;
+        }
+        if (kind == AndroidUpdateChecker.FailureKind.INVALID_MANIFEST) {
+            return R.string.update_manifest_error;
+        }
+        return R.string.update_network_error;
+    }
+
     private void showSourceDialog() {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         dialog.setCanceledOnTouchOutside(true);
+        dialog.setOnDismissListener(ignored -> aboutUpdateGeneration++);
         LinearLayout box = column();
         box.setPadding(dp(18), dp(18), dp(18), dp(18));
         box.setBackground(rounded(Color.WHITE, dp(8), 0, 0));
@@ -1090,7 +1102,73 @@ public final class MainActivity extends Activity implements ModuleHost {
         box.addView(sourceLinkView(GONC_URL), blockParams(dp(8)));
         box.addView(sourceLinkView(SOURCE_URL), blockParams(dp(6)));
 
-        dialog.setContentView(box);
+        TextView updateStatus = text("", 13, muted(), Typeface.NORMAL);
+        updateStatus.setSingleLine(false);
+        updateStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        updateStatus.setVisibility(View.GONE);
+        box.addView(updateStatus, blockParams(dp(10)));
+
+        Button checkForUpdates = secondaryButton(getString(R.string.check_for_updates));
+        box.addView(checkForUpdates, blockParams(dp(10)));
+
+        Button goToDownload = primaryButton(getString(R.string.go_to_download));
+        goToDownload.setVisibility(View.GONE);
+        box.addView(goToDownload, blockParams(dp(8)));
+
+        String[] downloadUrl = {""};
+        goToDownload.setOnClickListener(v -> {
+            if (!downloadUrl[0].isEmpty()) {
+                openSourceUrl(downloadUrl[0]);
+            }
+        });
+
+        checkForUpdates.setOnClickListener(v -> {
+            int requestGeneration = ++aboutUpdateGeneration;
+            downloadUrl[0] = "";
+            goToDownload.setVisibility(View.GONE);
+            updateStatus.setText(R.string.checking_for_updates);
+            updateStatus.setVisibility(View.VISIBLE);
+            checkForUpdates.setText(R.string.checking_for_updates);
+            checkForUpdates.setEnabled(false);
+
+            Thread checkThread = new Thread(() -> {
+                try {
+                    AndroidUpdateChecker.Result result = AndroidUpdateChecker.check(
+                            "https://www.gonc.cc/gui/manifest.json",
+                            appVersionName(), Build.SUPPORTED_ABIS);
+                    runOnUiThread(() -> {
+                        if (!dialog.isShowing() || requestGeneration != aboutUpdateGeneration) {
+                            return;
+                        }
+                        if (result.updateAvailable) {
+                            downloadUrl[0] = result.downloadUrl;
+                            updateStatus.setText(getString(
+                                    R.string.update_available, result.latestVersion));
+                            goToDownload.setVisibility(View.VISIBLE);
+                        } else {
+                            updateStatus.setText(R.string.update_current);
+                        }
+                        checkForUpdates.setText(R.string.check_for_updates);
+                        checkForUpdates.setEnabled(true);
+                    });
+                } catch (AndroidUpdateChecker.Failure failure) {
+                    runOnUiThread(() -> {
+                        if (!dialog.isShowing() || requestGeneration != aboutUpdateGeneration) {
+                            return;
+                        }
+                        updateStatus.setText(updateFailureMessage(failure.kind));
+                        checkForUpdates.setText(R.string.check_for_updates);
+                        checkForUpdates.setEnabled(true);
+                    });
+                }
+            }, "android-update-check");
+            checkThread.start();
+        });
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(box);
+        dialog.setContentView(scroll);
         dialog.show();
     }
 

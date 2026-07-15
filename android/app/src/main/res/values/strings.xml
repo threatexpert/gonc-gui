@@ -244,6 +244,14 @@
     <string name="passphrase_qr_copy_hint">Long press the QR code or passphrase to copy</string>
     <string name="source_title">Open source project</string>
     <string name="source_description">Gonc is developed as an open source project. You can inspect the source code, report issues, and follow updates on GitHub.</string>
+    <string name="check_for_updates">Check for updates</string>
+    <string name="checking_for_updates">Checking for updates…</string>
+    <string name="update_current">You are using the latest version.</string>
+    <string name="update_available">A new version is available: %1$s</string>
+    <string name="go_to_download">Go to download</string>
+    <string name="update_network_error">Could not check for updates. Check your network and try again.</string>
+    <string name="update_manifest_error">The update information is invalid. Please try again later.</string>
+    <string name="update_platform_error">Updates are not available for this platform.</string>
     <string name="cancel">Cancel</string>
     <string name="close">Close</string>
     <string name="scan_prompt">Scan Gonc passphrase QR</string>
