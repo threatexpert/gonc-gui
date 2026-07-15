@@ -6,6 +6,10 @@ export function CaptureScreen() {
   return window['go']['main']['App']['CaptureScreen']();
 }
 
+export function CheckForUpdate(arg1) {
+  return window['go']['main']['App']['CheckForUpdate'](arg1);
+}
+
 export function ClearTaskbarProgress() {
   return window['go']['main']['App']['ClearTaskbarProgress']();
 }

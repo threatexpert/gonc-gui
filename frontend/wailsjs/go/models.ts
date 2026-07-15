@@ -1,3 +1,26 @@
+export namespace appupdate {
+	
+	export class Result {
+	    currentVersion: string;
+	    latestVersion: string;
+	    updateAvailable: boolean;
+	    downloadUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.updateAvailable = source["updateAvailable"];
+	        this.downloadUrl = source["downloadUrl"];
+	    }
+	}
+
+}
+
 export namespace httpdownload {
 	
 	export class FileInfo {

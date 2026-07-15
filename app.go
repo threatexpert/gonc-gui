@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"math/big"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"gonc-gui/internal/appupdate"
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
 	"gonc-gui/internal/taskbar"
@@ -21,6 +23,8 @@ import (
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+const updateManifestURL = "https://www.gonc.cc/gui/manifest.json"
 
 type App struct {
 	ctx context.Context
@@ -113,6 +117,15 @@ func (a *App) SelectFolder(title string) (string, error) {
 
 func (a *App) StartupSharePaths() []string {
 	return append([]string(nil), a.startupSharePaths...)
+}
+
+func (a *App) CheckForUpdate(currentVersion string) (appupdate.Result, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	return appupdate.Check(ctx, client, updateManifestURL, currentVersion, runtime.GOOS, runtime.GOARCH)
 }
 
 func (a *App) OpenSaveDir(saveDir string) (string, error) {
