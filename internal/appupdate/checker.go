@@ -66,7 +66,10 @@ func Check(ctx context.Context, client *http.Client, endpoint, currentVersion, g
 
 	limited := io.LimitReader(resp.Body, maxManifestBytes+1)
 	data, err := io.ReadAll(limited)
-	if err != nil || len(data) > maxManifestBytes {
+	if err != nil {
+		return Result{}, fmt.Errorf("%s: %w", ErrorNetwork, errNetwork)
+	}
+	if len(data) > maxManifestBytes {
 		return Result{}, fmt.Errorf("%s: %w", ErrorInvalidManifest, errInvalidManifest)
 	}
 	var doc manifest

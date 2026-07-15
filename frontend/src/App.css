@@ -952,7 +952,9 @@ progress {
   display: grid;
   gap: 10px;
   width: min(430px, 100%);
+  max-height: calc(100vh - 48px);
   box-sizing: border-box;
+  overflow-y: auto;
   border: 1px solid #d8e2ee;
   border-radius: 8px;
   padding: 20px;
@@ -1149,6 +1151,17 @@ progress {
 
   .logs {
     max-height: 150px;
+  }
+}
+
+@media (max-height: 520px) {
+  .qr-backdrop {
+    align-items: start;
+    padding: 12px;
+  }
+
+  .about-dialog {
+    max-height: calc(100vh - 24px);
   }
 }
 

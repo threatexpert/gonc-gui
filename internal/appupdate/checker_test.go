@@ -4,11 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (failingBody) Close() error             { return nil }
 
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
@@ -175,6 +187,24 @@ func TestCheckNetworkFailure(t *testing.T) {
 	server.Close()
 
 	_, err := Check(context.Background(), client, endpoint, "1.2.16", "windows", "amd64")
+	if !errors.Is(err, errNetwork) {
+		t.Fatalf("Check() error = %v, want errors.Is(_, errNetwork)", err)
+	}
+	if !strings.Contains(err.Error(), ErrorNetwork) {
+		t.Fatalf("Check() error = %q, want public code %q", err, ErrorNetwork)
+	}
+}
+
+func TestCheckBodyReadFailureIsNetworkError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       failingBody{},
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	_, err := Check(context.Background(), client, "https://updates.example/manifest.json", "1.2.16", "windows", "amd64")
 	if !errors.Is(err, errNetwork) {
 		t.Fatalf("Check() error = %v, want errors.Is(_, errNetwork)", err)
 	}
