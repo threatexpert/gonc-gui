@@ -757,11 +757,21 @@ function App() {
     if (!aboutOpen) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => {
-      aboutDialogRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [aboutOpen]);
+    const dialog = aboutDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+    const activeElement = document.activeElement;
+    if (updateState.kind === 'checking') {
+      if (!dialog.contains(activeElement) || (activeElement instanceof HTMLButtonElement && activeElement.disabled)) {
+        dialog.focus();
+      }
+      return;
+    }
+    if (!dialog.contains(activeElement)) {
+      (dialog.querySelector<HTMLElement>('button:not(:disabled)') ?? dialog).focus();
+    }
+  }, [aboutOpen, updateState.kind]);
 
   const remoteFiles = useMemo(() => remoteListFiles(remoteList), [remoteList]);
   const visibleEntries = useMemo(() => safeShallowEntries(remoteFiles, currentRemotePath), [remoteFiles, currentRemotePath]);
@@ -1856,10 +1866,10 @@ function App() {
     }
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+    if (event.shiftKey && (document.activeElement === dialog || document.activeElement === first || !dialog.contains(document.activeElement))) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && (document.activeElement === dialog || document.activeElement === last)) {
       event.preventDefault();
       first.focus();
     }
@@ -2447,7 +2457,7 @@ function App() {
       )}
       {aboutOpen && (
         <div className="qr-backdrop" role="presentation" onClick={closeAbout}>
-          <section ref={aboutDialogRef} className="about-dialog" role="dialog" aria-modal="true" aria-label={t.aboutTitle} onKeyDown={handleAboutKeyDown} onClick={(event) => event.stopPropagation()}>
+          <section ref={aboutDialogRef} className="about-dialog" role="dialog" aria-modal="true" aria-label={t.aboutTitle} tabIndex={-1} onKeyDown={handleAboutKeyDown} onClick={(event) => event.stopPropagation()}>
             <img className="about-mark" src={appIconUrl} alt="" aria-hidden="true" />
             <h2>{t.aboutTitle}</h2>
             <div className="about-version">{t.brand} {appVersion}</div>
