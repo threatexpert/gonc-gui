@@ -271,22 +271,21 @@ git commit -m "feat: add desktop release checker"
 
 - [ ] **Step 1: Add a failing main-package contract test**
 
-Create a compile-time method-signature assertion in a new `app_update_test.go`:
+Create a behavior test in a new `app_update_test.go` that verifies invalid local versions are rejected before any network request:
 
 ```go
 package main
 
 import (
+	"strings"
 	"testing"
-
-	"gonc-gui/internal/appupdate"
 )
 
 func TestAppExposesCheckForUpdate(t *testing.T) {
 	app := NewApp(nil)
-	var method func(string) (appupdate.Result, error) = app.CheckForUpdate
-	if method == nil {
-		t.Fatal("CheckForUpdate method is nil")
+	_, err := app.CheckForUpdate("not-a-version")
+	if err == nil || !strings.Contains(err.Error(), "update_invalid_manifest") {
+		t.Fatalf("CheckForUpdate invalid-version error = %v", err)
 	}
 }
 ```
@@ -320,7 +319,7 @@ Using `http.Client` without a custom `CheckRedirect` intentionally enables Go's 
 
 Run: `go test . -run TestAppExposesCheckForUpdate -v`
 
-Expected: PASS; this is a compile-time contract test and does not call the network.
+Expected: PASS without a network request because Task 1 validates the local version before constructing or sending the HTTP request.
 
 Run: `go test ./...`
 
