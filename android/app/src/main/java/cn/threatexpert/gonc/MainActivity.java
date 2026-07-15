@@ -1078,6 +1078,13 @@ public final class MainActivity extends Activity implements ModuleHost {
         return R.string.update_network_error;
     }
 
+    static String canonicalUpdateVersion(String installedVersion) {
+        if (installedVersion != null && installedVersion.endsWith("-debug")) {
+            return installedVersion.substring(0, installedVersion.length() - "-debug".length());
+        }
+        return installedVersion;
+    }
+
     private void showSourceDialog() {
         Dialog dialog = new Dialog(this);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -1135,7 +1142,7 @@ public final class MainActivity extends Activity implements ModuleHost {
                 try {
                     AndroidUpdateChecker.Result result = AndroidUpdateChecker.check(
                             "https://www.gonc.cc/gui/manifest.json",
-                            appVersionName(), Build.SUPPORTED_ABIS);
+                            canonicalUpdateVersion(appVersionName()), Build.SUPPORTED_ABIS);
                     runOnUiThread(() -> {
                         if (!dialog.isShowing() || requestGeneration != aboutUpdateGeneration) {
                             return;

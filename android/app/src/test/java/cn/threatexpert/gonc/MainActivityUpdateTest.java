@@ -6,6 +6,15 @@ import static org.junit.Assert.assertEquals;
 
 public class MainActivityUpdateTest {
     @Test
+    public void canonicalUpdateVersionRemovesOnlyOneDebugSuffix() {
+        assertEquals("1.2.17", MainActivity.canonicalUpdateVersion("1.2.17-debug"));
+        assertEquals("1.2.17", MainActivity.canonicalUpdateVersion("1.2.17"));
+        assertEquals("1.2.17-beta", MainActivity.canonicalUpdateVersion("1.2.17-beta"));
+        assertEquals("1.2.17-debug",
+                MainActivity.canonicalUpdateVersion("1.2.17-debug-debug"));
+    }
+
+    @Test
     public void failureKindsMapToLocalizedMessages() {
         assertEquals(R.string.update_network_error,
                 MainActivity.updateFailureMessage(AndroidUpdateChecker.FailureKind.NETWORK));
