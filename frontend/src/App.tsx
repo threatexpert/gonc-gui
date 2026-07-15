@@ -1,5 +1,6 @@
 ﻿import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent} from 'react';
 import QRCode from 'qrcode';
+import type {KeyboardEvent as ReactKeyboardEvent} from 'react';
 import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader';
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import appIconUrl from './assets/images/appicon.png';
@@ -32,12 +33,14 @@ type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
 type Lang = 'zh' | 'en';
 type DownloadMode = 'resume' | 'overwrite';
 
+type UpdateErrorCode = 'network' | 'manifest' | 'platform';
+
 type UpdateState =
   | {kind: 'idle'}
   | {kind: 'checking'}
   | {kind: 'current'; latestVersion: string}
   | {kind: 'available'; latestVersion: string; downloadUrl: string}
-  | {kind: 'error'; message: string};
+  | {kind: 'error'; code: UpdateErrorCode};
 
 type LogEvent = {
   type: string;
@@ -326,8 +329,8 @@ const text = {
     clear: '清空',
     close: '关闭',
     about: '关于',
-    aboutTitle: '关于 Gonc',
-    aboutDescription: '安全、易用的点对点文件传输与 VPN 工具。',
+    aboutTitle: '开源项目',
+    aboutDescription: 'Gonc 是开源项目。你可以在 GitHub 查看源代码、反馈问题和关注更新。',
     checkForUpdates: '检查更新',
     checkingForUpdates: '正在检查…',
     upToDate: '已是最新版本',
@@ -506,8 +509,8 @@ const text = {
     clear: 'Clear',
     close: 'Close',
     about: 'About',
-    aboutTitle: 'About Gonc',
-    aboutDescription: 'Secure, easy-to-use peer-to-peer file transfer and VPN.',
+    aboutTitle: 'Open source project',
+    aboutDescription: 'Gonc is developed as an open source project. You can inspect the source code, report issues, and follow updates on GitHub.',
     checkForUpdates: 'Check for updates',
     checkingForUpdates: 'Checking…',
     upToDate: 'Up to date',
@@ -734,6 +737,8 @@ function App() {
   const [isAdministrator, setIsAdministrator] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>({kind: 'idle'});
+  const aboutButtonRef = useRef<HTMLButtonElement | null>(null);
+  const aboutDialogRef = useRef<HTMLElement | null>(null);
   const scanImgRef = useRef<HTMLImageElement | null>(null);
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
   const scanBusyRef = useRef(false);
@@ -747,6 +752,16 @@ function App() {
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
+
+  useEffect(() => {
+    if (!aboutOpen) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      aboutDialogRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [aboutOpen]);
 
   const remoteFiles = useMemo(() => remoteListFiles(remoteList), [remoteList]);
   const visibleEntries = useMemo(() => safeShallowEntries(remoteFiles, currentRemotePath), [remoteFiles, currentRemotePath]);
@@ -1814,6 +1829,39 @@ function App() {
   function closeAbout() {
     if (updateState.kind !== 'checking') {
       setAboutOpen(false);
+      aboutButtonRef.current?.focus();
+    }
+  }
+
+  function handleAboutKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      if (updateState.kind !== 'checking') {
+        event.preventDefault();
+        closeAbout();
+      }
+      return;
+    }
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    const dialog = aboutDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -1830,11 +1878,11 @@ function App() {
       const message = String(error);
       setUpdateState({
         kind: 'error',
-        message: message.includes('update_unsupported_platform')
-          ? t.updatePlatformError
+        code: message.includes('update_unsupported_platform')
+          ? 'platform'
           : message.includes('update_invalid_manifest')
-            ? t.updateManifestError
-            : t.updateNetworkError,
+            ? 'manifest'
+            : 'network',
       });
     }
   }
@@ -1868,7 +1916,7 @@ function App() {
                 <span>{formatRate(transferSpeed)}</span>
               </div>
             )}
-            <button className="ghost" onClick={openAbout}>{t.about}</button>
+            <button ref={aboutButtonRef} className="ghost" onClick={openAbout}>{t.about}</button>
           </div>
         </header>
 
@@ -2399,7 +2447,7 @@ function App() {
       )}
       {aboutOpen && (
         <div className="qr-backdrop" role="presentation" onClick={closeAbout}>
-          <section className="about-dialog" role="dialog" aria-modal="true" aria-label={t.aboutTitle} onClick={(event) => event.stopPropagation()}>
+          <section ref={aboutDialogRef} className="about-dialog" role="dialog" aria-modal="true" aria-label={t.aboutTitle} onKeyDown={handleAboutKeyDown} onClick={(event) => event.stopPropagation()}>
             <img className="about-mark" src={appIconUrl} alt="" aria-hidden="true" />
             <h2>{t.aboutTitle}</h2>
             <div className="about-version">{t.brand} {appVersion}</div>
@@ -2409,7 +2457,11 @@ function App() {
             <div className="about-update" aria-live="polite">
               {updateState.kind === 'current' && <p>{t.upToDate} ({updateState.latestVersion})</p>}
               {updateState.kind === 'available' && <p>{t.updateAvailable}: {updateState.latestVersion}</p>}
-              {updateState.kind === 'error' && <p className="about-error">{updateState.message}</p>}
+              {updateState.kind === 'error' && (
+                <p className="about-error">
+                  {updateState.code === 'platform' ? t.updatePlatformError : updateState.code === 'manifest' ? t.updateManifestError : t.updateNetworkError}
+                </p>
+              )}
             </div>
             <div className="about-actions">
               <button className="secondary" disabled={updateState.kind === 'checking'} onClick={checkForUpdates}>
