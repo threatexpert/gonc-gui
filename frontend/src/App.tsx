@@ -7,6 +7,7 @@ import './App.css';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
+  CheckForUpdate,
   ClearTaskbarProgress,
   GeneratePassword,
   IsAdministrator,
@@ -25,11 +26,18 @@ import {
   SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {ClipboardGetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
+import {BrowserOpenURL, ClipboardGetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
 type Lang = 'zh' | 'en';
 type DownloadMode = 'resume' | 'overwrite';
+
+type UpdateState =
+  | {kind: 'idle'}
+  | {kind: 'checking'}
+  | {kind: 'current'; latestVersion: string}
+  | {kind: 'available'; latestVersion: string; downloadUrl: string}
+  | {kind: 'error'; message: string};
 
 type LogEvent = {
   type: string;
@@ -132,6 +140,8 @@ type ConnectionStatus = {
 };
 
 const appVersion = __APP_VERSION__;
+const goncSourceUrl = 'https://github.com/threatexpert/gonc';
+const guiSourceUrl = 'https://github.com/threatexpert/gonc-gui';
 const vpnProfileQrType = 'gonc.vpn.profile';
 const defaultVpnDNS = '8.8.8.8\n2001:4860:4860::8888';
 const defaultVpnRoutes = '0.0.0.0/1\n128.0.0.0/1\n::/0';
@@ -315,6 +325,17 @@ const text = {
     diagnostics: '状态和日志',
     clear: '清空',
     close: '关闭',
+    about: '关于',
+    aboutTitle: '关于 Gonc',
+    aboutDescription: '安全、易用的点对点文件传输与 VPN 工具。',
+    checkForUpdates: '检查更新',
+    checkingForUpdates: '正在检查…',
+    upToDate: '已是最新版本',
+    updateAvailable: '发现新版本',
+    goToDownload: '前往下载',
+    updateNetworkError: '无法检查更新，请检查网络后重试。',
+    updateManifestError: '更新信息无效，请稍后重试。',
+    updatePlatformError: '当前平台暂不支持自动更新。',
     logHint: '传输开始后日志会显示在这里。',
     file: '文件',
     dir: '目录',
@@ -484,6 +505,17 @@ const text = {
     diagnostics: 'Status and Logs',
     clear: 'Clear',
     close: 'Close',
+    about: 'About',
+    aboutTitle: 'About Gonc',
+    aboutDescription: 'Secure, easy-to-use peer-to-peer file transfer and VPN.',
+    checkForUpdates: 'Check for updates',
+    checkingForUpdates: 'Checking…',
+    upToDate: 'Up to date',
+    updateAvailable: 'Update available',
+    goToDownload: 'Go to download',
+    updateNetworkError: 'Unable to check for updates. Check your network and try again.',
+    updateManifestError: 'Update information is invalid. Try again later.',
+    updatePlatformError: 'Automatic updates are not supported on this platform.',
     logHint: 'Logs will appear here after a transfer starts.',
     file: 'FILE',
     dir: 'DIR',
@@ -700,6 +732,8 @@ function App() {
   const [scanError, setScanError] = useState('');
   const [scanRect, setScanRect] = useState<{x: number; y: number; w: number; h: number} | null>(null);
   const [isAdministrator, setIsAdministrator] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>({kind: 'idle'});
   const scanImgRef = useRef<HTMLImageElement | null>(null);
   const scanDragStart = useRef<{x: number; y: number} | null>(null);
   const scanBusyRef = useRef(false);
@@ -1772,6 +1806,39 @@ function App() {
     return message;
   }
 
+  function openAbout() {
+    setUpdateState({kind: 'idle'});
+    setAboutOpen(true);
+  }
+
+  function closeAbout() {
+    if (updateState.kind !== 'checking') {
+      setAboutOpen(false);
+    }
+  }
+
+  async function checkForUpdates() {
+    setUpdateState({kind: 'checking'});
+    try {
+      const result = await CheckForUpdate(appVersion);
+      if (result.updateAvailable && result.downloadUrl) {
+        setUpdateState({kind: 'available', latestVersion: result.latestVersion, downloadUrl: result.downloadUrl});
+      } else {
+        setUpdateState({kind: 'current', latestVersion: result.latestVersion});
+      }
+    } catch (error) {
+      const message = String(error);
+      setUpdateState({
+        kind: 'error',
+        message: message.includes('update_unsupported_platform')
+          ? t.updatePlatformError
+          : message.includes('update_invalid_manifest')
+            ? t.updateManifestError
+            : t.updateNetworkError,
+      });
+    }
+  }
+
   return (
     <main className="shell">
       <section className="workspace">
@@ -1786,20 +1853,23 @@ function App() {
               <p>{t.subtitle}</p>
             </div>
           </div>
-        {(mode === 'send' || mode === 'vpnServer' || mode === 'vpnClient') && (
-          <div className={`status-block ${statusTone}`}>
-            <span className={`dot ${statusTone}`} />
-            <span>{mode === 'send' ? sendStatus.label : (mode === 'vpnServer' ? vpnServerStatus.label : vpnClientStatus.label)}</span>
-            {mode !== 'vpnClient' && (
-              <>
+          <div className="header-actions">
+            {(mode === 'send' || mode === 'vpnServer' || mode === 'vpnClient') && (
+              <div className={`status-block ${statusTone}`}>
+                <span className={`dot ${statusTone}`} />
+                <span>{mode === 'send' ? sendStatus.label : (mode === 'vpnServer' ? vpnServerStatus.label : vpnClientStatus.label)}</span>
+                {mode !== 'vpnClient' && (
+                  <>
+                    <span className="status-divider" />
+                    <span>{t.connectedShort} {mode === 'send' ? connectedCount : vpnServerConnectedCount}</span>
+                  </>
+                )}
                 <span className="status-divider" />
-                <span>{t.connectedShort} {mode === 'send' ? connectedCount : vpnServerConnectedCount}</span>
-              </>
+                <span>{formatRate(transferSpeed)}</span>
+              </div>
             )}
-            <span className="status-divider" />
-            <span>{formatRate(transferSpeed)}</span>
+            <button className="ghost" onClick={openAbout}>{t.about}</button>
           </div>
-        )}
         </header>
 
         <div className="mode-switch" role="tablist" aria-label="Transfer mode">
@@ -2324,6 +2394,32 @@ function App() {
             <div className="qr-password">{qrPassword}</div>
             {qrHint && <p className="field-hint">{qrHint}</p>}
             <button className="primary" onClick={closePasswordQr}>{t.close}</button>
+          </section>
+        </div>
+      )}
+      {aboutOpen && (
+        <div className="qr-backdrop" role="presentation" onClick={closeAbout}>
+          <section className="about-dialog" role="dialog" aria-modal="true" aria-label={t.aboutTitle} onClick={(event) => event.stopPropagation()}>
+            <img className="about-mark" src={appIconUrl} alt="" aria-hidden="true" />
+            <h2>{t.aboutTitle}</h2>
+            <div className="about-version">{t.brand} {appVersion}</div>
+            <p>{t.aboutDescription}</p>
+            <button className="about-link" onClick={() => BrowserOpenURL(goncSourceUrl)}>{goncSourceUrl}</button>
+            <button className="about-link" onClick={() => BrowserOpenURL(guiSourceUrl)}>{guiSourceUrl}</button>
+            <div className="about-update" aria-live="polite">
+              {updateState.kind === 'current' && <p>{t.upToDate} ({updateState.latestVersion})</p>}
+              {updateState.kind === 'available' && <p>{t.updateAvailable}: {updateState.latestVersion}</p>}
+              {updateState.kind === 'error' && <p className="about-error">{updateState.message}</p>}
+            </div>
+            <div className="about-actions">
+              <button className="secondary" disabled={updateState.kind === 'checking'} onClick={checkForUpdates}>
+                {updateState.kind === 'checking' ? t.checkingForUpdates : t.checkForUpdates}
+              </button>
+              {updateState.kind === 'available' && (
+                <button className="primary" onClick={() => BrowserOpenURL(updateState.downloadUrl)}>{t.goToDownload}</button>
+              )}
+              <button className="primary" disabled={updateState.kind === 'checking'} onClick={closeAbout}>{t.close}</button>
+            </div>
           </section>
         </div>
       )}
