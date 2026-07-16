@@ -200,7 +200,8 @@ const text = {
     connections: '连接',
     establishing: '建立中',
     negotiatingConnection: '建立安全连接中',
-    waitingConnection: '等待连接',
+    waitingConnection: '在线',
+    waitingPeer: '等待对端',
     newConnection: '有新连接',
     connectionSuccess: '连接成功',
     connectedShort: '已连接',
@@ -216,6 +217,7 @@ const text = {
     connectionRoute: '连接方式',
     directRoute: '直连',
     relayRoute: '中继',
+    lanRoute: '局域网',
     speed: '速度',
     sentTotal: '累计发送',
     passphrase: '口令',
@@ -380,7 +382,8 @@ const text = {
     connections: 'Connections',
     establishing: 'Establishing',
     negotiatingConnection: 'Negotiating secure connection',
-    waitingConnection: 'Waiting',
+    waitingConnection: 'Online',
+    waitingPeer: 'Waiting for peer',
     newConnection: 'New Connection',
     connectionSuccess: 'Connection established',
     connectedShort: 'Connected',
@@ -396,6 +399,7 @@ const text = {
     connectionRoute: 'Route',
     directRoute: 'Direct',
     relayRoute: 'Relay',
+    lanRoute: 'LAN',
     speed: 'Speed',
     sentTotal: 'Sent total',
     passphrase: 'Passphrase',
@@ -1907,6 +1911,7 @@ function App() {
               <div className="brand-title">
                 <h1>{t.brand}</h1>
                 <span>{appVersion}</span>
+                <button ref={aboutButtonRef} className="about-entry" onClick={openAbout}>{t.about}</button>
               </div>
               <p>{t.subtitle}</p>
             </div>
@@ -1926,7 +1931,6 @@ function App() {
                 <span>{formatRate(transferSpeed)}</span>
               </div>
             )}
-            <button ref={aboutButtonRef} className="ghost" onClick={openAbout}>{t.about}</button>
           </div>
         </header>
 
@@ -2632,6 +2636,9 @@ function routeLabel(modeValue: string, t: typeof text.zh) {
   if (clean === 'relay') {
     return t.relayRoute;
   }
+  if (clean === 'lan') {
+    return t.lanRoute;
+  }
   return '-';
 }
 
@@ -2702,7 +2709,7 @@ function singleConnectionStatus(status: string, running: boolean, t: typeof text
     return {label: t.connectedShort, tone: 'connected'};
   }
   if (reportStatus === 'wait' || reportStatus === 'waiting' || reportStatus === 'ready' || reportStatus === 'idle') {
-    return {label: t.waitingConnection, tone: 'waiting'};
+    return {label: t.waitingPeer, tone: 'waiting'};
   }
   return {label: t.establishing, tone: 'connecting'};
 }

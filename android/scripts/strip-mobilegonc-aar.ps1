@@ -62,9 +62,7 @@ try {
   }
 
   $BackupPath = "$AarPath.unstripped"
-  if (-not (Test-Path -LiteralPath $BackupPath)) {
-    Copy-Item -LiteralPath $AarPath -Destination $BackupPath -Force
-  }
+  Copy-Item -LiteralPath $AarPath -Destination $BackupPath -Force
   $Before = (Get-Item -LiteralPath $AarPath).Length
   Remove-Item -LiteralPath $AarPath -Force
 

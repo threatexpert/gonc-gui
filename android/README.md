@@ -140,5 +140,7 @@ Go-side exported mobile API:
 
 ```go
 func StartP2PShareSource(source AndroidFileSource, password string, useUDP bool, cb Callback) (*Session, error)
+func StartP2PShareSourceWithLAN(source AndroidFileSource, password string, useUDP bool, p2pWithLAN bool, cb Callback) (*Session, error)
 func StartP2PReceive(password string, useUDP bool, cb Callback) (*Session, error)
+func StartP2PReceiveWithLAN(password string, useUDP bool, p2pWithLAN bool, cb Callback) (*Session, error)
 ```

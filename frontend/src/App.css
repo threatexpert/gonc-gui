@@ -21,13 +21,13 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 7px;
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
   object-fit: contain;
 }
 
@@ -59,6 +59,27 @@
   font-size: 12px;
   font-weight: 800;
   line-height: 1.2;
+}
+
+.about-entry {
+  min-height: 0;
+  border-radius: 3px;
+  padding: 2px 1px;
+  background: transparent;
+  color: #8290a3;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.about-entry:hover,
+.about-entry:focus-visible {
+  color: #2870d8;
+}
+
+.about-entry:focus-visible {
+  outline: 2px solid rgba(40, 112, 216, 0.28);
+  outline-offset: 2px;
 }
 
 .brand p {
@@ -1119,12 +1140,8 @@ progress {
   }
 
   .brand-mark {
-    width: 30px;
-    height: 30px;
-  }
-
-  .brand p {
-    display: none;
+    width: 38px;
+    height: 38px;
   }
 
   .mode-switch {

@@ -139,7 +139,8 @@
     <string name="toast_vpn_profile_imported">已导入 VPN 配置：%1$s</string>
     <string name="unknown_size">大小未知</string>
     <string name="activity">活动日志</string>
-    <string name="activity_state_waiting_connection">等待连接</string>
+    <string name="activity_state_waiting_connection">在线</string>
+    <string name="activity_state_waiting_peer">等待对端</string>
     <string name="activity_state_connecting">连接中</string>
     <string name="activity_state_new_connection">有新连接</string>
     <string name="activity_state_negotiating">建立安全连接中</string>
@@ -206,6 +207,7 @@
     <string name="connection_waiting_peer">等待对端</string>
     <string name="route_direct">直连</string>
     <string name="route_relay">中继</string>
+    <string name="route_lan">局域网</string>
     <string name="connection_address_pending">地址待定</string>
     <string name="toast_camera_permission">需要相机权限才能扫码</string>
     <string name="toast_storage_permission">当前 Android 版本需要存储权限才能保存到下载目录</string>

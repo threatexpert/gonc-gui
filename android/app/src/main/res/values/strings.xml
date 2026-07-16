@@ -143,7 +143,8 @@
     <string name="toast_vpn_profile_imported">Imported VPN profile: %1$s</string>
     <string name="unknown_size">unknown size</string>
     <string name="activity">Activity log</string>
-    <string name="activity_state_waiting_connection">Waiting for connection</string>
+    <string name="activity_state_waiting_connection">Online</string>
+    <string name="activity_state_waiting_peer">Waiting for peer</string>
     <string name="activity_state_connecting">Connecting</string>
     <string name="activity_state_new_connection">New connection</string>
     <string name="activity_state_negotiating">Establishing secure connection</string>
@@ -210,6 +211,7 @@
     <string name="connection_waiting_peer">Waiting for peer</string>
     <string name="route_direct">Direct</string>
     <string name="route_relay">Relay</string>
+    <string name="route_lan">LAN</string>
     <string name="connection_address_pending">address pending</string>
     <string name="toast_camera_permission">Camera permission is required to scan QR codes</string>
     <string name="toast_storage_permission">Storage permission is required to save into Downloads on this Android version</string>

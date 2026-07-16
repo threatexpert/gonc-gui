@@ -1,6 +1,7 @@
 package cn.threatexpert.gonc;
 
 import android.content.Context;
+import android.net.wifi.WifiManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -9,12 +10,15 @@ import mobilegonc.Callback;
 import mobilegonc.Mobilegonc;
 
 final class MobileGoncBridge implements GoncBridge {
+    private static final boolean FILE_TRANSFER_P2P_WITH_LAN = true;
+
     @Override
     public Session startP2PShare(Context context, List<ShareItem> items, String password, boolean useUdp, EventCallback callback) {
         BridgeSession session = new BridgeSession();
         List<ShareItem> snapshot = new ArrayList<>(items);
         Thread worker = new Thread(() -> {
             try {
+                enableFileTransferMulticast(context, session, callback);
                 AndroidFileSource source = new AndroidFileSource(context, snapshot);
                 session.attachSource(source);
                 if (session.isStopped()) {
@@ -23,9 +27,10 @@ final class MobileGoncBridge implements GoncBridge {
                 }
 
                 callback.onEvent("info", "Starting gonc mobile share engine with " + snapshot.size() + " Android item(s)");
-                mobilegonc.Session goSession = Mobilegonc.startP2PShareSource(source, password, useUdp, bridgeCallback(callback, session, false));
+                mobilegonc.Session goSession = Mobilegonc.startP2PShareSourceWithLAN(source, password, useUdp, FILE_TRANSFER_P2P_WITH_LAN, bridgeCallback(callback, session, false));
                 session.attach(goSession);
             } catch (Throwable error) {
+                session.finish();
                 if (!session.isStopped()) {
                     callback.onError(error);
                 }
@@ -40,10 +45,12 @@ final class MobileGoncBridge implements GoncBridge {
         BridgeSession session = new BridgeSession();
         Thread worker = new Thread(() -> {
             try {
+                enableFileTransferMulticast(context, session, callback);
                 callback.onEvent("info", "Starting gonc mobile receive engine");
-                mobilegonc.Session goSession = Mobilegonc.startP2PReceive(password, useUdp, bridgeCallback(callback, session, false));
+                mobilegonc.Session goSession = Mobilegonc.startP2PReceiveWithLAN(password, useUdp, FILE_TRANSFER_P2P_WITH_LAN, bridgeCallback(callback, session, false));
                 session.attach(goSession);
             } catch (Throwable error) {
+                session.finish();
                 if (!session.isStopped()) {
                     callback.onError(error);
                 }
@@ -51,6 +58,34 @@ final class MobileGoncBridge implements GoncBridge {
         }, "gonc-receive");
         worker.start();
         return session;
+    }
+
+    private static void enableFileTransferMulticast(Context context, BridgeSession session, EventCallback callback) {
+        if (!FILE_TRANSFER_P2P_WITH_LAN || context == null) {
+            return;
+        }
+        try {
+            Context appContext = context.getApplicationContext();
+            if (appContext == null) {
+                appContext = context;
+            }
+            WifiManager wifiManager = (WifiManager) appContext.getSystemService(Context.WIFI_SERVICE);
+            if (wifiManager == null) {
+                callback.onEvent("warn", "Wi-Fi multicast service is unavailable; continuing with public P2P");
+                return;
+            }
+
+            WifiManager.MulticastLock lock = wifiManager.createMulticastLock("gonc-file-lan-discovery");
+            lock.setReferenceCounted(false);
+            lock.acquire();
+            session.attachMulticastLease(() -> {
+                if (lock.isHeld()) {
+                    lock.release();
+                }
+            });
+        } catch (RuntimeException error) {
+            callback.onEvent("warn", "Unable to enable Wi-Fi multicast reception; continuing with public P2P: " + error.getMessage());
+        }
     }
 
     @Override
@@ -104,6 +139,7 @@ final class MobileGoncBridge implements GoncBridge {
 
             @Override
             public void stopped(long exitCode) {
+                session.finish();
                 // A non-zero exit that the user did not trigger is a real failure
                 // (e.g. gonc rejected bad extra args). Surface it as an error rather
                 // than a silent stop, when the caller opted in (the VPN server).
@@ -128,11 +164,16 @@ final class MobileGoncBridge implements GoncBridge {
         };
     }
 
-    private static final class BridgeSession implements Session {
+    interface MulticastLease {
+        void release();
+    }
+
+    static final class BridgeSession implements Session {
         private volatile boolean stopped;
         private mobilegonc.Session goSession;
         private AndroidFileSource source;
         private List<ShareItem> pendingShareItems;
+        private MulticastLease multicastLease;
 
         @Override
         public synchronized void stop() {
@@ -143,6 +184,7 @@ final class MobileGoncBridge implements GoncBridge {
             if (source != null) {
                 source.closeAll();
             }
+            releaseMulticastLease();
         }
 
         @Override
@@ -170,6 +212,39 @@ final class MobileGoncBridge implements GoncBridge {
             }
             if (stopped && source != null) {
                 source.closeAll();
+            }
+        }
+
+        synchronized void attachMulticastLease(MulticastLease lease) {
+            if (lease == null) {
+                return;
+            }
+            if (stopped) {
+                releaseLease(lease);
+                return;
+            }
+            releaseMulticastLease();
+            multicastLease = lease;
+        }
+
+        synchronized void finish() {
+            releaseMulticastLease();
+        }
+
+        private void releaseMulticastLease() {
+            MulticastLease lease = multicastLease;
+            multicastLease = null;
+            releaseLease(lease);
+        }
+
+        private static void releaseLease(MulticastLease lease) {
+            if (lease == null) {
+                return;
+            }
+            try {
+                lease.release();
+            } catch (RuntimeException ignored) {
+                // Session shutdown must remain idempotent even if the platform already released the lock.
             }
         }
 

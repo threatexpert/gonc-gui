@@ -94,6 +94,13 @@ func New() *Runner {
 	return &Runner{}
 }
 
+func fileTransferP2POptions(useUDP bool) goncembed.P2POptions {
+	return goncembed.P2POptions{
+		UseUDP:         useUDP,
+		P2PWithLANMode: true,
+	}
+}
+
 func (r *Runner) IsRunning() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -130,9 +137,9 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 		if err != nil {
 			return err
 		}
-		session, err = goncembed.StartP2PShareSource(source, req.Password, req.UseUDP, cb)
+		session, err = goncembed.StartP2PShareSourceWithOptions(source, req.Password, fileTransferP2POptions(req.UseUDP), cb)
 	case ModeReceive:
-		session, err = goncembed.StartP2PReceive(req.Password, req.UseUDP, cb)
+		session, err = goncembed.StartP2PReceiveWithOptions(req.Password, fileTransferP2POptions(req.UseUDP), cb)
 	case ModeVPNServer:
 		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, req.ExtraArgs, cb)
 	case ModeVPNClient:
@@ -253,11 +260,25 @@ func validateRequest(req Request) error {
 		if len(req.SharePaths) == 0 {
 			return errors.New("select at least one file or folder to send")
 		}
-	case ModeReceive, ModeVPNServer, ModeVPNClient:
+	case ModeVPNServer, ModeVPNClient:
+		if hasDaemonArg(req.ExtraArgs) {
+			return errors.New("daemon mode is not supported when embedded")
+		}
+	case ModeReceive:
 	default:
 		return fmt.Errorf("unknown mode: %s", req.Mode)
 	}
 	return nil
+}
+
+func hasDaemonArg(extraArgs string) bool {
+	for _, arg := range splitExtraArgs(extraArgs) {
+		if arg == "-daemon" || arg == "--daemon" ||
+			strings.HasPrefix(arg, "-daemon=") || strings.HasPrefix(arg, "--daemon=") {
+			return true
+		}
+	}
+	return false
 }
 
 func buildArgs(req Request) ([]string, error) {

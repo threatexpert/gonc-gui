@@ -1338,7 +1338,7 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     private String activityStateLabel(String state, TransferMetrics metrics) {
         if (state == null) {
-            return getString(R.string.activity_state_waiting_connection);
+            return activityWaitingStateLabel();
         }
         String clean = state.trim();
         if ("wait".equals(clean)
@@ -1347,7 +1347,7 @@ public final class MainActivity extends Activity implements ModuleHost {
                 || "Ready".equals(clean)
                 || "starting".equals(clean)
                 || "Preparing".equals(clean)) {
-            return getString(R.string.activity_state_waiting_connection);
+            return activityWaitingStateLabel();
         }
         if ("connecting".equals(clean)) {
             return getString(R.string.activity_state_new_connection);
@@ -1359,6 +1359,13 @@ public final class MainActivity extends Activity implements ModuleHost {
             return getString(R.string.activity_state_connection_success);
         }
         return displayStatusLabel(clean);
+    }
+
+    private String activityWaitingStateLabel() {
+        if (vpnMode || (!sendMode && !vpnServerMode)) {
+            return getString(R.string.activity_state_waiting_peer);
+        }
+        return getString(R.string.activity_state_waiting_connection);
     }
 
     private boolean isAnySessionRunning() {
@@ -1408,7 +1415,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             return false;
         }
         String clean = mode.trim().toLowerCase(Locale.ROOT);
-        return "p2p".equals(clean) || "relay".equals(clean);
+        return "p2p".equals(clean) || "relay".equals(clean) || "lan".equals(clean);
     }
 
     private String normalizeMetricStatus(String status) {

@@ -422,6 +422,9 @@ final class UiKit {
         if ("p2p".equals(clean.toLowerCase(Locale.ROOT))) {
             return context.getString(R.string.route_direct);
         }
+        if ("lan".equals(clean.toLowerCase(Locale.ROOT))) {
+            return context.getString(R.string.route_lan);
+        }
         return "";
     }
 

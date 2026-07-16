@@ -64,6 +64,36 @@ func TestBuildArgsVPNServer(t *testing.T) {
 	}
 }
 
+func TestFileTransferP2POptionsAlwaysEnableLAN(t *testing.T) {
+	for _, useUDP := range []bool{false, true} {
+		options := fileTransferP2POptions(useUDP)
+		if !options.P2PWithLANMode {
+			t.Fatalf("fileTransferP2POptions(%v) disabled P2P with LAN", useUDP)
+		}
+		if options.UseUDP != useUDP {
+			t.Fatalf("fileTransferP2POptions(%v).UseUDP = %v", useUDP, options.UseUDP)
+		}
+	}
+}
+
+func TestValidateRequestRejectsEmbeddedDaemonMode(t *testing.T) {
+	for _, mode := range []Mode{ModeVPNServer, ModeVPNClient} {
+		t.Run(string(mode), func(t *testing.T) {
+			err := validateRequest(Request{
+				Mode:      mode,
+				Password:  "pass1234",
+				ExtraArgs: `-plain "-daemon"`,
+			})
+			if err == nil {
+				t.Fatal("validateRequest returned nil, want daemon mode error")
+			}
+			if err.Error() != "daemon mode is not supported when embedded" {
+				t.Fatalf("error = %q, want embedded daemon error", err.Error())
+			}
+		})
+	}
+}
+
 func TestVPNTunnelNeedsRoutePause(t *testing.T) {
 	paused := []string{"wait", "waiting", "connecting", "negotiating", "reconnecting", "disconnected", "failed", "error: timeout", "lost peer"}
 	for _, status := range paused {
