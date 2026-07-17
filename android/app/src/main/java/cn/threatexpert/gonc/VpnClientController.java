@@ -299,8 +299,8 @@ final class VpnClientController {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
         spinner.setSelection(Math.max(0, Math.min(selectedIndex, profiles.size() - 1)));
-        spinner.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
-        spinner.setPadding(u.dp(10), 0, u.dp(10), 0);
+        spinner.setBackgroundResource(R.drawable.bg_profile_spinner);
+        spinner.setPadding(u.dp(12), 0, u.dp(42), 0);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
