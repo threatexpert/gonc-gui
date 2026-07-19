@@ -777,7 +777,7 @@ textarea:focus {
   background: #20a36a;
 }
 
-.local-filename {
+.remote-row strong.local-filename {
   color: #1f6650;
 }
 

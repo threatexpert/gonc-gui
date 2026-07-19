@@ -772,6 +772,9 @@ function App() {
   const receivedCheckGeneration = useRef(0);
   const receivedSaveDir = useRef(saveDir);
   const receivedVisibleEntries = useRef<VisibleEntry[]>([]);
+  const receivedDownloadActive = useRef(false);
+  const receivedTerminalRefreshDone = useRef(true);
+  const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
@@ -800,6 +803,7 @@ function App() {
   const visibleEntries = useMemo(() => safeShallowEntries(remoteFiles, currentRemotePath), [remoteFiles, currentRemotePath]);
   receivedSaveDir.current = saveDir;
   receivedVisibleEntries.current = visibleEntries;
+  receivedLocalFilesRef.current = receivedLocalFiles;
   const currentRemoteBreadcrumbs = useMemo(() => remoteBreadcrumbs(currentRemotePath), [currentRemotePath]);
   const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteFiles, selectedPaths, excludedPaths), [remoteFiles, selectedPaths, excludedPaths]);
   const activeSpeed = Math.max(
@@ -841,7 +845,7 @@ function App() {
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
 
   useEffect(() => {
-    if (!remoteList || !saveDir) {
+    if (!remoteList || !saveDir || status.downloading || receivedDownloadActive.current) {
       return;
     }
     refreshVisibleReceivedFiles(visibleEntries, saveDir).catch(() => undefined);
@@ -1058,9 +1062,7 @@ function App() {
         const terminal = event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error';
         if (terminal) {
           ClearTaskbarProgress().catch(() => undefined);
-          refreshStatus()
-            .then(() => refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current))
-            .catch(() => undefined);
+          refreshReceivedFilesAfterDownload().catch(() => undefined);
         } else {
           refreshStatus();
         }
@@ -1138,11 +1140,14 @@ function App() {
     const generation = ++receivedCheckGeneration.current;
     const files = entries.filter((entry) => !entry.is_dir);
     const checked = await CheckReceivedFiles(root, files as any);
-    if (generation !== receivedCheckGeneration.current) {
+    if (generation !== receivedCheckGeneration.current || receivedDownloadActive.current) {
       return;
     }
     const paths = new Set(files.map((file) => normalizeRemotePath(file.path)));
     setReceivedLocalFiles((current) => {
+      if (generation !== receivedCheckGeneration.current || receivedDownloadActive.current) {
+        return current;
+      }
       const next = new Map(current);
       paths.forEach((path) => next.delete(path));
       checked.forEach((state) => {
@@ -1152,6 +1157,7 @@ function App() {
           next.set(path, {saveDir: root, size: remote.size});
         }
       });
+      receivedLocalFilesRef.current = next;
       return next;
     });
   }
@@ -1162,16 +1168,45 @@ function App() {
     if (!local) {
       return;
     }
+    const generation = receivedCheckGeneration.current;
     try {
       await RevealReceivedFile(local.saveDir, file as any);
     } catch (err) {
+      if (generation !== receivedCheckGeneration.current || receivedLocalFilesRef.current.get(path) !== local) {
+        return;
+      }
       setReceivedLocalFiles((current) => {
+        if (generation !== receivedCheckGeneration.current || current.get(path) !== local) {
+          return current;
+        }
         const next = new Map(current);
         next.delete(path);
+        receivedLocalFilesRef.current = next;
         return next;
       });
       setDownloadError(`${t.localFileUnavailable} ${localizeError(String(err))}`);
     }
+  }
+
+  async function refreshReceivedFilesAfterDownload() {
+    if (receivedTerminalRefreshDone.current) {
+      return;
+    }
+    receivedTerminalRefreshDone.current = true;
+    receivedDownloadActive.current = false;
+    await refreshStatus();
+    await refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current);
+  }
+
+  function beginReceivedDownloadTask() {
+    receivedCheckGeneration.current += 1;
+    receivedDownloadActive.current = true;
+    receivedTerminalRefreshDone.current = false;
+  }
+
+  function abandonReceivedDownloadTask() {
+    receivedDownloadActive.current = false;
+    receivedTerminalRefreshDone.current = true;
   }
 
   async function openSaveDir() {
@@ -1724,10 +1759,12 @@ function App() {
       setDownloadError(t.noSelection);
       return;
     }
+    beginReceivedDownloadTask();
     try {
       await StartHTTPDownload(saveDir, '/', Array.from(selectedPaths), Array.from(excludedPaths), remoteFiles as any, downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
+      abandonReceivedDownloadTask();
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
@@ -1735,10 +1772,12 @@ function App() {
   async function startDownloadAll() {
     setError('');
     setDownloadError('');
+    beginReceivedDownloadTask();
     try {
       await StartHTTPDownload(saveDir, currentRemotePath, [], [], [], downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
+      abandonReceivedDownloadTask();
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
@@ -1748,7 +1787,7 @@ function App() {
     try {
       await StopHTTPDownload();
       await ClearTaskbarProgress();
-      await refreshStatus();
+      await refreshReceivedFilesAfterDownload();
     } catch (err) {
       setError(localizeError(String(err)));
     }
