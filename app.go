@@ -489,11 +489,23 @@ func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
 }
 
 func defaultSaveDir() string {
-	home, err := os.UserHomeDir()
+	return defaultSaveDirFrom(platformDownloadsDir, os.UserHomeDir, os.Getwd)
+}
+
+func defaultSaveDirFrom(
+	downloadsDir func() (string, error),
+	homeDir func() (string, error),
+	workingDir func() (string, error),
+) string {
+	downloads, err := downloadsDir()
+	if err == nil && strings.TrimSpace(downloads) != "" {
+		return filepath.Join(downloads, "GoncTransfer")
+	}
+	home, err := homeDir()
 	if err == nil && home != "" {
 		return filepath.Join(home, "Downloads", "GoncTransfer")
 	}
-	wd, err := os.Getwd()
+	wd, err := workingDir()
 	if err == nil && wd != "" {
 		return filepath.Join(wd, "GoncTransfer")
 	}
