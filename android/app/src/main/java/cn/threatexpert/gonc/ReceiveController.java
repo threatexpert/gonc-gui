@@ -1,5 +1,6 @@
 package cn.threatexpert.gonc;
 
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -18,6 +19,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * Receive ("receive files") module: the largest and most intricate screen. Owns
@@ -53,6 +56,8 @@ final class ReceiveController {
     private String remoteCurrentPath = "";
     private boolean remoteCurrentPathMissing;
     private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
+    private final Map<String, HttpReceiver.ReceivedTarget> receivedTargets = new LinkedHashMap<>();
+    private long receivedTargetCheckId;
     private final Set<String> selectedRemotePaths = new HashSet<>();
     private final Set<String> excludedRemotePaths = new HashSet<>();
     private int remoteFileCount;
@@ -470,6 +475,7 @@ final class ReceiveController {
 
     private View remoteFileRow(HttpReceiver.RemoteFile file) {
         String normalizedPath = normalizeRemotePath(file.path);
+        HttpReceiver.ReceivedTarget target = receivedTargets.get(normalizedPath);
         LinearLayout row = row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(6), dp(10), dp(6));
@@ -515,6 +521,24 @@ final class ReceiveController {
         }
         labels.addView(text(detail, 12, muted(), Typeface.NORMAL));
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (!file.isDir && target != null) {
+            View.OnClickListener open = v -> openReceivedFile(file, false);
+            icon.setOnClickListener(open);
+            icon.setContentDescription(string(R.string.open) + " " + baseName(normalizedPath));
+            icon.setClickable(true);
+            icon.setFocusable(true);
+            labels.setOnClickListener(open);
+            labels.setContentDescription(string(R.string.open) + " " + baseName(normalizedPath));
+            labels.setClickable(true);
+            labels.setFocusable(true);
+            TextView available = text("\u2713", 14, Color.rgb(32, 151, 102), Typeface.BOLD);
+            available.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            row.addView(available);
+            Button more = quietTouchButton("\u22ee");
+            more.setContentDescription(string(R.string.received_file_actions));
+            more.setOnClickListener(v -> showReceivedFileMenu(more, file));
+            row.addView(more, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        }
         if (file.isDir) {
             row.addView(text("›", 22, Color.rgb(32, 101, 165), Typeface.BOLD), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
@@ -526,6 +550,126 @@ final class ReceiveController {
             }
         });
         return row;
+    }
+
+    private void showReceivedFileMenu(View anchor, HttpReceiver.RemoteFile file) {
+        PopupMenu menu = new PopupMenu(context(), anchor);
+        menu.getMenu().add(0, 1, 0, R.string.open);
+        menu.getMenu().add(0, 2, 1, R.string.open_with);
+        menu.getMenu().add(0, 3, 2, R.string.share_file);
+        menu.getMenu().add(0, 4, 3, R.string.file_information);
+        menu.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case 1:
+                    openReceivedFile(file, false);
+                    return true;
+                case 2:
+                    openReceivedFile(file, true);
+                    return true;
+                case 3:
+                    withCurrentReceivedTarget(
+                            file, target -> ReceivedFileActions.share(context(), target));
+                    return true;
+                case 4:
+                    withCurrentReceivedTarget(
+                            file, target -> ReceivedFileActions.showInfo(context(), target));
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        menu.show();
+    }
+
+    private void openReceivedFile(HttpReceiver.RemoteFile file, boolean chooser) {
+        withCurrentReceivedTarget(
+                file, target -> ReceivedFileActions.open(context(), target, chooser));
+    }
+
+    private void withCurrentReceivedTarget(
+            HttpReceiver.RemoteFile file, Consumer<HttpReceiver.ReceivedTarget> action) {
+        long runId = receiveRunId;
+        long checkId = ++receivedTargetCheckId;
+        String checkedPath = normalizeRemotePath(remoteCurrentPath);
+        Uri tree = saveTreeUri;
+        String checkedTree = treeSnapshot(tree);
+        Context checkContext = applicationContext();
+        new Thread(() -> {
+            Map<String, HttpReceiver.ReceivedTarget> checked = HttpReceiver.findReceivedTargets(
+                    checkContext, tree, Collections.singletonList(file));
+            host.mainHandler().post(() -> {
+                if (!isReceivedTargetCheckCurrent(runId, checkId, checkedPath, checkedTree)) {
+                    return;
+                }
+                String normalizedPath = normalizeRemotePath(file.path);
+                HttpReceiver.ReceivedTarget target = checked.get(normalizedPath);
+                if (target == null) {
+                    removeReceivedTarget(normalizedPath);
+                    return;
+                }
+                receivedTargets.put(normalizedPath, target);
+                try {
+                    action.accept(target);
+                } catch (ActivityNotFoundException error) {
+                    host.toast(R.string.toast_received_file_no_handler);
+                } catch (SecurityException | IllegalArgumentException error) {
+                    removeReceivedTarget(normalizedPath);
+                }
+            });
+        }, "gonc-received-file-action-check").start();
+    }
+
+    private void removeReceivedTarget(String normalizedPath) {
+        receivedTargets.remove(normalizedPath);
+        host.toast(R.string.toast_received_file_unavailable);
+        host.requestRender();
+    }
+
+    private void refreshReceivedTargets(long runId, String checkedPath) {
+        long checkId = ++receivedTargetCheckId;
+        List<HttpReceiver.RemoteFile> snapshot = new ArrayList<>(visibleRemoteFiles());
+        Uri tree = saveTreeUri;
+        String normalizedCheckedPath = normalizeRemotePath(checkedPath);
+        String checkedTree = treeSnapshot(tree);
+        Context checkContext = applicationContext();
+        new Thread(() -> {
+            Map<String, HttpReceiver.ReceivedTarget> checked =
+                    HttpReceiver.findReceivedTargets(checkContext, tree, snapshot);
+            host.mainHandler().post(() -> {
+                if (!isReceivedTargetCheckCurrent(
+                        runId, checkId, normalizedCheckedPath, checkedTree)) {
+                    return;
+                }
+                for (HttpReceiver.RemoteFile file : snapshot) {
+                    receivedTargets.remove(normalizeRemotePath(file.path));
+                }
+                receivedTargets.putAll(checked);
+                host.requestRender();
+            });
+        }, "gonc-received-file-check").start();
+    }
+
+    private boolean isReceivedTargetCheckCurrent(
+            long runId, long checkId, String checkedPath, String checkedTree) {
+        return ReceivedTargetCheckGuard.isCurrent(
+                runId,
+                receiveRunId,
+                checkId,
+                receivedTargetCheckId,
+                checkedPath,
+                normalizeRemotePath(remoteCurrentPath),
+                checkedTree,
+                treeSnapshot(saveTreeUri));
+    }
+
+    private String treeSnapshot(Uri tree) {
+        return tree == null ? null : tree.toString();
+    }
+
+    private Context applicationContext() {
+        Context current = context();
+        Context application = current.getApplicationContext();
+        return application == null ? current : application;
     }
 
     private View remoteBreadcrumbView() {
@@ -1237,7 +1381,13 @@ final class ReceiveController {
         receiveStatus = "Preparing";
         host.log("info", "Start receiving requested");
         long runId = ++receiveRunId;
-        receiveSession = host.bridge().startP2PReceive(context(), passphrase, receiveUseUdp, callback(runId));
+        GoncBridge.Session started = host.bridge().startP2PReceive(
+                context(), passphrase, receiveUseUdp, callback(runId));
+        receiveSession = started;
+        if (started != null) {
+            receivedTargets.clear();
+            receivedTargetCheckId++;
+        }
         host.refreshForegroundService();
         host.requestRender();
     }
@@ -1426,6 +1576,7 @@ final class ReceiveController {
                         host.log("info", "Remote list ready " + displayRemotePath(targetPath) + ": " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
                     }
                     host.requestRender();
+                    refreshReceivedTargets(runId, targetPath);
                 });
             }
 
@@ -1631,6 +1782,7 @@ final class ReceiveController {
                     int failedFiles = failures == null ? 0 : failures.size();
                     downloadFailedFiles = failedFiles;
                     downloadStatus = failedFiles > 0 ? "Receive complete with failures" : "Receive complete";
+                    refreshReceivedTargets(runId, remoteCurrentPath);
                     host.refreshForegroundService();
                     if (failedFiles > 0) {
                         host.log("error", "Receive completed with " + failedFiles + " failed file(s): " + totalFiles + " total, "
