@@ -31,7 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /**
  * Receive ("receive files") module: the largest and most intricate screen. Owns
@@ -58,6 +58,7 @@ final class ReceiveController {
     private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
     private final Map<String, HttpReceiver.ReceivedTarget> receivedTargets = new LinkedHashMap<>();
     private long receivedTargetCheckId;
+    private boolean shutdown;
     private final Set<String> selectedRemotePaths = new HashSet<>();
     private final Set<String> excludedRemotePaths = new HashSet<>();
     private int remoteFileCount;
@@ -172,6 +173,8 @@ final class ReceiveController {
 
     /** Stop every receive worker quietly (no UI/log), e.g. on Activity destroy. */
     void shutdown() {
+        shutdown = true;
+        receivedTargetCheckId++;
         GoncBridge.Session receive = receiveSession;
         HttpReceiver.Session list = remoteListSession;
         HttpReceiver.Session download = receiveDownload;
@@ -568,11 +571,12 @@ final class ReceiveController {
                     return true;
                 case 3:
                     withCurrentReceivedTarget(
-                            file, target -> ReceivedFileActions.share(context(), target));
+                            file, (target, saveLabel) -> ReceivedFileActions.share(context(), target));
                     return true;
                 case 4:
                     withCurrentReceivedTarget(
-                            file, target -> ReceivedFileActions.showInfo(context(), target));
+                            file, (target, saveLabel) ->
+                                    ReceivedFileActions.showInfo(context(), target, saveLabel));
                     return true;
                 default:
                     return false;
@@ -583,33 +587,50 @@ final class ReceiveController {
 
     private void openReceivedFile(HttpReceiver.RemoteFile file, boolean chooser) {
         withCurrentReceivedTarget(
-                file, target -> ReceivedFileActions.open(context(), target, chooser));
+                file, (target, saveLabel) ->
+                        ReceivedFileActions.open(context(), target, chooser));
     }
 
     private void withCurrentReceivedTarget(
-            HttpReceiver.RemoteFile file, Consumer<HttpReceiver.ReceivedTarget> action) {
+            HttpReceiver.RemoteFile file,
+            BiConsumer<HttpReceiver.ReceivedTarget, String> action) {
         long runId = receiveRunId;
         long checkId = ++receivedTargetCheckId;
         String checkedPath = normalizeRemotePath(remoteCurrentPath);
         Uri tree = saveTreeUri;
         String checkedTree = treeSnapshot(tree);
+        String checkedSaveLabel = saveLocationLabel;
         Context checkContext = applicationContext();
         new Thread(() -> {
-            Map<String, HttpReceiver.ReceivedTarget> checked = HttpReceiver.findReceivedTargets(
-                    checkContext, tree, Collections.singletonList(file));
+            Map<String, HttpReceiver.ReceivedTarget> checked;
+            RuntimeException resolutionFailure = null;
+            try {
+                checked = HttpReceiver.findReceivedTargets(
+                        checkContext, tree, Collections.singletonList(file));
+            } catch (RuntimeException error) {
+                checked = Collections.emptyMap();
+                resolutionFailure = error;
+            }
+            Map<String, HttpReceiver.ReceivedTarget> resolved = checked;
+            RuntimeException failure = resolutionFailure;
             host.mainHandler().post(() -> {
-                if (!isReceivedTargetCheckCurrent(runId, checkId, checkedPath, checkedTree)) {
+                if (!isReceivedTargetCheckCurrent(
+                        runId, checkId, checkedPath, checkedTree, checkedSaveLabel)) {
                     return;
                 }
                 String normalizedPath = normalizeRemotePath(file.path);
-                HttpReceiver.ReceivedTarget target = checked.get(normalizedPath);
+                if (failure != null) {
+                    removeReceivedTarget(normalizedPath);
+                    return;
+                }
+                HttpReceiver.ReceivedTarget target = resolved.get(normalizedPath);
                 if (target == null) {
                     removeReceivedTarget(normalizedPath);
                     return;
                 }
                 receivedTargets.put(normalizedPath, target);
                 try {
-                    action.accept(target);
+                    action.accept(target, checkedSaveLabel);
                 } catch (ActivityNotFoundException error) {
                     host.toast(R.string.toast_received_file_no_handler);
                 } catch (SecurityException | IllegalArgumentException error) {
@@ -631,26 +652,42 @@ final class ReceiveController {
         Uri tree = saveTreeUri;
         String normalizedCheckedPath = normalizeRemotePath(checkedPath);
         String checkedTree = treeSnapshot(tree);
+        String checkedSaveLabel = saveLocationLabel;
         Context checkContext = applicationContext();
         new Thread(() -> {
-            Map<String, HttpReceiver.ReceivedTarget> checked =
-                    HttpReceiver.findReceivedTargets(checkContext, tree, snapshot);
+            Map<String, HttpReceiver.ReceivedTarget> checked;
+            RuntimeException resolutionFailure = null;
+            try {
+                checked = HttpReceiver.findReceivedTargets(checkContext, tree, snapshot);
+            } catch (RuntimeException error) {
+                checked = Collections.emptyMap();
+                resolutionFailure = error;
+            }
+            Map<String, HttpReceiver.ReceivedTarget> resolved = checked;
+            RuntimeException failure = resolutionFailure;
             host.mainHandler().post(() -> {
                 if (!isReceivedTargetCheckCurrent(
-                        runId, checkId, normalizedCheckedPath, checkedTree)) {
+                        runId, checkId, normalizedCheckedPath, checkedTree, checkedSaveLabel)) {
+                    return;
+                }
+                if (failure != null) {
                     return;
                 }
                 for (HttpReceiver.RemoteFile file : snapshot) {
                     receivedTargets.remove(normalizeRemotePath(file.path));
                 }
-                receivedTargets.putAll(checked);
+                receivedTargets.putAll(resolved);
                 host.requestRender();
             });
         }, "gonc-received-file-check").start();
     }
 
     private boolean isReceivedTargetCheckCurrent(
-            long runId, long checkId, String checkedPath, String checkedTree) {
+            long runId,
+            long checkId,
+            String checkedPath,
+            String checkedTree,
+            String checkedSaveLabel) {
         return ReceivedTargetCheckGuard.isCurrent(
                 runId,
                 receiveRunId,
@@ -659,7 +696,10 @@ final class ReceiveController {
                 checkedPath,
                 normalizeRemotePath(remoteCurrentPath),
                 checkedTree,
-                treeSnapshot(saveTreeUri));
+                treeSnapshot(saveTreeUri),
+                checkedSaveLabel,
+                saveLocationLabel,
+                shutdown);
     }
 
     private String treeSnapshot(Uri tree) {

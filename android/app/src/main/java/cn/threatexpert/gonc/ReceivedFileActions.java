@@ -62,7 +62,8 @@ final class ReceivedFileActions {
         startActivity(context, chooser(context, send, uri, target.displayName, R.string.share_file));
     }
 
-    static void showInfo(Context context, HttpReceiver.ReceivedTarget target) {
+    static void showInfo(
+            Context context, HttpReceiver.ReceivedTarget target, String saveLocationLabel) {
         StringBuilder message = new StringBuilder()
                 .append(context.getString(R.string.file_info_name, target.displayName))
                 .append('\n')
@@ -75,7 +76,7 @@ final class ReceivedFileActions {
             message.append('\n').append(context.getString(R.string.file_info_modified, formatted));
         }
         message.append('\n').append(context.getString(
-                R.string.file_info_save_location, context.getString(R.string.received)));
+                R.string.file_info_save_location, saveLocationLabel));
 
         new AlertDialog.Builder(context)
                 .setTitle(R.string.file_information)

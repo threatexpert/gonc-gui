@@ -14,10 +14,15 @@ final class ReceivedTargetCheckGuard {
             String expectedPath,
             String currentPath,
             String expectedTree,
-            String currentTree) {
-        return expectedRunId == currentRunId
+            String currentTree,
+            String expectedSaveLabel,
+            String currentSaveLabel,
+            boolean shutdown) {
+        return !shutdown
+                && expectedRunId == currentRunId
                 && expectedCheckId == currentCheckId
                 && Objects.equals(expectedPath, currentPath)
-                && Objects.equals(expectedTree, currentTree);
+                && Objects.equals(expectedTree, currentTree)
+                && Objects.equals(expectedSaveLabel, currentSaveLabel);
     }
 }
