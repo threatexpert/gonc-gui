@@ -14,6 +14,24 @@ The app supports:
 - Open files with Gonc through `ACTION_VIEW` when a file manager offers it.
 - Scan and display passphrase QR codes.
 
+## Received file actions
+
+The current receive session marks a remote file as locally available only when
+the expected target exists, is readable, is a regular file, and has exactly the
+size reported by the remote listing. This lightweight check enables file actions
+but is not a content-integrity guarantee.
+
+Tap an available file's icon or name to open it through Android. Its overflow
+menu also provides Open, Open with, Share, and File information. Availability
+and resolved targets belong only to the current in-memory receive session; the
+app does not persist a received-file or download history across process exits.
+
+APK files use the same open action. Gonc requests
+`android.permission.REQUEST_INSTALL_PACKAGES` only so it can hand the APK to
+Android's package installer. Android controls unknown-source authorization and
+installation confirmation; Gonc neither requests `INSTALL_PACKAGES` nor installs
+packages silently.
+
 ## Architecture
 
 The active bridge is `MobileGoncBridge`, backed by the gomobile-generated

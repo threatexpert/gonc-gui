@@ -114,6 +114,18 @@ Resume mode validates local blocks with a BLAKE3 manifest before reusing them.
 For interrupted downloads, Gonc resumes from the last verified complete block
 instead of blindly trusting the local file size.
 
+After a received file exists as a readable regular file and its size matches the
+current remote listing, the receive list marks it as locally available. This is
+a convenience check, not a content-integrity guarantee. On desktop, the row's
+locate button reveals the file in Explorer, Finder, or the platform file manager;
+Gonc does not open received files directly on desktop.
+
+On Android, locally available files can be opened, opened with another app,
+shared, or inspected from the current receive session. These actions are not
+saved as download history across app launches. Opening an APK hands it to
+Android's package installer, which controls unknown-source authorization and
+installation confirmation; Gonc does not install packages silently.
+
 ## VPN Tunnel
 
 Gonc can also run a VPN tunnel between devices. Deploying the server is meant to
