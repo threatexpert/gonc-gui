@@ -13,61 +13,81 @@ import android.widget.ImageView;
 import com.google.zxing.WriterException;
 
 final class PassphraseQrView {
-    private static final int CACHE_ENTRIES = 6;
     private static final int MASK_SAMPLE_SIZE = 12;
     private static final int PLACEHOLDER_COLOR = Color.rgb(226, 232, 240);
     private static final int COVER_COLOR = Color.rgb(148, 163, 184);
 
-    private static final LruCache<TransferInlineQrState.CacheKey, BitmapPair> CACHE =
-            new LruCache<>(CACHE_ENTRIES);
+    private static final LruCache<TransferInlineQrState.BitmapCacheKey, CacheEntry> CACHE =
+            new LruCache<TransferInlineQrState.BitmapCacheKey, CacheEntry>(
+                    TransferInlineQrState.qrBitmapCacheBudgetBytes()) {
+                @Override
+                protected int sizeOf(TransferInlineQrState.BitmapCacheKey key, CacheEntry value) {
+                    return Math.max(1, value.bitmap.getAllocationByteCount());
+                }
+            };
 
     private PassphraseQrView() {
     }
 
     static View create(Context context, UiKit ui, String passphrase, int sizeDp,
-                       boolean masked, Runnable onClick) {
-        int pixelSize = Math.max(1, ui.dp(sizeDp));
+                       boolean masked, Runnable onClick, Runnable onError) {
+        int displayPixelSize = Math.max(1, ui.dp(sizeDp));
+        int encodedPixelSize = TransferInlineQrState.capQrPixelSize(displayPixelSize);
         String cleanPassphrase = passphrase == null ? "" : passphrase.trim();
-        TransferInlineQrState.CacheKey key =
-                new TransferInlineQrState.CacheKey(cleanPassphrase, pixelSize);
-        BitmapPair pair = CACHE.get(key);
-        if (pair == null) {
-            pair = createBitmaps(cleanPassphrase, pixelSize);
-            CACHE.put(key, pair);
+        TransferInlineQrState.BitmapCacheKey key =
+                TransferInlineQrState.productionCacheKey(cleanPassphrase, encodedPixelSize, masked);
+        CacheEntry entry = CACHE.get(key);
+        boolean newlyFailed = false;
+        if (entry == null) {
+            entry = createEntry(cleanPassphrase, encodedPixelSize, masked);
+            CACHE.put(key, entry);
+            newlyFailed = entry.failed;
+        }
+        if (newlyFailed && onError != null) {
+            onError.run();
         }
 
         ImageView image = new ImageView(context);
         image.setAdjustViewBounds(true);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setImageBitmap(masked ? pair.masked : pair.clear);
+        image.setImageBitmap(entry.bitmap);
 
+        boolean actionable = !cleanPassphrase.isEmpty() && !entry.failed;
         FrameLayout container = new FrameLayout(context);
         int padding = ui.dp(6);
         container.setPadding(padding, padding, padding, padding);
         container.setBackground(ui.rounded(Color.WHITE, ui.dp(8), Color.rgb(216, 226, 238), 1));
-        container.setContentDescription(context.getString(R.string.view_passphrase_qr));
-        container.setClickable(true);
-        container.setFocusable(true);
-        container.setOnClickListener(view -> {
-            if (onClick != null) {
-                onClick.run();
-            }
-        });
-        container.addView(image, new FrameLayout.LayoutParams(pixelSize, pixelSize));
+        container.setEnabled(actionable);
+        container.setClickable(actionable);
+        container.setFocusable(actionable);
+        container.setImportantForAccessibility(actionable
+                ? View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                : View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        if (actionable) {
+            container.setContentDescription(context.getString(R.string.view_passphrase_qr));
+            container.setOnClickListener(view -> {
+                if (onClick != null) {
+                    onClick.run();
+                }
+            });
+        }
+        container.addView(image, new FrameLayout.LayoutParams(displayPixelSize, displayPixelSize));
         return container;
     }
 
-    private static BitmapPair createBitmaps(String passphrase, int pixelSize) {
+    static void clearCache() {
+        CACHE.evictAll();
+    }
+
+    private static CacheEntry createEntry(String passphrase, int pixelSize, boolean masked) {
         if (passphrase.isEmpty()) {
-            Bitmap placeholder = placeholder(pixelSize);
-            return new BitmapPair(placeholder, placeholder);
+            return new CacheEntry(placeholder(pixelSize), false);
         }
         try {
             Bitmap clear = QrCodes.encode(passphrase, pixelSize);
-            return new BitmapPair(clear, masked(clear, pixelSize));
+            return new CacheEntry(masked ? masked(clear, pixelSize) : clear, false);
         } catch (WriterException error) {
-            Bitmap placeholder = placeholder(pixelSize);
-            return new BitmapPair(placeholder, placeholder);
+            return new CacheEntry(placeholder(pixelSize), true);
         }
     }
 
@@ -97,13 +117,13 @@ final class PassphraseQrView {
         return bitmap;
     }
 
-    private static final class BitmapPair {
-        final Bitmap clear;
-        final Bitmap masked;
+    private static final class CacheEntry {
+        final Bitmap bitmap;
+        final boolean failed;
 
-        BitmapPair(Bitmap clear, Bitmap masked) {
-            this.clear = clear;
-            this.masked = masked;
+        CacheEntry(Bitmap bitmap, boolean failed) {
+            this.bitmap = bitmap;
+            this.failed = failed;
         }
     }
 }

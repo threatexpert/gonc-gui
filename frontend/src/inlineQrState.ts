@@ -42,3 +42,28 @@ export function isCurrentQrGeneration(
   return requestId === currentId
     && generatedPassphrase === normalizedQrPassphrase(currentPassphrase);
 }
+
+export type QrGenerationRequest = {
+  requestId: number;
+  passphrase: string;
+};
+
+export function qrGenerationRequest(requestId: number, passphrase: string): QrGenerationRequest {
+  return {
+    requestId,
+    passphrase: normalizedQrPassphrase(passphrase),
+  };
+}
+
+export function isCurrentQrRequest(
+  request: QrGenerationRequest,
+  currentId: number,
+  currentPassphrase: string,
+) {
+  return isCurrentQrGeneration(
+    request.requestId,
+    currentId,
+    request.passphrase,
+    currentPassphrase,
+  );
+}

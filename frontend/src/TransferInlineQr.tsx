@@ -1,6 +1,10 @@
 import {useEffect, useRef, useState} from 'react';
 import QRCode from 'qrcode';
-import {isCurrentQrGeneration, normalizedQrPassphrase} from './inlineQrState';
+import {
+  isCurrentQrRequest,
+  normalizedQrPassphrase,
+  qrGenerationRequest,
+} from './inlineQrState';
 
 const QR_OPTIONS = {
   width: 512,
@@ -22,6 +26,8 @@ export function TransferInlineQr({passphrase, masked, onActivate, onError}: Prop
   const normalized = normalizedQrPassphrase(passphrase);
   const generation = useRef(0);
   const generatedPassphrase = useRef('');
+  const latestNormalizedPassphrase = useRef(normalized);
+  latestNormalizedPassphrase.current = normalized;
   const onErrorRef = useRef(onError);
   const [dataUrl, setDataUrl] = useState('');
   const visibleDataUrl = generatedPassphrase.current === normalized ? dataUrl : '';
@@ -31,19 +37,19 @@ export function TransferInlineQr({passphrase, masked, onActivate, onError}: Prop
   }, [onError]);
 
   useEffect(() => {
-    const requestId = ++generation.current;
+    const request = qrGenerationRequest(++generation.current, normalized);
     generatedPassphrase.current = '';
     setDataUrl('');
     if (!normalized) {
       return;
     }
     QRCode.toDataURL(normalized, QR_OPTIONS).then((next) => {
-      if (isCurrentQrGeneration(requestId, generation.current, normalized, normalized)) {
-        generatedPassphrase.current = normalized;
+      if (isCurrentQrRequest(request, generation.current, latestNormalizedPassphrase.current)) {
+        generatedPassphrase.current = request.passphrase;
         setDataUrl(next);
       }
     }).catch((error) => {
-      if (requestId === generation.current) {
+      if (isCurrentQrRequest(request, generation.current, latestNormalizedPassphrase.current)) {
         generatedPassphrase.current = '';
         setDataUrl('');
         onErrorRef.current(String(error));

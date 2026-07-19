@@ -52,4 +52,33 @@ public class TransferInlineQrStateTest {
         assertNotEquals(new TransferInlineQrState.CacheKey("secret", 112),
                 new TransferInlineQrState.CacheKey("secret", 220));
     }
+
+    @Test
+    public void productionCacheCapsPixelsAndUsesStrictByteBudget() {
+        assertEquals(4 * 1024 * 1024, TransferInlineQrState.qrBitmapCacheBudgetBytes());
+        assertEquals(320, TransferInlineQrState.capQrPixelSize(320));
+        assertEquals(512, TransferInlineQrState.capQrPixelSize(880));
+    }
+
+    @Test
+    public void productionCacheKeyUsesDigestSizeAndVariantWithoutRawPassphrase() {
+        TransferInlineQrState.BitmapCacheKey clear =
+                TransferInlineQrState.productionCacheKey(" secret ", 880, false);
+        TransferInlineQrState.BitmapCacheKey same =
+                TransferInlineQrState.productionCacheKey("secret", 512, false);
+        TransferInlineQrState.BitmapCacheKey masked =
+                TransferInlineQrState.productionCacheKey("secret", 512, true);
+
+        assertEquals(clear, same);
+        assertNotEquals(clear, masked);
+        assertEquals(512, clear.pixelSize());
+        assertFalse(clear.toString().contains("secret"));
+    }
+
+    @Test
+    public void staleRunCannotClearCurrentQrCache() {
+        assertTrue(TransferInlineQrState.shouldClearQrCache(9, 9));
+        assertFalse(TransferInlineQrState.shouldClearQrCache(9, 8));
+        assertFalse(TransferInlineQrState.shouldClearQrCache(0, 0));
+    }
 }

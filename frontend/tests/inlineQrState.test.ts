@@ -7,6 +7,8 @@ import {
   isFileTransferMode,
   latchSuccessfulConnection,
   normalizedQrPassphrase,
+  qrGenerationRequest,
+  isCurrentQrRequest,
   transferStartGate,
 } from '../src/inlineQrState.js';
 
@@ -27,6 +29,12 @@ test('late asynchronous QR result cannot replace current passphrase', () => {
   assert.equal(isCurrentQrGeneration(3, 4, 'old', 'new'), false);
   assert.equal(isCurrentQrGeneration(4, 4, 'new', 'new'), true);
   assert.equal(normalizedQrPassphrase('  secret  '), 'secret');
+});
+
+test('same generation token rejects a result for the previous rendered passphrase', () => {
+  const oldRequest = qrGenerationRequest(4, 'old');
+  assert.equal(isCurrentQrRequest(oldRequest, 4, 'new'), false);
+  assert.equal(isCurrentQrRequest(oldRequest, 4, 'old'), true);
 });
 
 test('file-transfer reports only belong to their exact run', () => {

@@ -183,6 +183,7 @@ final class ReceiveController {
     /** Stop every receive worker quietly (no UI/log), e.g. on Activity destroy. */
     void shutdown() {
         shutdown = true;
+        PassphraseQrView.clearCache();
         receivedTargetCheckId++;
         GoncBridge.Session receive = receiveSession;
         HttpReceiver.Session list = remoteListSession;
@@ -210,6 +211,7 @@ final class ReceiveController {
 
     /** Reset transient state for a fresh launch. */
     void resetForFreshLaunch() {
+        PassphraseQrView.clearCache();
         receiveUseUdp = false;
         receivePassword = "";
         receivePasswordVisible = false;
@@ -323,7 +325,8 @@ final class ReceiveController {
         if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
             row.addView(PassphraseQrView.create(
                     context(), host.ui(), receivePassword, 104, false,
-                    () -> showPasswordQr()));
+                    () -> showPasswordQr(),
+                    () -> host.toast(R.string.inline_qr_generation_failed)));
         } else {
             Button passphrase = secondaryButton(string(R.string.passphrase));
             passphrase.setOnClickListener(v -> showPasswordQr());
@@ -1477,6 +1480,7 @@ final class ReceiveController {
             return;
         }
         hidePassword();
+        PassphraseQrView.clearCache();
         receiveMetrics.reset();
         remoteListStatus = "Waiting for peer";
         downloadStatus = "Idle";
@@ -1539,9 +1543,14 @@ final class ReceiveController {
                         return;
                     }
                     host.updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
+                    boolean wasRetired = receiveQrRetired;
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, status);
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(
                             receiveQrRetired, receiveConnectionState());
+                    if (!wasRetired && receiveQrRetired
+                            && TransferInlineQrState.shouldClearQrCache(receiveRunId, runId)) {
+                        PassphraseQrView.clearCache();
+                    }
                     host.requestRender();
                     host.refreshForegroundService();
                 });
@@ -1568,6 +1577,9 @@ final class ReceiveController {
                     receiveStatus = "Ready";
                     receiveMetrics.p2pStatus = "connected";
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "ready");
+                    if (TransferInlineQrState.shouldClearQrCache(receiveRunId, runId)) {
+                        PassphraseQrView.clearCache();
+                    }
                     host.log("info", "Ready: " + endpoint);
                     loadRemoteFiles(endpoint, runId);
                     host.requestRender();
@@ -1584,6 +1596,9 @@ final class ReceiveController {
                     receiveSession = null;
                     receiveStatus = "Idle";
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "stopped");
+                    if (TransferInlineQrState.shouldClearQrCache(receiveRunId, runId)) {
+                        PassphraseQrView.clearCache();
+                    }
                     stopReceiveWorkers();
                     receiveMetrics.markStopped();
                     host.refreshForegroundService();
@@ -1601,6 +1616,9 @@ final class ReceiveController {
                     receiveSession = null;
                     receiveStatus = "Error";
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "error");
+                    if (TransferInlineQrState.shouldClearQrCache(receiveRunId, runId)) {
+                        PassphraseQrView.clearCache();
+                    }
                     stopReceiveWorkers();
                     remoteListStatus = "Failed";
                     receiveMetrics.p2pStatus = "error";
@@ -1619,6 +1637,7 @@ final class ReceiveController {
             receiveSession = null;
         }
         receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "stopped");
+        PassphraseQrView.clearCache();
         if (receiveDownload != null) {
             receiveDownload.stop();
         }

@@ -237,6 +237,7 @@
     <string name="toast_activity_copied">活动日志已复制</string>
     <string name="passphrase_qr">口令二维码</string>
     <string name="view_passphrase_qr">查看口令二维码</string>
+    <string name="inline_qr_generation_failed">无法生成二维码</string>
     <string name="passphrase_qr_copy_hint">长按二维码或口令可复制</string>
     <string name="source_title">开源项目</string>
     <string name="source_description">Gonc 是开源项目。你可以在 GitHub 查看源代码、反馈问题和关注更新。</string>

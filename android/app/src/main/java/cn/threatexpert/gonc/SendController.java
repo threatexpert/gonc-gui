@@ -196,7 +196,8 @@ final class SendController {
             qrOnly.setGravity(Gravity.CENTER_HORIZONTAL);
             qrOnly.addView(PassphraseQrView.create(
                     host.context(), u, password, 220, sendQrHasConnected,
-                    () -> host.showPassphraseQr(password.trim())));
+                    () -> host.showPassphraseQr(password.trim()),
+                    () -> host.toast(R.string.inline_qr_generation_failed)));
             return qrOnly;
         }
         boolean locked = session != null;
@@ -367,6 +368,7 @@ final class SendController {
             return;
         }
         hidePassword();
+        PassphraseQrView.clearCache();
         metrics.reset();
         sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
         status = "Preparing";
@@ -386,6 +388,7 @@ final class SendController {
         status = "Idle";
         metrics.markStopped();
         sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
+        PassphraseQrView.clearCache();
         host.refreshForegroundService();
         host.log("warn", "Send stop requested");
         host.requestRender();
@@ -395,6 +398,7 @@ final class SendController {
         GoncBridge.Session current = session;
         session = null;
         sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
+        PassphraseQrView.clearCache();
         if (current != null) {
             current.stop();
         }
@@ -414,6 +418,7 @@ final class SendController {
         passwordVisibilityToken++;
         metrics.reset();
         sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
+        PassphraseQrView.clearCache();
     }
 
     private GoncBridge.EventCallback callback(long id) {
@@ -438,8 +443,13 @@ final class SendController {
                         return;
                     }
                     host.updateMetricsFromReport(metrics, topic, reportStatus, network, mode, peer);
+                    boolean wasConnected = sendQrHasConnected;
                     sendQrHasConnected = TransferInlineQrState.latchSendConnected(
                             sendQrHasConnected, metrics.connectedCount);
+                    if (!wasConnected && sendQrHasConnected
+                            && TransferInlineQrState.shouldClearQrCache(runId, id)) {
+                        PassphraseQrView.clearCache();
+                    }
                     host.requestRender();
                     host.refreshForegroundService();
                 });
@@ -478,6 +488,9 @@ final class SendController {
                     }
                     session = null;
                     sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
+                    if (TransferInlineQrState.shouldClearQrCache(runId, id)) {
+                        PassphraseQrView.clearCache();
+                    }
                     status = "Idle";
                     metrics.markStopped();
                     host.refreshForegroundService();
@@ -494,6 +507,9 @@ final class SendController {
                     }
                     session = null;
                     sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
+                    if (TransferInlineQrState.shouldClearQrCache(runId, id)) {
+                        PassphraseQrView.clearCache();
+                    }
                     status = "Error";
                     metrics.p2pStatus = "error";
                     host.refreshForegroundService();
