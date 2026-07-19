@@ -1786,7 +1786,9 @@ function App() {
     setError('');
     try {
       await StopHTTPDownload();
-      await ClearTaskbarProgress();
+      await ClearTaskbarProgress().catch((err) => {
+        setError(localizeError(String(err)));
+      });
       await refreshReceivedFilesAfterDownload();
     } catch (err) {
       setError(localizeError(String(err)));

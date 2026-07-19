@@ -37,6 +37,7 @@ type App struct {
 	vpnClientRunner     *goncrunner.Runner
 	receiveLocalHTTPURL string
 	downloadCancel      context.CancelFunc
+	downloadDone        chan struct{}
 	downloadID          int64
 	startupSharePaths   []string
 }
@@ -377,7 +378,9 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 		return errors.New("download is already running")
 	}
 	ctx, cancel := context.WithCancel(a.ctx)
+	done := make(chan struct{})
 	a.downloadCancel = cancel
+	a.downloadDone = done
 	a.downloadID++
 	downloadID := a.downloadID
 	a.mu.Unlock()
@@ -393,7 +396,7 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 		Resume:       resume,
 	})
 	if err != nil {
-		a.clearDownload(downloadID)
+		a.clearDownload(downloadID, done)
 		return err
 	}
 
@@ -409,7 +412,7 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 				Time:    time.Now().Format(time.RFC3339),
 			})
 		}
-		a.clearDownload(downloadID)
+		a.clearDownload(downloadID, done)
 	}()
 	return nil
 }
@@ -417,10 +420,13 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 func (a *App) StopHTTPDownload() error {
 	a.mu.Lock()
 	cancel := a.downloadCancel
-	a.downloadCancel = nil
+	done := a.downloadDone
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if done != nil {
+		<-done
 	}
 	return nil
 }
@@ -431,12 +437,14 @@ func (a *App) getLocalHTTPURL() string {
 	return a.receiveLocalHTTPURL
 }
 
-func (a *App) clearDownload(downloadID int64) {
+func (a *App) clearDownload(downloadID int64, done chan struct{}) {
 	a.mu.Lock()
-	if a.downloadID == downloadID {
+	if a.downloadID == downloadID && a.downloadDone == done {
 		a.downloadCancel = nil
+		a.downloadDone = nil
 	}
 	a.mu.Unlock()
+	close(done)
 }
 
 func (a *App) runnerForMode(mode goncrunner.Mode) (*goncrunner.Runner, error) {
