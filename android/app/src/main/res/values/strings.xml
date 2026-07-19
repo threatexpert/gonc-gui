@@ -259,4 +259,15 @@
     <string name="scan_prompt">Scan Gonc passphrase QR</string>
     <string name="scan_vpn_profile_prompt">Scan Gonc VPN profile QR</string>
     <string name="pick_qr_from_album">Choose from album</string>
+    <string name="open_with">Open with</string>
+    <string name="share_file">Share</string>
+    <string name="file_information">File information</string>
+    <string name="received">Received</string>
+    <string name="received_file_actions">Received file actions</string>
+    <string name="toast_received_file_no_handler">No app can open this file</string>
+    <string name="toast_received_file_unavailable">This file is no longer accessible</string>
+    <string name="file_info_name">Name: %1$s</string>
+    <string name="file_info_size">Size: %1$s</string>
+    <string name="file_info_modified">Modified: %1$s</string>
+    <string name="file_info_save_location">Save location: %1$s</string>
 </resources>

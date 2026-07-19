@@ -252,4 +252,15 @@
     <string name="scan_prompt">扫描 Gonc 口令二维码</string>
     <string name="scan_vpn_profile_prompt">扫描 Gonc VPN 配置二维码</string>
     <string name="pick_qr_from_album">从相册选择</string>
+    <string name="open_with">打开方式</string>
+    <string name="share_file">分享</string>
+    <string name="file_information">文件信息</string>
+    <string name="received">已接收</string>
+    <string name="received_file_actions">已接收文件操作</string>
+    <string name="toast_received_file_no_handler">没有应用可以打开此文件</string>
+    <string name="toast_received_file_unavailable">此文件已无法访问</string>
+    <string name="file_info_name">名称：%1$s</string>
+    <string name="file_info_size">大小：%1$s</string>
+    <string name="file_info_modified">修改时间：%1$s</string>
+    <string name="file_info_save_location">保存位置：%1$s</string>
 </resources>
