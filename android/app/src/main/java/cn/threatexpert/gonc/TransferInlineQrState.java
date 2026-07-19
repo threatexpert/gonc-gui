@@ -15,6 +15,7 @@ final class TransferInlineQrState {
     private static final int INLINE_QR_SIZE_DP = 104;
     private static final int INLINE_QR_FRAME_PADDING_DP = 2;
     private static final String MASKED_PATTERN_ID = "decorative-inline-qr-mask";
+    private static final String EMPTY_MASKED_PATTERN_ID = "decorative-inline-qr-empty";
     private static final Set<String> INITIAL_RECEIVE_STATES =
             new HashSet<>(Arrays.asList(
                     "wait", "waiting", "starting", "preparing", "connecting", "negotiating"));
@@ -52,8 +53,11 @@ final class TransferInlineQrState {
 
     static BitmapCacheKey productionCacheKey(String passphrase, int requestedPixelSize, boolean masked) {
         String clean = passphrase == null ? "" : passphrase.trim();
+        String identity = masked
+                ? (clean.isEmpty() ? EMPTY_MASKED_PATTERN_ID : MASKED_PATTERN_ID)
+                : clean;
         return new BitmapCacheKey(
-                sha256(masked ? MASKED_PATTERN_ID : clean),
+                sha256(identity),
                 capQrPixelSize(requestedPixelSize), masked ? "masked" : "clear");
     }
 

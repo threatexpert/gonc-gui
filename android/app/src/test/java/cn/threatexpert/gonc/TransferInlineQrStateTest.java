@@ -20,6 +20,9 @@ public class TransferInlineQrStateTest {
                 TransferInlineQrState.productionCacheKey("first-secret", 416, true),
                 TransferInlineQrState.productionCacheKey("second-secret", 416, true));
         assertNotEquals(
+                TransferInlineQrState.productionCacheKey("", 416, true),
+                TransferInlineQrState.productionCacheKey("first-secret", 416, true));
+        assertNotEquals(
                 TransferInlineQrState.productionCacheKey("first-secret", 416, false),
                 TransferInlineQrState.productionCacheKey("second-secret", 416, false));
     }
