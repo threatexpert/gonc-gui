@@ -86,6 +86,10 @@ type DownloadEvent = {
   bytesPerSecond?: number;
 };
 
+function terminalTaskForEvent(currentTaskId: number, eventTaskId: number | null, active: boolean, terminalOwner: number | null): number | null {
+  return active && eventTaskId === currentTaskId && terminalOwner === null ? currentTaskId : null;
+}
+
 type RemoteFile = {
   name: string;
   is_dir: boolean;
@@ -777,7 +781,10 @@ function App() {
   const receivedDownloadActive = useRef(false);
   const receivedCompletionRefreshPendingRef = useRef(false);
   const receivedDownloadTaskId = useRef(0);
-  const receivedTerminalRefreshDone = useRef(true);
+  const receivedDownloadEventTaskId = useRef<number | null>(null);
+  const receivedTerminalOwner = useRef<number | null>(null);
+  const receivedTerminalRefreshPromise = useRef<{taskId: number; promise: Promise<void>} | null>(null);
+  const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
@@ -808,6 +815,7 @@ function App() {
   receivedSaveDir.current = saveDir;
   receivedVisibleEntries.current = visibleEntries;
   receivedLocalFilesRef.current = receivedLocalFiles;
+  receivedStatusDownloadingRef.current = status.downloading;
   const currentRemoteBreadcrumbs = useMemo(() => remoteBreadcrumbs(currentRemotePath), [currentRemotePath]);
   const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteFiles, selectedPaths, excludedPaths), [remoteFiles, selectedPaths, excludedPaths]);
   const activeSpeed = Math.max(
@@ -822,8 +830,9 @@ function App() {
   const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
   const canStart = !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
-  const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !status.downloading);
-  const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !status.downloading);
+  const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
+  const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !receivedActionsUnavailable);
+  const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !receivedActionsUnavailable);
   const primaryLabel = mode === 'send' ? t.startShare : (mode === 'receive' ? t.startReceive : (mode === 'vpnServer' ? t.startVpnServer : t.startVpnClient));
   const showVpnAdminPrompt = mode === 'vpnClient' && !vpnClientTunnelOnly && !isAdministrator;
   const p2pSessions = useMemo(() => Object.values(sendP2PReports), [sendP2PReports]);
@@ -847,7 +856,6 @@ function App() {
   const revealFileLabel = runtimePlatform === 'windows'
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
-  const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
 
   useEffect(() => {
     if (!remoteList || !saveDir || status.downloading || receivedDownloadActive.current || receivedCompletionRefreshPendingRef.current) {
@@ -1054,6 +1062,10 @@ function App() {
       }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
+      const terminal = event.type === 'status' && (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error');
+      if (!terminal) {
+        noteCurrentReceivedDownloadEvent();
+      }
       if (event.type === 'progress') {
         setDownloadProgress(event);
         SetTaskbarProgress(event.doneBytes || 0, event.totalBytes || 0).catch(() => undefined);
@@ -1061,13 +1073,20 @@ function App() {
         setLogs((current) => [...current.slice(-399), event]);
       }
       if (event.type === 'status') {
-        if (event.level === 'error') {
-          setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
-        }
-        const terminal = event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error';
         if (terminal) {
-          ClearTaskbarProgress().catch(() => undefined);
-          refreshReceivedFilesAfterDownload().catch(() => undefined);
+          const taskId = terminalTaskForEvent(
+            receivedDownloadTaskId.current,
+            receivedDownloadEventTaskId.current,
+            receivedDownloadActive.current,
+            receivedTerminalOwner.current
+          );
+          if (taskId !== null) {
+            if (event.level === 'error') {
+              setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
+            }
+            ClearTaskbarProgress().catch(() => undefined);
+            refreshReceivedFilesAfterDownload(taskId).catch(() => undefined);
+          }
         } else {
           refreshStatus();
         }
@@ -1104,6 +1123,7 @@ function App() {
   async function refreshStatus() {
     try {
       const next = await Status();
+      receivedStatusDownloadingRef.current = next.downloading;
       setStatus({
         running: next.running,
         sendRunning: next.sendRunning,
@@ -1168,7 +1188,7 @@ function App() {
   }
 
   async function revealReceivedFile(file: VisibleEntry) {
-    if (receivedDownloadActive.current || status.downloading || receivedCompletionRefreshPendingRef.current) {
+    if (receivedDownloadImperativeBusy()) {
       return;
     }
     const path = normalizeRemotePath(file.path);
@@ -1196,43 +1216,73 @@ function App() {
     }
   }
 
-  async function refreshReceivedFilesAfterDownload() {
-    if (receivedTerminalRefreshDone.current) {
-      return;
+  function receivedDownloadImperativeBusy() {
+    return receivedDownloadActive.current || receivedCompletionRefreshPendingRef.current || receivedStatusDownloadingRef.current;
+  }
+
+  function noteCurrentReceivedDownloadEvent() {
+    if (receivedDownloadActive.current && receivedTerminalOwner.current === null) {
+      receivedDownloadEventTaskId.current = receivedDownloadTaskId.current;
     }
-    receivedTerminalRefreshDone.current = true;
-    const taskId = receivedDownloadTaskId.current;
+  }
+
+  function refreshReceivedFilesAfterDownload(taskId: number): Promise<void> {
+    if (taskId !== receivedDownloadTaskId.current) {
+      return Promise.resolve();
+    }
+    const existing = receivedTerminalRefreshPromise.current;
+    if (existing?.taskId === taskId) {
+      return existing.promise;
+    }
+    if (receivedTerminalOwner.current !== null) {
+      return Promise.resolve();
+    }
+    receivedTerminalOwner.current = taskId;
     receivedCompletionRefreshPendingRef.current = true;
     setReceivedCompletionRefreshPending(true);
     receivedDownloadActive.current = false;
     setReceivedDownloadActiveState(false);
-    try {
-      await refreshStatus();
-      await refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current);
-    } finally {
-      if (taskId === receivedDownloadTaskId.current) {
-        receivedCompletionRefreshPendingRef.current = false;
-        setReceivedCompletionRefreshPending(false);
+    const promise = (async () => {
+      try {
+        await refreshStatus();
+        await refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current);
+      } finally {
+        if (taskId === receivedDownloadTaskId.current && receivedTerminalOwner.current === taskId) {
+          receivedCompletionRefreshPendingRef.current = false;
+          setReceivedCompletionRefreshPending(false);
+        }
       }
-    }
+    })();
+    receivedTerminalRefreshPromise.current = {taskId, promise};
+    return promise;
   }
 
-  function beginReceivedDownloadTask() {
+  function beginReceivedDownloadTask(): number | null {
+    if (receivedDownloadImperativeBusy()) {
+      return null;
+    }
     receivedCheckGeneration.current += 1;
     receivedDownloadTaskId.current += 1;
+    const taskId = receivedDownloadTaskId.current;
     receivedDownloadActive.current = true;
     setReceivedDownloadActiveState(true);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
-    receivedTerminalRefreshDone.current = false;
+    receivedDownloadEventTaskId.current = null;
+    receivedTerminalOwner.current = null;
+    receivedTerminalRefreshPromise.current = null;
+    return taskId;
   }
 
-  function abandonReceivedDownloadTask() {
+  function abandonReceivedDownloadTask(taskId: number) {
+    if (taskId !== receivedDownloadTaskId.current || receivedTerminalOwner.current !== null) {
+      return;
+    }
     receivedDownloadActive.current = false;
     setReceivedDownloadActiveState(false);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
-    receivedTerminalRefreshDone.current = true;
+    receivedDownloadEventTaskId.current = null;
   }
 
   async function openSaveDir() {
@@ -1785,12 +1835,15 @@ function App() {
       setDownloadError(t.noSelection);
       return;
     }
-    beginReceivedDownloadTask();
+    const taskId = beginReceivedDownloadTask();
+    if (taskId === null) {
+      return;
+    }
     try {
       await StartHTTPDownload(saveDir, '/', Array.from(selectedPaths), Array.from(excludedPaths), remoteFiles as any, downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
-      abandonReceivedDownloadTask();
+      abandonReceivedDownloadTask(taskId);
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
@@ -1798,24 +1851,28 @@ function App() {
   async function startDownloadAll() {
     setError('');
     setDownloadError('');
-    beginReceivedDownloadTask();
+    const taskId = beginReceivedDownloadTask();
+    if (taskId === null) {
+      return;
+    }
     try {
       await StartHTTPDownload(saveDir, currentRemotePath, [], [], [], downloadMode === 'resume');
       await refreshStatus();
     } catch (err) {
-      abandonReceivedDownloadTask();
+      abandonReceivedDownloadTask(taskId);
       setDownloadError(`${t.downloadFailed} ${localizeError(String(err))}`);
     }
   }
 
   async function stopDownload() {
     setError('');
+    const taskId = receivedDownloadTaskId.current;
     try {
       await StopHTTPDownload();
       await ClearTaskbarProgress().catch((err) => {
         setError(localizeError(String(err)));
       });
-      await refreshReceivedFilesAfterDownload();
+      await refreshReceivedFilesAfterDownload(taskId);
     } catch (err) {
       setError(localizeError(String(err)));
     }
