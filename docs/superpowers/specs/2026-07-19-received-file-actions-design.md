@@ -64,7 +64,7 @@ Android treats an available row like a conventional file browser:
 - a quiet received checkmark appears at the right;
 - tapping the file icon or filename immediately opens the file through the system;
 - the selection checkbox remains a separate target and continues to control receive selection;
-- starting another download does not disable files already known to be available, but it does not reveal newly completed files until the task ends;
+- while any download task is active, files already known to be available keep their marker but their open and overflow actions are disabled until the task ends;
 - folders retain their current navigation behavior.
 
 An overflow menu on an available file provides:
@@ -96,7 +96,7 @@ Download progress remains task-level. Ending a task schedules one visible-direct
 
 ## Error Handling and Safety
 
-- Do not reveal newly available locate or open actions until the active download task ends; previously available actions remain usable.
+- Do not reveal newly available actions while a download is active. Keep existing availability markers visible, but disable all desktop locate and Android open/open-with/share/info actions until the task ends and the visible directory is refreshed.
 - Normalize remote paths and enforce save-root containment before desktop filesystem access.
 - Treat a directory, unreadable target, missing target, or size mismatch as unavailable.
 - Revalidate immediately before an external action to close the gap between rendering and clicking.
@@ -110,6 +110,7 @@ Download progress remains task-level. Ending a task schedules one visible-direct
 Shared behavior tests cover:
 
 - no availability action before a download task ends;
+- existing availability markers remain visible but cannot be operated during an initial or repeated download;
 - one batch refresh after task completion;
 - refresh after entering a directory;
 - existing same-name, same-size files becoming available;

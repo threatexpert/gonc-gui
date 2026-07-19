@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Actionable means: expected target exists, is readable, is not a directory, and exactly matches the remote byte size. Modification time is ignored; zero-byte files must actually exist.
-- Publish no new availability during a download. Previously actionable rows stay usable. Refresh once at task termination and once after entering a directory.
+- Publish no new availability during a download. Keep existing markers visible but disable every desktop locate and Android open/open-with/share/info action until task termination, then refresh once; also refresh once after entering a directory while idle.
 - Disconnect preserves actions; only a newly established receive connection resets them. Android persists no received-file browsing history.
 - Desktop never opens a file. Its icon-only reveal action appears on hover and keyboard focus.
 - Android file icon/name taps open immediately. The overflow menu contains only Open, Open with, Share, and File information.
@@ -199,6 +199,8 @@ Expected: tests PASS; merged manifest contains only the request permission and a
 ---
 
 ### Task 6: Android Current-Session Browser UI
+
+During initial and repeated downloads, keep received checkmarks visible but disable file icon/name/whitespace and overflow actions. Re-enable them only after the whole-task completion refresh.
 
 **Files:**
 - Modify: `android/app/src/main/java/cn/threatexpert/gonc/ReceiveController.java:42-95,189-225,340-540,1203-1245,1395-1435,1590-1665`
@@ -629,6 +631,8 @@ async function refreshVisibleReceivedFiles(entries: VisibleEntry[], root = saveD
 ```
 
 Call after a directory list is applied and after a terminal download status followed by `refreshStatus`; never from progress. Clear the map and increment generation only after `StartTransfer` succeeds in receive mode. Do not clear on stop/disconnect.
+
+While `receivedDownloadActive.current` or `status.downloading` is true, keep existing markers but disable the reveal control. Re-enable it only after the once-only terminal refresh completes.
 
 - [ ] **Step 3: Add reveal error invalidation**
 
