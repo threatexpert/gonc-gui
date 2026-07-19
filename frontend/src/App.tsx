@@ -8,6 +8,7 @@ import './App.css';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
+  CheckReceivedFiles,
   CheckForUpdate,
   ClearTaskbarProgress,
   GeneratePassword,
@@ -15,6 +16,7 @@ import {
   LoadVPNProfiles,
   OpenSaveDir,
   RemoteFiles,
+  RevealReceivedFile,
   SaveVPNProfiles,
   SelectFiles,
   SelectFolder,
@@ -113,6 +115,11 @@ type AppStatus = {
 
 type VisibleEntry = RemoteFile & {
   synthetic?: boolean;
+};
+
+type ReceivedLocalState = {
+  saveDir: string;
+  size: number;
 };
 
 type VPNProfile = {
@@ -313,6 +320,10 @@ const text = {
     downloadMode: '下载方式',
     resumeDownload: '续传',
     overwriteDownload: '覆盖',
+    revealReceivedFileWindows: '在文件资源管理器中显示',
+    revealReceivedFileMac: '在访达中显示',
+    revealReceivedFileOther: '在文件管理器中显示',
+    localFileUnavailable: '本地文件不可用：',
     noSelection: '请先勾选要下载的文件或目录。',
     downloadFailed: '下载失败：',
     noList: '尚未读取目录',
@@ -495,6 +506,10 @@ const text = {
     downloadMode: 'Download Mode',
     resumeDownload: 'Resume',
     overwriteDownload: 'Overwrite',
+    revealReceivedFileWindows: 'Show in File Explorer',
+    revealReceivedFileMac: 'Show in Finder',
+    revealReceivedFileOther: 'Show in file manager',
+    localFileUnavailable: 'Local file unavailable:',
     noSelection: 'Select files or folders to download first.',
     downloadFailed: 'Download failed:',
     noList: 'No list loaded',
@@ -722,6 +737,7 @@ function App() {
   const [downloadError, setDownloadError] = useState('');
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
+  const [receivedLocalFiles, setReceivedLocalFiles] = useState<Map<string, ReceivedLocalState>>(new Map());
   const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
@@ -753,6 +769,9 @@ function App() {
   const vpnStartedNotified = useRef(false);
   const vpnTunnelWasConnected = useRef(false);
   const vpnStopRequested = useRef(false);
+  const receivedCheckGeneration = useRef(0);
+  const receivedSaveDir = useRef(saveDir);
+  const receivedVisibleEntries = useRef<VisibleEntry[]>([]);
   const [nowTick, setNowTick] = useState(Date.now());
   const passwordTimer = useRef<number | null>(null);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
@@ -779,6 +798,8 @@ function App() {
 
   const remoteFiles = useMemo(() => remoteListFiles(remoteList), [remoteList]);
   const visibleEntries = useMemo(() => safeShallowEntries(remoteFiles, currentRemotePath), [remoteFiles, currentRemotePath]);
+  receivedSaveDir.current = saveDir;
+  receivedVisibleEntries.current = visibleEntries;
   const currentRemoteBreadcrumbs = useMemo(() => remoteBreadcrumbs(currentRemotePath), [currentRemotePath]);
   const selectedRemoteBytes = useMemo(() => selectedRemoteSize(remoteFiles, selectedPaths, excludedPaths), [remoteFiles, selectedPaths, excludedPaths]);
   const activeSpeed = Math.max(
@@ -815,6 +836,16 @@ function App() {
   const activeP2PReport = mode === 'receive'
     ? receiveP2PReport
     : (mode === 'vpnServer' ? latestVpnServerReport : (mode === 'vpnClient' ? vpnClientP2PReport : latestSendReport));
+  const revealFileLabel = runtimePlatform === 'windows'
+    ? t.revealReceivedFileWindows
+    : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
+
+  useEffect(() => {
+    if (!remoteList || !saveDir) {
+      return;
+    }
+    refreshVisibleReceivedFiles(visibleEntries, saveDir).catch(() => undefined);
+  }, [remoteList, visibleEntries, saveDir]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -1024,10 +1055,15 @@ function App() {
         if (event.level === 'error') {
           setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
         }
-        if (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error') {
+        const terminal = event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error';
+        if (terminal) {
           ClearTaskbarProgress().catch(() => undefined);
+          refreshStatus()
+            .then(() => refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current))
+            .catch(() => undefined);
+        } else {
+          refreshStatus();
         }
-        refreshStatus();
       }
     });
     OnFileDrop((_x, _y, paths) => {
@@ -1071,7 +1107,7 @@ function App() {
         downloading: next.downloading,
         defaultSaveDir: next.defaultSaveDir,
       });
-      if (!saveDir && next.defaultSaveDir) {
+      if (!receivedSaveDir.current && next.defaultSaveDir) {
         setSaveDir(next.defaultSaveDir);
       }
     } catch (err) {
@@ -1095,6 +1131,46 @@ function App() {
     const selected = await SelectFolder(t.saveDir);
     if (selected) {
       setSaveDir(selected);
+    }
+  }
+
+  async function refreshVisibleReceivedFiles(entries: VisibleEntry[], root = saveDir) {
+    const generation = ++receivedCheckGeneration.current;
+    const files = entries.filter((entry) => !entry.is_dir);
+    const checked = await CheckReceivedFiles(root, files as any);
+    if (generation !== receivedCheckGeneration.current) {
+      return;
+    }
+    const paths = new Set(files.map((file) => normalizeRemotePath(file.path)));
+    setReceivedLocalFiles((current) => {
+      const next = new Map(current);
+      paths.forEach((path) => next.delete(path));
+      checked.forEach((state) => {
+        const path = normalizeRemotePath(state.remotePath);
+        const remote = files.find((file) => normalizeRemotePath(file.path) === path);
+        if (state.available && remote) {
+          next.set(path, {saveDir: root, size: remote.size});
+        }
+      });
+      return next;
+    });
+  }
+
+  async function revealReceivedFile(file: VisibleEntry) {
+    const path = normalizeRemotePath(file.path);
+    const local = receivedLocalFiles.get(path);
+    if (!local) {
+      return;
+    }
+    try {
+      await RevealReceivedFile(local.saveDir, file as any);
+    } catch (err) {
+      setReceivedLocalFiles((current) => {
+        const next = new Map(current);
+        next.delete(path);
+        return next;
+      });
+      setDownloadError(`${t.localFileUnavailable} ${localizeError(String(err))}`);
     }
   }
 
@@ -1417,7 +1493,10 @@ function App() {
         tunnelOnly: vpnClientTunnelOnly,
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs
       });
-      if (mode === 'vpnServer') {
+      if (mode === 'receive') {
+        receivedCheckGeneration.current += 1;
+        setReceivedLocalFiles(new Map());
+      } else if (mode === 'vpnServer') {
         setVpnServerAdvanced(false);
       } else if (mode === 'vpnClient') {
         setVpnClientAdvanced(false);
@@ -2391,23 +2470,34 @@ function App() {
                   <p className="muted">{t.listHint}</p>
                 ) : (
                   <>
-                    {visibleEntries.map((file) => (
-                      <div className="remote-row" key={file.path}>
-                        <input
-                          type="checkbox"
-                          checked={isEffectivelySelected(file.path, selectedPaths, excludedPaths)}
-                          onChange={() => toggleSelected(file.path)}
-                        />
-                        <span className={`type-icon ${file.is_dir ? 'folder' : 'file'}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file} />
-                        {file.is_dir ? (
-                          <button className="folder-link" onClick={() => browseRemotePath(file.path)}>{file.name}</button>
-                        ) : (
-                          <strong>{file.name}</strong>
-                        )}
-                        <em>{formatModTime(file.mod_time)}</em>
-                        <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
-                      </div>
-                    ))}
+                    {visibleEntries.map((file) => {
+                      const received = file.is_dir ? undefined : receivedLocalFiles.get(normalizeRemotePath(file.path));
+                      const local = received?.size === file.size ? received : undefined;
+                      return (
+                        <div className="remote-row" key={file.path}>
+                          <input
+                            type="checkbox"
+                            checked={isEffectivelySelected(file.path, selectedPaths, excludedPaths)}
+                            onChange={() => toggleSelected(file.path)}
+                          />
+                          <span className={`type-icon ${file.is_dir ? 'folder' : `file ${local ? 'local-available' : ''}`}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file}>
+                            {local && <span className="local-available-dot" aria-hidden="true" />}
+                          </span>
+                          {file.is_dir ? (
+                            <button className="folder-link" onClick={() => browseRemotePath(file.path)}>{file.name}</button>
+                          ) : (
+                            <strong className={local ? 'local-filename' : ''}>{file.name}</strong>
+                          )}
+                          <em>{formatModTime(file.mod_time)}</em>
+                          <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
+                          {local && (
+                            <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} onClick={() => revealReceivedFile(file)}>
+                              <span className="reveal-folder-icon" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </>
                 )}
               </div>
