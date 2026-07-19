@@ -4,7 +4,7 @@
 
 Make files in the desktop and Android receive lists visibly usable after they exist locally. The remote file list remains the single source of navigation; this feature does not add a download-history page, persistent Android history, or a general-purpose file manager.
 
-The desktop application exposes a quiet action that locates a completed file in the platform file manager. It never opens a received file directly. The Android application follows normal file-browser behavior: tapping a locally available file opens it through the system, including APK files. Android relies on the system package installer and its own confirmation and unknown-source protections rather than adding a Gonc warning.
+The desktop application exposes a quiet action that locates a completed file in the platform file manager. It never opens a received file directly. The Android application follows normal file-browser behavior: tapping a locally available file opens it through the system, including APK files. Gonc declares `REQUEST_INSTALL_PACKAGES` so Android can accept an APK handoff, while relying on the system package installer and its own source authorization and installation confirmation rather than adding a Gonc warning.
 
 ## Availability Rule
 
@@ -74,7 +74,7 @@ An overflow menu on an available file provides:
 - Share;
 - File information.
 
-Delete, move, and rename are out of scope. APK files follow the same tap-to-open behavior without a Gonc warning; Android's package installer owns installation consent and unknown-source handling.
+Delete, move, and rename are out of scope. APK files follow the same tap-to-open behavior without a Gonc warning. The manifest declares `android.permission.REQUEST_INSTALL_PACKAGES`, but Gonc does not install silently or implement an installer; Android's package installer owns installation consent and unknown-source handling.
 
 The app resolves the file to its actual `content://` URI or local file target, determines an appropriate MIME type with a safe fallback, grants temporary read access, and sends the corresponding system intent. Share grants read-only URI access. File information shows display name, size, remote modification time when present, and the user-facing save-location label; it does not expose an unusable raw content URI as a filesystem path.
 
@@ -102,7 +102,7 @@ Download progress remains task-level. Ending a task schedules one visible-direct
 - Revalidate immediately before an external action to close the gap between rendering and clicking.
 - Pass arguments directly to platform process APIs; do not construct shell command strings from filenames.
 - On Android, grant only temporary read URI permission to open, chooser, and share intents.
-- Do not request package-install permission as part of this feature. APK handling is delegated to the installed system handler.
+- Declare `android.permission.REQUEST_INSTALL_PACKAGES` so the target-SDK-35 app can hand APKs to the system installer. Do not request silent-install privileges or implement installation logic in Gonc.
 - Do not let late directory checks from an old connection update the new connection's rows.
 
 ## Testing
@@ -122,7 +122,7 @@ Shared behavior tests cover:
 
 Desktop tests cover path normalization and containment, Windows/macOS/Linux command argument construction, the Linux parent-directory fallback, no direct file-open action, hover/focus visibility, and localized accessible labels.
 
-Android JVM tests cover destination URI resolution, MIME selection and fallback, open/open-with/share intent construction with read-only grants, unavailable-handler errors, expired permissions, checkbox-versus-open click targets, direct APK handoff without an app warning, and absence of persisted browsing history. Manual smoke testing covers SAF and default Downloads destinations on a supported Android device, Windows Explorer selection, and macOS Finder reveal.
+Android JVM tests cover destination URI resolution, MIME selection and fallback, open/open-with/share intent construction with read-only grants, unavailable-handler errors, expired permissions, checkbox-versus-open click targets, direct APK handoff without an app warning, and absence of persisted browsing history. Build inspection verifies that the APK declares `REQUEST_INSTALL_PACKAGES` and does not request `INSTALL_PACKAGES`. Manual smoke testing covers SAF and default Downloads destinations, the system-controlled APK installation flow on a supported Android device, Windows Explorer selection, and macOS Finder reveal.
 
 ## Out of Scope
 
