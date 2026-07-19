@@ -28,4 +28,10 @@ final class ReceivedFileActionState {
                 && !completionRefreshPending
                 && currentDownloadId == terminatedDownloadId;
     }
+
+    static boolean canStartNewConnection(
+            boolean downloadWorkerActive,
+            boolean completionRefreshPending) {
+        return !downloadWorkerActive && !completionRefreshPending;
+    }
 }

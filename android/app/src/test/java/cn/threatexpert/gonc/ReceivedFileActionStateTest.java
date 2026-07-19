@@ -33,4 +33,11 @@ public class ReceivedFileActionStateTest {
         assertFalse(ReceivedFileActionState.shouldBeginTerminalRefresh(8, 8, false, false));
         assertFalse(ReceivedFileActionState.shouldBeginTerminalRefresh(8, 8, true, true));
     }
+
+    @Test
+    public void disconnectCannotReconnectUntilWorkerTerminatesAndRefreshFinishes() {
+        assertFalse(ReceivedFileActionState.canStartNewConnection(true, false));
+        assertFalse(ReceivedFileActionState.canStartNewConnection(false, true));
+        assertTrue(ReceivedFileActionState.canStartNewConnection(false, false));
+    }
 }

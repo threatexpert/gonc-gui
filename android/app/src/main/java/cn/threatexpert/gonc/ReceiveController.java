@@ -169,6 +169,10 @@ final class ReceiveController {
     }
 
     void setSaveLocation(Uri uri, String label) {
+        if (!ReceivedFileActionState.canStartNewConnection(
+                receiveDownload != null, receivedCompletionRefreshPending)) {
+            return;
+        }
         saveTreeUri = uri;
         saveLocationLabel = label;
     }
@@ -271,6 +275,7 @@ final class ReceiveController {
         saveText.setSingleLine(true);
         save.addView(saveText, new LinearLayout.LayoutParams(0, dp(42), 1));
         Button choose = secondaryButton(string(R.string.choose));
+        setControlEnabled(choose, canStartReceiveConnection());
         choose.setOnClickListener(v -> host.pickSaveLocation());
         LinearLayout.LayoutParams chooseParams = new LinearLayout.LayoutParams(dp(104), dp(42));
         chooseParams.setMargins(dp(8), 0, 0, 0);
@@ -282,11 +287,14 @@ final class ReceiveController {
         card.addView(protocolToggle());
 
         Button primary = receiveSession == null ? primaryButton(string(R.string.connect)) : dangerButton(string(R.string.disconnect));
+        setControlEnabled(primary, canStartReceiveConnection());
         primary.setOnClickListener(v -> {
-            if (receiveSession == null) {
+            if (canStartReceiveConnection()) {
                 startP2PReceive();
             } else {
-                stopSession();
+                if (receiveSession != null) {
+                    stopSession();
+                }
             }
         });
         card.addView(primary, blockParams(dp(12)));
@@ -1029,6 +1037,12 @@ final class ReceiveController {
                 && remoteListSession == null;
     }
 
+    private boolean canStartReceiveConnection() {
+        return receiveSession == null
+                && ReceivedFileActionState.canStartNewConnection(
+                receiveDownload != null, receivedCompletionRefreshPending);
+    }
+
     private void browseRemotePath(String path) {
         if (!canClickRemoteAction()) {
             return;
@@ -1432,6 +1446,9 @@ final class ReceiveController {
     // --- session ----------------------------------------------------------
 
     private void startP2PReceive() {
+        if (!canStartReceiveConnection()) {
+            return;
+        }
         String passphrase = receivePassword.trim();
         if (passphrase.isEmpty()) {
             host.toast(R.string.toast_passphrase_required);
@@ -1472,16 +1489,10 @@ final class ReceiveController {
                 context(), passphrase, receiveUseUdp, callback(runId));
         receiveSession = started;
         if (started != null) {
-            HttpReceiver.Session staleDownload = receiveDownload;
             receiveDownloadId++;
-            receiveDownload = null;
-            if (staleDownload != null) {
-                staleDownload.stop();
-            }
             receivedTargets.clear();
             receivedTargetCheckId++;
             receivedCompletionRefreshToken++;
-            receivedCompletionRefreshPending = false;
         }
         host.refreshForegroundService();
         host.requestRender();
@@ -1829,7 +1840,7 @@ final class ReceiveController {
         if (!ensureDefaultSavePermission()) {
             return;
         }
-        if (receiveDownload != null) {
+        if (receiveDownload != null || receivedCompletionRefreshPending) {
             return;
         }
         receiveEndpoint = endpoint;
