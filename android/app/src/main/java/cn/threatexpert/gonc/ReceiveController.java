@@ -58,6 +58,8 @@ final class ReceiveController {
     private final List<HttpReceiver.RemoteFile> remoteFiles = new ArrayList<>();
     private final Map<String, HttpReceiver.ReceivedTarget> receivedTargets = new LinkedHashMap<>();
     private long receivedTargetCheckId;
+    private boolean receivedCompletionRefreshPending;
+    private long receivedCompletionRefreshToken;
     private boolean shutdown;
     private final Set<String> selectedRemotePaths = new HashSet<>();
     private final Set<String> excludedRemotePaths = new HashSet<>();
@@ -481,7 +483,7 @@ final class ReceiveController {
         HttpReceiver.ReceivedTarget target = receivedTargets.get(normalizedPath);
         boolean receivedMarkerVisible = ReceivedFileActionState.markerVisible(target != null);
         boolean receivedActionsEnabled = ReceivedFileActionState.actionsEnabled(
-                target != null, receiveDownload != null);
+                target != null, receiveDownload != null, receivedCompletionRefreshPending);
         LinearLayout row = row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(6), dp(10), dp(6));
@@ -670,10 +672,16 @@ final class ReceiveController {
     }
 
     private boolean canUseReceivedFileActions() {
-        return !shutdown && receiveDownload == null;
+        return !shutdown && ReceivedFileActionState.actionsEnabled(
+                true, receiveDownload != null, receivedCompletionRefreshPending);
     }
 
     private void refreshReceivedTargets(long runId, String checkedPath) {
+        refreshReceivedTargets(runId, checkedPath, 0L);
+    }
+
+    private void refreshReceivedTargets(
+            long runId, String checkedPath, long completionRefreshToken) {
         long checkId = ++receivedTargetCheckId;
         List<HttpReceiver.RemoteFile> snapshot = new ArrayList<>(visibleRemoteFiles());
         Uri tree = saveTreeUri;
@@ -697,13 +705,20 @@ final class ReceiveController {
                         runId, checkId, normalizedCheckedPath, checkedTree, checkedSaveLabel)) {
                     return;
                 }
-                if (failure != null) {
+                if (completionRefreshToken == 0L
+                        && (receiveDownload != null || receivedCompletionRefreshPending)) {
                     return;
                 }
-                for (HttpReceiver.RemoteFile file : snapshot) {
-                    receivedTargets.remove(normalizeRemotePath(file.path));
+                if (failure == null) {
+                    for (HttpReceiver.RemoteFile file : snapshot) {
+                        receivedTargets.remove(normalizeRemotePath(file.path));
+                    }
+                    receivedTargets.putAll(resolved);
                 }
-                receivedTargets.putAll(resolved);
+                if (ReceivedFileActionState.ownsCompletionRefresh(
+                        receivedCompletionRefreshToken, completionRefreshToken)) {
+                    receivedCompletionRefreshPending = false;
+                }
                 host.requestRender();
             });
         }, "gonc-received-file-check").start();
@@ -1006,7 +1021,9 @@ final class ReceiveController {
     }
 
     private boolean canClickRemoteAction() {
-        return receiveDownload == null && remoteListSession == null;
+        return receiveDownload == null
+                && !receivedCompletionRefreshPending
+                && remoteListSession == null;
     }
 
     private void browseRemotePath(String path) {
@@ -1454,6 +1471,8 @@ final class ReceiveController {
         if (started != null) {
             receivedTargets.clear();
             receivedTargetCheckId++;
+            receivedCompletionRefreshToken++;
+            receivedCompletionRefreshPending = false;
         }
         host.refreshForegroundService();
         host.requestRender();
@@ -1827,12 +1846,14 @@ final class ReceiveController {
             @Override
             public void onComplete(int totalFiles, long doneBytes, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles, List<HttpReceiver.DownloadFailure> failures) {
                 host.mainHandler().post(() -> {
-                    if (!isCurrentRun(runId)) {
+                    if (!isCurrentRun(runId) || shutdown) {
                         return;
                     }
                     if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
                         return;
                     }
+                    long completionRefreshToken = ++receivedCompletionRefreshToken;
+                    receivedCompletionRefreshPending = true;
                     receiveDownload = null;
                     downloadDoneFiles = totalFiles;
                     downloadTotalFiles = totalFiles;
@@ -1849,7 +1870,8 @@ final class ReceiveController {
                     int failedFiles = failures == null ? 0 : failures.size();
                     downloadFailedFiles = failedFiles;
                     downloadStatus = failedFiles > 0 ? "Receive complete with failures" : "Receive complete";
-                    refreshReceivedTargets(runId, remoteCurrentPath);
+                    refreshReceivedTargets(
+                            runId, remoteCurrentPath, completionRefreshToken);
                     host.refreshForegroundService();
                     if (failedFiles > 0) {
                         host.log("error", "Receive completed with " + failedFiles + " failed file(s): " + totalFiles + " total, "

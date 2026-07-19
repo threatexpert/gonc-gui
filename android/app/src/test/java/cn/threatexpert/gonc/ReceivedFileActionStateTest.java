@@ -9,12 +9,20 @@ public class ReceivedFileActionStateTest {
     @Test
     public void keepsMarkerButDisablesActionsDuringDownload() {
         assertTrue(ReceivedFileActionState.markerVisible(true));
-        assertFalse(ReceivedFileActionState.actionsEnabled(true, true));
+        assertFalse(ReceivedFileActionState.actionsEnabled(true, true, false));
     }
 
     @Test
     public void enablesAvailableTargetOnlyWhileIdle() {
-        assertTrue(ReceivedFileActionState.actionsEnabled(true, false));
-        assertFalse(ReceivedFileActionState.actionsEnabled(false, false));
+        assertTrue(ReceivedFileActionState.actionsEnabled(true, false, false));
+        assertFalse(ReceivedFileActionState.actionsEnabled(false, false, false));
+    }
+
+    @Test
+    public void disablesActionsAfterDownloadUntilCompletionRefreshFinishes() {
+        assertFalse(ReceivedFileActionState.actionsEnabled(true, false, true));
+        assertTrue(ReceivedFileActionState.ownsCompletionRefresh(6, 6));
+        assertFalse(ReceivedFileActionState.ownsCompletionRefresh(7, 6));
+        assertFalse(ReceivedFileActionState.ownsCompletionRefresh(0, 0));
     }
 }

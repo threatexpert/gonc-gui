@@ -8,7 +8,14 @@ final class ReceivedFileActionState {
         return targetAvailable;
     }
 
-    static boolean actionsEnabled(boolean targetAvailable, boolean downloadActive) {
-        return targetAvailable && !downloadActive;
+    static boolean actionsEnabled(
+            boolean targetAvailable,
+            boolean downloadActive,
+            boolean completionRefreshPending) {
+        return targetAvailable && !downloadActive && !completionRefreshPending;
+    }
+
+    static boolean ownsCompletionRefresh(long pendingToken, long finishedToken) {
+        return pendingToken != 0L && pendingToken == finishedToken;
     }
 }
