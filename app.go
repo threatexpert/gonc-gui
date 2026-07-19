@@ -44,6 +44,7 @@ type App struct {
 
 type TransferRequest struct {
 	Mode            string   `json:"mode"`
+	ClientRunID     int64    `json:"clientRunId,omitempty"`
 	Password        string   `json:"password"`
 	SharePaths      []string `json:"sharePaths"`
 	SaveDir         string   `json:"saveDir"`
@@ -60,6 +61,22 @@ type TransferRequest struct {
 	EnableIPv6      bool     `json:"enableIpv6"`
 	TunnelOnly      bool     `json:"tunnelOnly"`
 	ExtraArgs       string   `json:"extraArgs"`
+}
+
+type ClientP2PStatusReport struct {
+	goncrunner.P2PStatusReport
+	ClientRunID int64 `json:"clientRunId"`
+}
+
+func tagClientP2PReport(clientRunID int64, report goncrunner.P2PStatusReport) ClientP2PStatusReport {
+	return ClientP2PStatusReport{P2PStatusReport: report, ClientRunID: clientRunID}
+}
+
+func validateTransferClientRunID(mode goncrunner.Mode, clientRunID int64) error {
+	if (mode == goncrunner.ModeSend || mode == goncrunner.ModeReceive) && clientRunID <= 0 {
+		return errors.New("client run ID is required for file transfer")
+	}
+	return nil
 }
 
 type AppStatus struct {
@@ -249,6 +266,9 @@ func (a *App) StartTransfer(req TransferRequest) error {
 	}
 
 	mode := goncrunner.Mode(req.Mode)
+	if err := validateTransferClientRunID(mode, req.ClientRunID); err != nil {
+		return err
+	}
 	if mode == goncrunner.ModeReceive {
 		a.mu.Lock()
 		a.receiveLocalHTTPURL = ""
@@ -287,7 +307,7 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		}
 		wailsruntime.EventsEmit(a.ctx, "gonc:event", event)
 	}, func(report goncrunner.P2PStatusReport) {
-		wailsruntime.EventsEmit(a.ctx, "p2p:report", report)
+		wailsruntime.EventsEmit(a.ctx, "p2p:report", tagClientP2PReport(req.ClientRunID, report))
 	})
 	return err
 }

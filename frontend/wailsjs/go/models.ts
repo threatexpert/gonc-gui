@@ -161,6 +161,7 @@ export namespace main {
 	}
 	export class TransferRequest {
 	    mode: string;
+	    clientRunId?: number;
 	    password: string;
 	    sharePaths: string[];
 	    saveDir: string;
@@ -185,6 +186,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
+	        this.clientRunId = source["clientRunId"];
 	        this.password = source["password"];
 	        this.sharePaths = source["sharePaths"];
 	        this.saveDir = source["saveDir"];
