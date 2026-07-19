@@ -738,6 +738,8 @@ function App() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
   const [receivedLocalFiles, setReceivedLocalFiles] = useState<Map<string, ReceivedLocalState>>(new Map());
+  const [receivedDownloadActiveState, setReceivedDownloadActiveState] = useState(false);
+  const [receivedCompletionRefreshPending, setReceivedCompletionRefreshPending] = useState(false);
   const [sendTraffic, setSendTraffic] = useState<LogEvent | null>(null);
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
@@ -773,6 +775,8 @@ function App() {
   const receivedSaveDir = useRef(saveDir);
   const receivedVisibleEntries = useRef<VisibleEntry[]>([]);
   const receivedDownloadActive = useRef(false);
+  const receivedCompletionRefreshPendingRef = useRef(false);
+  const receivedDownloadTaskId = useRef(0);
   const receivedTerminalRefreshDone = useRef(true);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -843,9 +847,10 @@ function App() {
   const revealFileLabel = runtimePlatform === 'windows'
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
+  const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
 
   useEffect(() => {
-    if (!remoteList || !saveDir || status.downloading || receivedDownloadActive.current) {
+    if (!remoteList || !saveDir || status.downloading || receivedDownloadActive.current || receivedCompletionRefreshPendingRef.current) {
       return;
     }
     refreshVisibleReceivedFiles(visibleEntries, saveDir).catch(() => undefined);
@@ -1163,6 +1168,9 @@ function App() {
   }
 
   async function revealReceivedFile(file: VisibleEntry) {
+    if (receivedDownloadActive.current || status.downloading || receivedCompletionRefreshPendingRef.current) {
+      return;
+    }
     const path = normalizeRemotePath(file.path);
     const local = receivedLocalFiles.get(path);
     if (!local) {
@@ -1193,19 +1201,37 @@ function App() {
       return;
     }
     receivedTerminalRefreshDone.current = true;
+    const taskId = receivedDownloadTaskId.current;
+    receivedCompletionRefreshPendingRef.current = true;
+    setReceivedCompletionRefreshPending(true);
     receivedDownloadActive.current = false;
-    await refreshStatus();
-    await refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current);
+    setReceivedDownloadActiveState(false);
+    try {
+      await refreshStatus();
+      await refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current);
+    } finally {
+      if (taskId === receivedDownloadTaskId.current) {
+        receivedCompletionRefreshPendingRef.current = false;
+        setReceivedCompletionRefreshPending(false);
+      }
+    }
   }
 
   function beginReceivedDownloadTask() {
     receivedCheckGeneration.current += 1;
+    receivedDownloadTaskId.current += 1;
     receivedDownloadActive.current = true;
+    setReceivedDownloadActiveState(true);
+    receivedCompletionRefreshPendingRef.current = false;
+    setReceivedCompletionRefreshPending(false);
     receivedTerminalRefreshDone.current = false;
   }
 
   function abandonReceivedDownloadTask() {
     receivedDownloadActive.current = false;
+    setReceivedDownloadActiveState(false);
+    receivedCompletionRefreshPendingRef.current = false;
+    setReceivedCompletionRefreshPending(false);
     receivedTerminalRefreshDone.current = true;
   }
 
@@ -2532,7 +2558,7 @@ function App() {
                           <em>{formatModTime(file.mod_time)}</em>
                           <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
                           {local && (
-                            <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} onClick={() => revealReceivedFile(file)}>
+                            <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} disabled={receivedActionsUnavailable} onClick={() => revealReceivedFile(file)}>
                               <span className="reveal-folder-icon" aria-hidden="true" />
                             </button>
                           )}

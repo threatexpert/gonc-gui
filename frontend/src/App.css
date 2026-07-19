@@ -798,14 +798,14 @@ textarea:focus {
   transition: opacity 120ms ease, background-color 120ms ease;
 }
 
-.remote-row:hover .reveal-received-file,
-.remote-row:focus-within .reveal-received-file {
+.remote-row:hover .reveal-received-file:not(:disabled),
+.remote-row:focus-within .reveal-received-file:not(:disabled) {
   opacity: 0.78;
   pointer-events: auto;
 }
 
-.reveal-received-file:hover,
-.reveal-received-file:focus-visible {
+.reveal-received-file:not(:disabled):hover,
+.reveal-received-file:not(:disabled):focus-visible {
   background: #e8f0f8;
   opacity: 1;
 }
