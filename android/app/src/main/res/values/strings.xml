@@ -243,6 +243,7 @@
     <string name="previous_crash_title">Previous crash detected</string>
     <string name="previous_crash_message">A crash log was saved from the last run. You can copy or share diagnostics and send them for analysis.</string>
     <string name="passphrase_qr">Passphrase QR</string>
+    <string name="view_passphrase_qr">View passphrase QR code</string>
     <string name="passphrase_qr_copy_hint">Long press the QR code or passphrase to copy</string>
     <string name="source_title">Open source project</string>
     <string name="source_description">Gonc is developed as an open source project. You can inspect the source code, report issues, and follow updates on GitHub.</string>
