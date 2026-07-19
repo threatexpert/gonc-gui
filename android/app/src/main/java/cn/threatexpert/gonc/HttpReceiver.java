@@ -4,6 +4,7 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -111,6 +112,27 @@ final class HttpReceiver {
         Thread worker = new Thread(() -> run(context.getApplicationContext(), serverUrl, saveTreeUri, requestedFiles, resume, session, callback), "gonc-http-receive");
         worker.start();
         return session;
+    }
+
+    static Map<String, ReceivedTarget> findReceivedTargets(Context context, Uri tree, List<RemoteFile> files) {
+        Map<String, ReceivedTarget> found = new LinkedHashMap<>();
+        if (context == null || files == null || files.isEmpty()) {
+            return found;
+        }
+        Context applicationContext = context.getApplicationContext();
+        TargetResolver resolver = new TargetResolver(applicationContext == null ? context : applicationContext, tree);
+        for (RemoteFile file : files) {
+            if (file == null || file.isDir) {
+                continue;
+            }
+            DocumentInfo info = resolver.findExisting(file.path, file.name);
+            boolean readable = info != null && resolver.canRead(info.uri);
+            if (info != null && ReceivedFileMatcher.isAvailable(true, readable, info.directory, info.size, file.size)) {
+                found.put(normalizePath(file.path), new ReceivedTarget(
+                        info.uri, displayName(context, info.uri), info.size, info.modifiedMs));
+            }
+        }
+        return found;
     }
 
     private static void run(Context context, String serverUrl, Uri saveTreeUri, List<RemoteFile> requestedFiles, boolean resume, Session session, Callback callback) {
@@ -1100,6 +1122,10 @@ final class HttpReceiver {
         }
 
         private DocumentInfo rememberedTarget(String remotePath) {
+            return rememberedTarget(remotePath, true);
+        }
+
+        private DocumentInfo rememberedTarget(String remotePath, boolean forgetStale) {
             String uriStr = targetPrefs.getString(targetKey(remotePath), null);
             if (uriStr == null) {
                 return null;
@@ -1108,7 +1134,9 @@ final class HttpReceiver {
             DocumentInfo info = uriInfo(uri);
             if (info == null || info.size < 0) {
                 // The file is gone (user deleted it / record stale) — forget it.
-                targetPrefs.edit().remove(targetKey(remotePath)).apply();
+                if (forgetStale) {
+                    targetPrefs.edit().remove(targetKey(remotePath)).apply();
+                }
                 return null;
             }
             return info;
@@ -1124,7 +1152,9 @@ final class HttpReceiver {
             try {
                 if ("file".equals(uri.getScheme())) {
                     File file = new File(uri.getPath());
-                    return file.exists() ? new DocumentInfo(uri, file.length(), file.lastModified()) : null;
+                    return file.exists()
+                            ? new DocumentInfo(uri, file.length(), file.lastModified(), file.isDirectory())
+                            : null;
                 }
                 Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.SIZE}, null, null, null);
                 if (cursor == null) {
@@ -1140,9 +1170,58 @@ final class HttpReceiver {
                 } finally {
                     cursor.close();
                 }
-                return new DocumentInfo(uri, size, queryModifiedMs(uri));
+                return new DocumentInfo(uri, size, queryModifiedMs(uri),
+                        DocumentsContract.Document.MIME_TYPE_DIR.equals(resolver.getType(uri)));
             } catch (Exception error) {
                 return null;
+            }
+        }
+
+        DocumentInfo findExisting(String remotePath, String fallbackName) {
+            DocumentInfo remembered = rememberedTarget(remotePath, false);
+            if (remembered != null) {
+                return remembered;
+            }
+
+            String[] parts = pathParts(remotePath);
+            String name = parts.length == 0 ? safeName(fallbackName) : parts[parts.length - 1];
+            if (treeUri != null) {
+                Uri parent = treeDirectoryCache.get("");
+                for (String part : parentPath(parts)) {
+                    DocumentInfo directory = treeChild(parent, part);
+                    if (directory == null || !directory.directory) {
+                        return null;
+                    }
+                    parent = directory.uri;
+                }
+                return bestResumeVariant(treeChildren(parent), name);
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                return bestResumeVariant(publicFiles(publicRelativeDir(parts)), name);
+            }
+
+            File dir = publicDownloadDir(parts);
+            File[] children = dir.listFiles();
+            if (children == null) {
+                return null;
+            }
+            Map<String, DocumentInfo> existing = new LinkedHashMap<>();
+            for (File child : children) {
+                existing.put(child.getName(), new DocumentInfo(
+                        Uri.fromFile(child), child.length(), child.lastModified(), child.isDirectory()));
+            }
+            return bestResumeVariant(existing, name);
+        }
+
+        boolean canRead(Uri uri) {
+            if (uri == null) {
+                return false;
+            }
+            try (AssetFileDescriptor descriptor = resolver.openAssetFileDescriptor(uri, "r")) {
+                return descriptor != null;
+            } catch (Exception error) {
+                return false;
             }
         }
 
@@ -1257,7 +1336,8 @@ final class HttpReceiver {
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                     DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                     DocumentsContract.Document.COLUMN_SIZE,
-                    DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
             };
             Cursor cursor = resolver.query(children, columns, null, null, null);
             if (cursor != null) {
@@ -1270,7 +1350,8 @@ final class HttpReceiver {
                         long size = cursor.isNull(2) ? 0 : cursor.getLong(2);
                         long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3);
                         Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0));
-                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs));
+                        boolean directory = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(4));
+                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs, directory));
                     }
                 } finally {
                     cursor.close();
@@ -1381,7 +1462,8 @@ final class HttpReceiver {
         private DocumentInfo bestResumeVariant(Map<String, DocumentInfo> files, String name) {
             DocumentInfo best = null;
             for (Map.Entry<String, DocumentInfo> entry : files.entrySet()) {
-                if (isNameVariant(entry.getKey(), name) && (best == null || entry.getValue().size > best.size)) {
+                if (!entry.getValue().directory && isNameVariant(entry.getKey(), name)
+                        && (best == null || entry.getValue().size > best.size)) {
                     best = entry.getValue();
                 }
             }
@@ -1471,6 +1553,20 @@ final class HttpReceiver {
         long modifiedMs; // epoch millis of last modification; 0 when unknown
     }
 
+    static final class ReceivedTarget {
+        final Uri uri;
+        final String displayName;
+        final long size;
+        final long modifiedMs;
+
+        ReceivedTarget(Uri uri, String displayName, long size, long modifiedMs) {
+            this.uri = uri;
+            this.displayName = displayName;
+            this.size = size;
+            this.modifiedMs = modifiedMs;
+        }
+    }
+
     static final class DownloadFailure {
         final String path;
         final String message;
@@ -1553,15 +1649,21 @@ final class HttpReceiver {
         final Uri uri;
         final long size;
         final long modifiedMs;
+        final boolean directory;
 
         DocumentInfo(Uri uri, long size) {
-            this(uri, size, 0);
+            this(uri, size, 0, false);
         }
 
         DocumentInfo(Uri uri, long size, long modifiedMs) {
+            this(uri, size, modifiedMs, false);
+        }
+
+        DocumentInfo(Uri uri, long size, long modifiedMs, boolean directory) {
             this.uri = uri;
             this.size = size;
             this.modifiedMs = modifiedMs;
+            this.directory = directory;
         }
     }
 
