@@ -46,6 +46,7 @@ final class ReceiveController {
     private final Object downloadProgressLock = new Object();
 
     private boolean receiveUseUdp;
+    private boolean receiveQrRetired;
     private boolean receivePasswordVisible;
     private int receivePasswordVisibilityToken;
     private String receivePassword = "";
@@ -319,9 +320,16 @@ final class ReceiveController {
         labelParams.setMargins(dp(10), 0, dp(8), 0);
         row.addView(label, labelParams);
 
-        Button passphrase = secondaryButton(string(R.string.passphrase));
-        passphrase.setOnClickListener(v -> showPasswordQr());
-        row.addView(passphrase, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
+            row.addView(PassphraseQrView.create(
+                    context(), host.ui(), receivePassword, 104, false,
+                    () -> showPasswordQr()));
+        } else {
+            Button passphrase = secondaryButton(string(R.string.passphrase));
+            passphrase.setOnClickListener(v -> showPasswordQr());
+            row.addView(passphrase, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        }
 
         Button disconnect = dangerButton(string(R.string.disconnect));
         disconnect.setTextSize(14);
@@ -1494,6 +1502,7 @@ final class ReceiveController {
         remoteTotalBytes = 0;
         receiveStatus = "Preparing";
         host.log("info", "Start receiving requested");
+        receiveQrRetired = TransferInlineQrState.newReceiveRunRetired();
         long runId = ++receiveRunId;
         GoncBridge.Session started = host.bridge().startP2PReceive(
                 context(), passphrase, receiveUseUdp, callback(runId));
@@ -1530,6 +1539,9 @@ final class ReceiveController {
                         return;
                     }
                     host.updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
+                    receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, status);
+                    receiveQrRetired = TransferInlineQrState.retireReceiveQr(
+                            receiveQrRetired, receiveConnectionState());
                     host.requestRender();
                     host.refreshForegroundService();
                 });
@@ -1555,6 +1567,7 @@ final class ReceiveController {
                     }
                     receiveStatus = "Ready";
                     receiveMetrics.p2pStatus = "connected";
+                    receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "ready");
                     host.log("info", "Ready: " + endpoint);
                     loadRemoteFiles(endpoint, runId);
                     host.requestRender();
@@ -1570,6 +1583,7 @@ final class ReceiveController {
                     }
                     receiveSession = null;
                     receiveStatus = "Idle";
+                    receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "stopped");
                     stopReceiveWorkers();
                     receiveMetrics.markStopped();
                     host.refreshForegroundService();
@@ -1586,6 +1600,7 @@ final class ReceiveController {
                     }
                     receiveSession = null;
                     receiveStatus = "Error";
+                    receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "error");
                     stopReceiveWorkers();
                     remoteListStatus = "Failed";
                     receiveMetrics.p2pStatus = "error";
@@ -1603,6 +1618,7 @@ final class ReceiveController {
             current.stop();
             receiveSession = null;
         }
+        receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "stopped");
         if (receiveDownload != null) {
             receiveDownload.stop();
         }

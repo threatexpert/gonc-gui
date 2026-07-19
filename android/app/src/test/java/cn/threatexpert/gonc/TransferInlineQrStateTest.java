@@ -31,6 +31,21 @@ public class TransferInlineQrStateTest {
     }
 
     @Test
+    public void receiveQrRetirementPersistsForWholeRun() {
+        boolean retired = TransferInlineQrState.newReceiveRunRetired();
+        assertFalse(retired);
+        assertTrue(TransferInlineQrState.showReceiveQr(retired, "starting"));
+        retired = TransferInlineQrState.retireReceiveQr(retired, "error: timeout");
+        assertTrue(retired);
+        assertFalse(TransferInlineQrState.showReceiveQr(retired, "waiting"));
+        assertFalse(TransferInlineQrState.showReceiveQr(retired, "reconnecting"));
+
+        assertTrue(TransferInlineQrState.retireReceiveQr(false, "failed handshake"));
+        assertTrue(TransferInlineQrState.retireReceiveQr(false, "lost peer"));
+        assertTrue(TransferInlineQrState.retireReceiveQr(false, "timeout waiting"));
+    }
+
+    @Test
     public void cacheKeyUsesTrimmedPassphraseAndSize() {
         assertEquals(new TransferInlineQrState.CacheKey(" secret ", 112),
                 new TransferInlineQrState.CacheKey("secret", 112));

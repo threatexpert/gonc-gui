@@ -22,12 +22,26 @@ final class TransferInlineQrState {
         return false;
     }
 
+    static boolean newReceiveRunRetired() {
+        return false;
+    }
+
     static boolean showReceiveQr(boolean retired, String state) {
         return !retired && INITIAL_RECEIVE_STATES.contains(normalize(state));
     }
 
     static boolean retireReceiveQr(boolean retired, String state) {
-        return retired || !INITIAL_RECEIVE_STATES.contains(normalize(state));
+        if (retired) {
+            return true;
+        }
+        String clean = normalize(state);
+        if ("error".equals(clean) || clean.startsWith("error:")
+                || clean.startsWith("fail")
+                || clean.startsWith("lost")
+                || clean.startsWith("timeout")) {
+            return true;
+        }
+        return !INITIAL_RECEIVE_STATES.contains(clean);
     }
 
     private static String normalize(String value) {
