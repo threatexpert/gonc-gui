@@ -11,6 +11,7 @@ import {
   inlineQrShouldMask,
   isFileTransferMode,
   latchSuccessfulConnection,
+  maskAfterPassphraseUpdate,
   transferStartGate,
 } from './inlineQrState';
 import {vpnprofile} from '../wailsjs/go/models';
@@ -741,6 +742,8 @@ function App() {
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
   const [sendQrHasConnected, setSendQrHasConnected] = useState(false);
   const [receiveQrHasConnected, setReceiveQrHasConnected] = useState(false);
+  const previousSendQrPassphrase = useRef(sendPassword);
+  const previousReceiveQrPassphrase = useRef(receivePassword);
   const [vpnServerP2PReports, setVpnServerP2PReports] = useState<Record<string, P2PReport>>({});
   const [vpnClientP2PReport, setVpnClientP2PReport] = useState<P2PReport | null>(null);
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
@@ -868,6 +871,22 @@ function App() {
   const revealFileLabel = runtimePlatform === 'windows'
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
+
+  useEffect(() => {
+    const previous = previousSendQrPassphrase.current;
+    setSendQrHasConnected((masked) => maskAfterPassphraseUpdate(
+      masked, sendRunning, previous, sendPassword,
+    ));
+    previousSendQrPassphrase.current = sendPassword;
+  }, [sendPassword, sendRunning]);
+
+  useEffect(() => {
+    const previous = previousReceiveQrPassphrase.current;
+    setReceiveQrHasConnected((masked) => maskAfterPassphraseUpdate(
+      masked, receiveRunning, previous, receivePassword,
+    ));
+    previousReceiveQrPassphrase.current = receivePassword;
+  }, [receivePassword, receiveRunning]);
 
   useEffect(() => {
     if (!remoteList || !saveDir || status.downloading || receivedDownloadActive.current || receivedCompletionRefreshPendingRef.current) {
@@ -2194,14 +2213,12 @@ function App() {
             {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
             <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
             {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-            <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
           </>
         ) : mode === 'receive' ? (
           <>
             {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
             {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
             {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-            <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
           </>
         ) : mode === 'vpnServer' ? (
           <>

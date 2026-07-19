@@ -356,19 +356,17 @@ textarea:focus {
 
 .transfer-inline-qr-column {
   display: grid;
-  width: clamp(132px, 18vw, 220px);
-  place-items: center;
+  width: 112px;
+  align-self: end;
+  place-items: end center;
 }
 
 .transfer-inline-qr {
   position: relative;
   display: grid;
   box-sizing: border-box;
-  width: 100%;
-  height: auto;
-  max-width: 220px;
-  min-height: 0;
-  aspect-ratio: 1;
+  width: 112px;
+  height: 112px;
   place-items: center;
   overflow: hidden;
   border: 1px solid #d8e2ee;
@@ -387,16 +385,13 @@ textarea:focus {
   outline-offset: 3px;
 }
 
-.transfer-inline-qr.masked img {
-  filter: blur(10px);
-  transform: scale(.92);
-}
-
-.transfer-inline-qr.masked::after {
-  position: absolute;
-  inset: 18%;
-  background: rgba(226, 232, 240, .82);
-  content: "";
+.transfer-inline-qr-mask {
+  width: 88px;
+  height: 88px;
+  background:
+    repeating-conic-gradient(#101826 0 25%, #fff 0 50%) 0 0 / 12px 12px;
+  filter: blur(4px);
+  transform: scale(.94);
 }
 
 .profile-line {

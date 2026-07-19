@@ -65,7 +65,11 @@ export function TransferInlineQr({passphrase, masked, onActivate, onError}: Prop
       onClick={onActivate}
       aria-label="View passphrase QR code"
     >
-      {visibleDataUrl && <img src={visibleDataUrl} alt="" />}
+      {visibleDataUrl && (
+        masked
+          ? <span className="transfer-inline-qr-mask" aria-hidden="true" />
+          : <img src={visibleDataUrl} alt="" />
+      )}
     </button>
   );
 }

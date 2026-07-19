@@ -6,6 +6,7 @@ import {
   isCurrentQrGeneration,
   isFileTransferMode,
   latchSuccessfulConnection,
+  maskAfterPassphraseUpdate,
   normalizedQrPassphrase,
   qrGenerationRequest,
   isCurrentQrRequest,
@@ -23,6 +24,17 @@ test('connection masking latches for the whole run', () => {
   assert.equal(latchSuccessfulConnection(false, 'connected'), true);
   assert.equal(latchSuccessfulConnection(true, 'disconnected'), true);
   assert.equal(latchSuccessfulConnection(false, 'connecting'), false);
+});
+
+test('stopped transfer mask clears only for a different normalized passphrase', () => {
+  assert.equal(maskAfterPassphraseUpdate(true, false, 'old', 'old'), true);
+  assert.equal(maskAfterPassphraseUpdate(true, false, ' old ', 'old'), true);
+  assert.equal(maskAfterPassphraseUpdate(true, false, 'old', 'new'), false);
+});
+
+test('running transfer passphrase update cannot clear its mask', () => {
+  assert.equal(maskAfterPassphraseUpdate(true, true, 'old', 'new'), true);
+  assert.equal(maskAfterPassphraseUpdate(false, false, 'old', 'new'), false);
 });
 
 test('late asynchronous QR result cannot replace current passphrase', () => {

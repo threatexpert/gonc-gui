@@ -4,6 +4,19 @@ export function normalizedQrPassphrase(value: string) {
   return value.trim();
 }
 
+export function maskAfterPassphraseUpdate(
+  masked: boolean,
+  running: boolean,
+  previousPassphrase: string,
+  nextPassphrase: string,
+) {
+  if (!masked || running) {
+    return masked;
+  }
+  return normalizedQrPassphrase(previousPassphrase)
+    === normalizedQrPassphrase(nextPassphrase);
+}
+
 export function isFileTransferMode(mode: string): mode is FileTransferMode {
   return mode === 'send' || mode === 'receive';
 }
