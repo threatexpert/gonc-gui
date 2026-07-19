@@ -479,6 +479,9 @@ final class ReceiveController {
     private View remoteFileRow(HttpReceiver.RemoteFile file) {
         String normalizedPath = normalizeRemotePath(file.path);
         HttpReceiver.ReceivedTarget target = receivedTargets.get(normalizedPath);
+        boolean receivedMarkerVisible = ReceivedFileActionState.markerVisible(target != null);
+        boolean receivedActionsEnabled = ReceivedFileActionState.actionsEnabled(
+                target != null, receiveDownload != null);
         LinearLayout row = row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(6), dp(10), dp(6));
@@ -524,22 +527,33 @@ final class ReceiveController {
         }
         labels.addView(text(detail, 12, muted(), Typeface.NORMAL));
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        if (!file.isDir && target != null) {
-            View.OnClickListener open = v -> openReceivedFile(file, false);
+        if (!file.isDir && receivedMarkerVisible) {
+            View.OnClickListener open = v -> {
+                if (canUseReceivedFileActions()) {
+                    openReceivedFile(file, false);
+                }
+            };
             icon.setOnClickListener(open);
             icon.setContentDescription(string(R.string.open) + " " + baseName(normalizedPath));
             icon.setClickable(true);
             icon.setFocusable(true);
+            setControlEnabled(icon, receivedActionsEnabled);
             labels.setOnClickListener(open);
             labels.setContentDescription(string(R.string.open) + " " + baseName(normalizedPath));
             labels.setClickable(true);
             labels.setFocusable(true);
+            setControlEnabled(labels, receivedActionsEnabled);
             TextView available = text("\u2713", 14, Color.rgb(32, 151, 102), Typeface.BOLD);
             available.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             row.addView(available);
             Button more = quietTouchButton("\u22ee");
             more.setContentDescription(string(R.string.received_file_actions));
-            more.setOnClickListener(v -> showReceivedFileMenu(more, file));
+            more.setOnClickListener(v -> {
+                if (canUseReceivedFileActions()) {
+                    showReceivedFileMenu(more, file);
+                }
+            });
+            setControlEnabled(more, receivedActionsEnabled);
             row.addView(more, new LinearLayout.LayoutParams(dp(42), dp(42)));
         }
         if (file.isDir) {
@@ -556,6 +570,9 @@ final class ReceiveController {
     }
 
     private void showReceivedFileMenu(View anchor, HttpReceiver.RemoteFile file) {
+        if (!canUseReceivedFileActions()) {
+            return;
+        }
         PopupMenu menu = new PopupMenu(context(), anchor);
         menu.getMenu().add(0, 1, 0, R.string.open);
         menu.getMenu().add(0, 2, 1, R.string.open_with);
@@ -594,6 +611,9 @@ final class ReceiveController {
     private void withCurrentReceivedTarget(
             HttpReceiver.RemoteFile file,
             BiConsumer<HttpReceiver.ReceivedTarget, String> action) {
+        if (!canUseReceivedFileActions()) {
+            return;
+        }
         long runId = receiveRunId;
         long checkId = ++receivedTargetCheckId;
         String checkedPath = normalizeRemotePath(remoteCurrentPath);
@@ -616,6 +636,9 @@ final class ReceiveController {
             host.mainHandler().post(() -> {
                 if (!isReceivedTargetCheckCurrent(
                         runId, checkId, checkedPath, checkedTree, checkedSaveLabel)) {
+                    return;
+                }
+                if (!canUseReceivedFileActions()) {
                     return;
                 }
                 String normalizedPath = normalizeRemotePath(file.path);
@@ -644,6 +667,10 @@ final class ReceiveController {
         receivedTargets.remove(normalizedPath);
         host.toast(R.string.toast_received_file_unavailable);
         host.requestRender();
+    }
+
+    private boolean canUseReceivedFileActions() {
+        return !shutdown && receiveDownload == null;
     }
 
     private void refreshReceivedTargets(long runId, String checkedPath) {
