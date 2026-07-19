@@ -942,19 +942,7 @@ func (w *repairProgressWriter) Write(data []byte) (int, error) {
 }
 
 func (d *Downloader) localPath(file FileInfo) (string, error) {
-	remotePath := strings.TrimPrefix(path.Clean(file.Path), "/")
-	if remotePath == "." || remotePath == "" {
-		remotePath = safeLocalFilename(file.Name)
-	}
-	localPath := filepath.Clean(filepath.Join(d.root, filepath.FromSlash(remotePath)))
-	rel, err := filepath.Rel(d.root, localPath)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("remote path escapes save directory: %s", file.Path)
-	}
-	return localPath, nil
+	return ResolveLocalPath(d.root, file)
 }
 
 func singleFileFromHeaders(resp *http.Response) (FileInfo, bool) {
