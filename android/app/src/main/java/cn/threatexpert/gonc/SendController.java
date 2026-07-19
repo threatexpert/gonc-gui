@@ -195,7 +195,8 @@ final class SendController {
             LinearLayout qrOnly = u.column();
             qrOnly.setGravity(Gravity.CENTER_HORIZONTAL);
             qrOnly.addView(PassphraseQrView.create(
-                    host.context(), u, password, 220, sendQrHasConnected,
+                    host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
+                    sendQrHasConnected,
                     () -> host.showPassphraseQr(password.trim()),
                     () -> host.toast(R.string.inline_qr_generation_failed)));
             return qrOnly;

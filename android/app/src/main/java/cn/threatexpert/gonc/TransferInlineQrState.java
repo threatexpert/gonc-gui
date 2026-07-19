@@ -12,6 +12,9 @@ import java.util.Set;
 final class TransferInlineQrState {
     private static final int QR_BITMAP_CACHE_BUDGET_BYTES = 4 * 1024 * 1024;
     private static final int MAX_QR_PIXEL_SIZE = 512;
+    private static final int INLINE_QR_SIZE_DP = 104;
+    private static final int INLINE_QR_FRAME_PADDING_DP = 2;
+    private static final String MASKED_PATTERN_ID = "decorative-inline-qr-mask";
     private static final Set<String> INITIAL_RECEIVE_STATES =
             new HashSet<>(Arrays.asList(
                     "wait", "waiting", "starting", "preparing", "connecting", "negotiating"));
@@ -39,10 +42,19 @@ final class TransferInlineQrState {
         return Math.max(1, Math.min(MAX_QR_PIXEL_SIZE, requestedPixelSize));
     }
 
+    static int inlineQrSizeDp() {
+        return INLINE_QR_SIZE_DP;
+    }
+
+    static int inlineQrFramePaddingDp() {
+        return INLINE_QR_FRAME_PADDING_DP;
+    }
+
     static BitmapCacheKey productionCacheKey(String passphrase, int requestedPixelSize, boolean masked) {
         String clean = passphrase == null ? "" : passphrase.trim();
         return new BitmapCacheKey(
-                sha256(clean), capQrPixelSize(requestedPixelSize), masked ? "masked" : "clear");
+                sha256(masked ? MASKED_PATTERN_ID : clean),
+                capQrPixelSize(requestedPixelSize), masked ? "masked" : "clear");
     }
 
     static boolean shouldClearQrCache(long currentRunId, long eventRunId) {

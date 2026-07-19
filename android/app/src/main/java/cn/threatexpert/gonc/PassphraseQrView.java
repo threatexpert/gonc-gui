@@ -54,7 +54,7 @@ final class PassphraseQrView {
 
         boolean actionable = !cleanPassphrase.isEmpty() && !entry.failed;
         FrameLayout container = new FrameLayout(context);
-        int padding = ui.dp(6);
+        int padding = ui.dp(TransferInlineQrState.inlineQrFramePaddingDp());
         container.setPadding(padding, padding, padding, padding);
         container.setBackground(ui.rounded(Color.WHITE, ui.dp(8), Color.rgb(216, 226, 238), 1));
         container.setEnabled(actionable);
@@ -83,26 +83,35 @@ final class PassphraseQrView {
         if (passphrase.isEmpty()) {
             return new CacheEntry(placeholder(pixelSize), false);
         }
+        if (masked) {
+            return new CacheEntry(decorativeMaskedQr(pixelSize), false);
+        }
         try {
-            Bitmap clear = QrCodes.encode(passphrase, pixelSize);
-            return new CacheEntry(masked ? masked(clear, pixelSize) : clear, false);
+            return new CacheEntry(QrCodes.encode(passphrase, pixelSize), false);
         } catch (WriterException error) {
             return new CacheEntry(placeholder(pixelSize), true);
         }
     }
 
-    private static Bitmap masked(Bitmap clear, int pixelSize) {
-        int sampleSize = Math.max(1, Math.min(MASK_SAMPLE_SIZE, pixelSize));
-        Bitmap sampled = Bitmap.createScaledBitmap(clear, sampleSize, sampleSize, true);
-        Bitmap enlarged = Bitmap.createScaledBitmap(sampled, pixelSize, pixelSize, true);
-        Bitmap result = enlarged.copy(Bitmap.Config.ARGB_8888, true);
-        Canvas canvas = new Canvas(result);
-        int inset = pixelSize / 4;
-        Paint cover = new Paint();
-        cover.setColor(COVER_COLOR);
-        cover.setStyle(Paint.Style.FILL);
-        canvas.drawRect(inset, inset, pixelSize - inset, pixelSize - inset, cover);
-        return result;
+    private static Bitmap decorativeMaskedQr(int pixelSize) {
+        Bitmap pattern = Bitmap.createBitmap(29, 29, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(pattern);
+        canvas.drawColor(Color.WHITE);
+        Paint ink = new Paint();
+        ink.setColor(Color.rgb(16, 24, 38));
+        int seed = 0x51f15e;
+        for (int y = 0; y < 29; y++) {
+            for (int x = 0; x < 29; x++) {
+                seed = seed * 1103515245 + 12345;
+                if (((seed >>> 28) & 1) == 1) {
+                    canvas.drawRect(x, y, x + 1, y + 1, ink);
+                }
+            }
+        }
+        Bitmap sampled = Bitmap.createScaledBitmap(
+                pattern, Math.min(MASK_SAMPLE_SIZE, pixelSize),
+                Math.min(MASK_SAMPLE_SIZE, pixelSize), true);
+        return Bitmap.createScaledBitmap(sampled, pixelSize, pixelSize, true);
     }
 
     private static Bitmap placeholder(int pixelSize) {

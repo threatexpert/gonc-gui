@@ -9,6 +9,22 @@ import static org.junit.Assert.assertTrue;
 
 public class TransferInlineQrStateTest {
     @Test
+    public void inlineQrUsesSharedCompactDimensions() {
+        assertEquals(104, TransferInlineQrState.inlineQrSizeDp());
+        assertEquals(2, TransferInlineQrState.inlineQrFramePaddingDp());
+    }
+
+    @Test
+    public void maskedBitmapCacheIdentityDoesNotDependOnPassphrase() {
+        assertEquals(
+                TransferInlineQrState.productionCacheKey("first-secret", 416, true),
+                TransferInlineQrState.productionCacheKey("second-secret", 416, true));
+        assertNotEquals(
+                TransferInlineQrState.productionCacheKey("first-secret", 416, false),
+                TransferInlineQrState.productionCacheKey("second-secret", 416, false));
+    }
+
+    @Test
     public void sendMaskLatchesAfterFirstConnection() {
         boolean latched = false;
         latched = TransferInlineQrState.latchSendConnected(latched, 0);

@@ -324,7 +324,8 @@ final class ReceiveController {
 
         if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
             row.addView(PassphraseQrView.create(
-                    context(), host.ui(), receivePassword, 104, false,
+                    context(), host.ui(), receivePassword,
+                    TransferInlineQrState.inlineQrSizeDp(), false,
                     () -> showPasswordQr(),
                     () -> host.toast(R.string.inline_qr_generation_failed)));
         } else {
