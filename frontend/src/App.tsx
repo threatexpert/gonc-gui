@@ -5,6 +5,13 @@ import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/r
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import appIconUrl from './assets/images/appicon.png';
 import './App.css';
+import {TransferInlineQr} from './TransferInlineQr';
+import {
+  fileTransferReportBelongsToRun,
+  inlineQrShouldMask,
+  isFileTransferMode,
+  latchSuccessfulConnection,
+} from './inlineQrState';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
@@ -67,6 +74,7 @@ type P2PReport = {
   peer: string;
   timestamp: number;
   pid: number;
+  clientRunId?: number;
 };
 
 type DownloadEvent = {
@@ -729,6 +737,8 @@ function App() {
   const [error, setError] = useState('');
   const [receiveP2PReport, setReceiveP2PReport] = useState<P2PReport | null>(null);
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
+  const [sendQrHasConnected, setSendQrHasConnected] = useState(false);
+  const [receiveQrHasConnected, setReceiveQrHasConnected] = useState(false);
   const [vpnServerP2PReports, setVpnServerP2PReports] = useState<Record<string, P2PReport>>({});
   const [vpnClientP2PReport, setVpnClientP2PReport] = useState<P2PReport | null>(null);
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
@@ -780,6 +790,9 @@ function App() {
   const receivedDownloadTaskId = useRef(0);
   const receivedTerminalOwner = useRef<number | null>(null);
   const receivedTerminalRefreshPromise = useRef<{taskId: number; promise: Promise<void>} | null>(null);
+  const transferRunSequence = useRef(0);
+  const activeSendTransferRun = useRef(0);
+  const activeReceiveTransferRun = useRef(0);
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
@@ -1047,8 +1060,16 @@ function App() {
     });
     EventsOn('p2p:report', (report: P2PReport) => {
       if (report.side === 'send') {
+        if (!fileTransferReportBelongsToRun(report.clientRunId ?? 0, activeSendTransferRun.current)) {
+          return;
+        }
+        setSendQrHasConnected((current) => latchSuccessfulConnection(current, report.status));
         setSendP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'receive') {
+        if (!fileTransferReportBelongsToRun(report.clientRunId ?? 0, activeReceiveTransferRun.current)) {
+          return;
+        }
+        setReceiveQrHasConnected((current) => latchSuccessfulConnection(current, report.status));
         setReceiveP2PReport(report);
       } else if (report.side === 'vpnServer') {
         setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
@@ -1564,10 +1585,15 @@ function App() {
   async function start() {
     setError('');
     const passphrase = activePassword.trim();
+    const clientRunId = isFileTransferMode(mode) ? ++transferRunSequence.current : 0;
     if (mode === 'send') {
+      activeSendTransferRun.current = clientRunId;
+      setSendQrHasConnected(false);
       setSendP2PReports({});
       setSendTraffic(null);
     } else if (mode === 'receive') {
+      activeReceiveTransferRun.current = clientRunId;
+      setReceiveQrHasConnected(false);
       setReceiveP2PReport(null);
       setRemoteList(null);
       setRemoteListLoading(false);
@@ -1608,7 +1634,8 @@ function App() {
         blockDnsLeak: isWindows && vpnClientBlockDNSLeak,
         enableIpv6: vpnClientEnableIPv6,
         tunnelOnly: vpnClientTunnelOnly,
-        extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs
+        extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
+        ...(isFileTransferMode(mode) ? {clientRunId} : {}),
       });
       if (mode === 'receive') {
         resetReceivedDownloadStateForNewConnection();
@@ -1619,6 +1646,11 @@ function App() {
       }
       await refreshStatus();
     } catch (err) {
+      if (mode === 'send' && activeSendTransferRun.current === clientRunId) {
+        activeSendTransferRun.current = 0;
+      } else if (mode === 'receive' && activeReceiveTransferRun.current === clientRunId) {
+        activeReceiveTransferRun.current = 0;
+      }
       setError(localizeError(String(err)));
     }
   }
@@ -2122,6 +2154,79 @@ function App() {
     }
   }
 
+  const passphraseField = (
+    <div className="field">
+      <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
+      <div className="inline password-line">
+        <input
+          type={passwordVisible ? 'text' : 'password'}
+          value={activePassword}
+          onChange={(event) => {
+            if (mode === 'send') {
+              setSendPassword(event.target.value);
+            } else if (mode === 'receive') {
+              setReceivePassword(event.target.value);
+            } else if (mode === 'vpnServer') {
+              setVpnServerPassword(event.target.value);
+            } else {
+              setVpnProfileField('passphrase', event.target.value);
+            }
+          }}
+          placeholder={t.passPlaceholder}
+          disabled={currentRunning}
+        />
+        {mode === 'send' ? (
+          <>
+            {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
+            <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
+            {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
+            <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
+          </>
+        ) : mode === 'receive' ? (
+          <>
+            {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
+            {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
+            {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
+            <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
+          </>
+        ) : mode === 'vpnServer' ? (
+          <>
+            {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
+            {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
+            <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
+            {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
+            <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
+          </>
+        ) : (
+          <>
+            {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
+            {!vpnClientRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
+            <button className="secondary" disabled={!vpnClientPassword} onClick={copyPassword}>{t.copy}</button>
+            {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
+            <button className="secondary" disabled={!vpnClientPassword} onClick={showPasswordQr}>{t.qr}</button>
+          </>
+        )}
+      </div>
+      {mode === 'send' ? (
+        <div className="field-hint">
+          <p>{t.senderPasswordHint}</p>
+        </div>
+      ) : mode === 'receive' ? (
+        <div className="field-hint">
+          <p>{t.receiverPasswordHint}</p>
+        </div>
+      ) : mode === 'vpnServer' ? (
+        <div className="field-hint">
+          <p>{t.vpnServerPasswordHint}</p>
+        </div>
+      ) : (
+        <div className="field-hint">
+          <p>{t.vpnClientPasswordHint}</p>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <main className="shell">
       <section className="workspace">
@@ -2227,88 +2332,30 @@ function App() {
               </>
             )}
 
-            <div className="field">
-              <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
-              <div className="inline password-line">
-                <input
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={activePassword}
-                  onChange={(event) => {
-                    if (mode === 'send') {
-                      setSendPassword(event.target.value);
-                    } else if (mode === 'receive') {
-                      setReceivePassword(event.target.value);
-                    } else if (mode === 'vpnServer') {
-                      setVpnServerPassword(event.target.value);
-                    } else {
-                      setVpnProfileField('passphrase', event.target.value);
-                    }
-                  }}
-                  placeholder={t.passPlaceholder}
-                  disabled={currentRunning}
-                />
-                {mode === 'send' ? (
-                  <>
-                    {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
-                    <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
-                    {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-                    <button className="secondary" disabled={!sendPassword} onClick={showPasswordQr}>{t.qr}</button>
-                  </>
-                ) : mode === 'receive' ? (
-                  <>
-                    {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
-                    {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-                    {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-                    <button className="secondary" disabled={!receivePassword} onClick={showPasswordQr}>{t.qr}</button>
-                  </>
-                ) : mode === 'vpnServer' ? (
-                  <>
-                    {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
-                    {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-                    <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
-                    {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-                    <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
-                  </>
-                ) : (
-                  <>
-                    {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
-                    {!vpnClientRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-                    <button className="secondary" disabled={!vpnClientPassword} onClick={copyPassword}>{t.copy}</button>
-                    {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-                    <button className="secondary" disabled={!vpnClientPassword} onClick={showPasswordQr}>{t.qr}</button>
-                  </>
-                )}
+            {isFileTransferMode(mode) ? (
+              <div className="transfer-setup-grid">
+                <div className="transfer-setup-fields">
+                  {passphraseField}
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={useUDP}
+                      disabled={currentRunning}
+                      onChange={(event) => setUseUDP(event.target.checked)}
+                    />
+                    <span>{t.useUDP}</span>
+                  </label>
+                </div>
+                <div className="transfer-inline-qr-column">
+                  <TransferInlineQr
+                    passphrase={activePassword}
+                    masked={inlineQrShouldMask(mode, sendQrHasConnected, receiveQrHasConnected)}
+                    onActivate={showPasswordQr}
+                    onError={(message) => setError(localizeError(message))}
+                  />
+                </div>
               </div>
-              {mode === 'send' ? (
-                <div className="field-hint">
-                  <p>{t.senderPasswordHint}</p>
-                </div>
-              ) : mode === 'receive' ? (
-                <div className="field-hint">
-                  <p>{t.receiverPasswordHint}</p>
-                </div>
-              ) : mode === 'vpnServer' ? (
-                <div className="field-hint">
-                  <p>{t.vpnServerPasswordHint}</p>
-                </div>
-              ) : (
-                <div className="field-hint">
-                  <p>{t.vpnClientPasswordHint}</p>
-                </div>
-              )}
-            </div>
-
-            {(mode === 'send' || mode === 'receive') && (
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={useUDP}
-                  disabled={currentRunning}
-                  onChange={(event) => setUseUDP(event.target.checked)}
-                />
-                <span>{t.useUDP}</span>
-              </label>
-            )}
+            ) : passphraseField}
 
             {mode === 'vpnClient' && (
               <section className="advanced-panel">

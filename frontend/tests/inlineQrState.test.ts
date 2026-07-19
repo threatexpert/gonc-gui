@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  fileTransferReportBelongsToRun,
+  inlineQrShouldMask,
   isCurrentQrGeneration,
   isFileTransferMode,
   latchSuccessfulConnection,
@@ -24,4 +26,16 @@ test('late asynchronous QR result cannot replace current passphrase', () => {
   assert.equal(isCurrentQrGeneration(3, 4, 'old', 'new'), false);
   assert.equal(isCurrentQrGeneration(4, 4, 'new', 'new'), true);
   assert.equal(normalizedQrPassphrase('  secret  '), 'secret');
+});
+
+test('file-transfer reports only belong to their exact run', () => {
+  assert.equal(fileTransferReportBelongsToRun(7, 7), true);
+  assert.equal(fileTransferReportBelongsToRun(6, 7), false);
+  assert.equal(fileTransferReportBelongsToRun(0, 0), false);
+});
+
+test('inline QR masking uses only the active file-transfer mode', () => {
+  assert.equal(inlineQrShouldMask('send', true, false), true);
+  assert.equal(inlineQrShouldMask('receive', false, true), true);
+  assert.equal(inlineQrShouldMask('vpnServer', true, true), false);
 });

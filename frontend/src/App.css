@@ -340,6 +340,63 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.transfer-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.transfer-setup-fields {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.transfer-inline-qr-column {
+  display: grid;
+  min-width: 132px;
+  place-items: center;
+}
+
+.transfer-inline-qr {
+  position: relative;
+  display: grid;
+  height: min(100%, 220px);
+  max-width: 220px;
+  min-height: 132px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #d8e2ee;
+  padding: 0;
+  background: #fff;
+}
+
+.transfer-inline-qr img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.transfer-inline-qr:focus-visible {
+  outline: 3px solid rgba(40, 112, 216, 0.38);
+  outline-offset: 3px;
+}
+
+.transfer-inline-qr.masked img {
+  filter: blur(10px);
+  transform: scale(.92);
+}
+
+.transfer-inline-qr.masked::after {
+  position: absolute;
+  inset: 18%;
+  background: rgba(226, 232, 240, .82);
+  content: "";
+}
+
 .profile-line {
   flex-wrap: wrap;
 }
@@ -1305,6 +1362,15 @@ progress {
 
   .password-line button {
     width: 100%;
+  }
+
+  .transfer-inline-qr-column {
+    width: 112px;
+    min-width: 112px;
+  }
+
+  .transfer-inline-qr {
+    min-height: 112px;
   }
 
   .remote-summary {
