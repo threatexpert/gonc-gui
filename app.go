@@ -18,6 +18,7 @@ import (
 	"gonc-gui/internal/appupdate"
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/receivedfile"
 	"gonc-gui/internal/taskbar"
 	"gonc-gui/internal/vpnprofile"
 
@@ -77,6 +78,11 @@ type RemoteListResponse struct {
 	FileCount int                     `json:"fileCount"`
 	DirCount  int                     `json:"dirCount"`
 	TotalSize int64                   `json:"totalSize"`
+}
+
+type ReceivedFileState struct {
+	RemotePath string `json:"remotePath"`
+	Available  bool   `json:"available"`
 }
 
 type VPNProfile = vpnprofile.Profile
@@ -153,6 +159,19 @@ func (a *App) OpenSaveDir(saveDir string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func (a *App) CheckReceivedFiles(saveDir string, files []httpdownload.FileInfo) []ReceivedFileState {
+	checked := receivedfile.Check(saveDir, files)
+	out := make([]ReceivedFileState, len(checked))
+	for i, state := range checked {
+		out[i] = ReceivedFileState(state)
+	}
+	return out
+}
+
+func (a *App) RevealReceivedFile(saveDir string, file httpdownload.FileInfo) error {
+	return receivedfile.Reveal(saveDir, file)
 }
 
 func (a *App) GeneratePassword() (string, error) {

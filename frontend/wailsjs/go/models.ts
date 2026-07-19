@@ -93,6 +93,20 @@ export namespace main {
 	        this.defaultSaveDir = source["defaultSaveDir"];
 	    }
 	}
+	export class ReceivedFileState {
+	    remotePath: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReceivedFileState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.remotePath = source["remotePath"];
+	        this.available = source["available"];
+	    }
+	}
 	export class RemoteListResponse {
 	    serverUrl: string;
 	    files: httpdownload.FileInfo[];

@@ -10,6 +10,10 @@ export function CheckForUpdate(arg1) {
   return window['go']['main']['App']['CheckForUpdate'](arg1);
 }
 
+export function CheckReceivedFiles(arg1, arg2) {
+  return window['go']['main']['App']['CheckReceivedFiles'](arg1, arg2);
+}
+
 export function ClearTaskbarProgress() {
   return window['go']['main']['App']['ClearTaskbarProgress']();
 }
@@ -32,6 +36,10 @@ export function OpenSaveDir(arg1) {
 
 export function RemoteFiles(arg1) {
   return window['go']['main']['App']['RemoteFiles'](arg1);
+}
+
+export function RevealReceivedFile(arg1, arg2) {
+  return window['go']['main']['App']['RevealReceivedFile'](arg1, arg2);
 }
 
 export function SaveVPNProfiles(arg1) {
