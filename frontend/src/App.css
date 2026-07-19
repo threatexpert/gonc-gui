@@ -356,16 +356,18 @@ textarea:focus {
 
 .transfer-inline-qr-column {
   display: grid;
-  min-width: 132px;
+  width: clamp(132px, 18vw, 220px);
   place-items: center;
 }
 
 .transfer-inline-qr {
   position: relative;
   display: grid;
-  height: min(100%, 220px);
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
   max-width: 220px;
-  min-height: 132px;
+  min-height: 0;
   aspect-ratio: 1;
   place-items: center;
   overflow: hidden;
@@ -1366,11 +1368,11 @@ progress {
 
   .transfer-inline-qr-column {
     width: 112px;
-    min-width: 112px;
   }
 
   .transfer-inline-qr {
-    min-height: 112px;
+    width: 112px;
+    height: 112px;
   }
 
   .remote-summary {

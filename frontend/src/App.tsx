@@ -11,6 +11,7 @@ import {
   inlineQrShouldMask,
   isFileTransferMode,
   latchSuccessfulConnection,
+  transferStartGate,
 } from './inlineQrState';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
@@ -735,6 +736,7 @@ function App() {
   const [status, setStatus] = useState<AppStatus>({running: false, sendRunning: false, receiveRunning: false, vpnServerRunning: false, vpnClientRunning: false, localHTTPUrl: '', downloading: false, defaultSaveDir: ''});
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
+  const [startPending, setStartPending] = useState(false);
   const [receiveP2PReport, setReceiveP2PReport] = useState<P2PReport | null>(null);
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
   const [sendQrHasConnected, setSendQrHasConnected] = useState(false);
@@ -791,6 +793,7 @@ function App() {
   const receivedTerminalOwner = useRef<number | null>(null);
   const receivedTerminalRefreshPromise = useRef<{taskId: number; promise: Promise<void>} | null>(null);
   const transferRunSequence = useRef(0);
+  const startPendingRef = useRef(false);
   const activeSendTransferRun = useRef(0);
   const activeReceiveTransferRun = useRef(0);
   const receivedStatusDownloadingRef = useRef(status.downloading);
@@ -838,7 +841,7 @@ function App() {
   const vpnClientRunning = status.vpnClientRunning;
   const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
-  const canStart = !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
+  const canStart = !startPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
   const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !receivedActionsUnavailable);
   const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !receivedActionsUnavailable);
@@ -1583,40 +1586,47 @@ function App() {
   }
 
   async function start() {
+    const gate = transferStartGate(startPendingRef.current);
+    if (!gate.accepted) {
+      return;
+    }
+    startPendingRef.current = gate.pending;
+    setStartPending(gate.pending);
     setError('');
     const passphrase = activePassword.trim();
     const clientRunId = isFileTransferMode(mode) ? ++transferRunSequence.current : 0;
-    if (mode === 'send') {
-      activeSendTransferRun.current = clientRunId;
-      setSendQrHasConnected(false);
-      setSendP2PReports({});
-      setSendTraffic(null);
-    } else if (mode === 'receive') {
-      activeReceiveTransferRun.current = clientRunId;
-      setReceiveQrHasConnected(false);
-      setReceiveP2PReport(null);
-      setRemoteList(null);
-      setRemoteListLoading(false);
-      setSelectedPaths(new Set());
-      setExcludedPaths(new Set());
-      setDownloadProgress(null);
-      ClearTaskbarProgress().catch(() => undefined);
-      setReceiveTraffic(null);
-      setCurrentRemotePath('/');
-    } else if (mode === 'vpnServer') {
-      setVpnServerP2PReports({});
-      setVpnServerTraffic(null);
-    } else {
-      setVpnClientP2PReport(null);
-      setVpnClientTraffic(null);
-      setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
-      setVpnClientSocks5Endpoint('');
-      vpnDisconnectNotified.current = false;
-      vpnStartedNotified.current = false;
-      vpnTunnelWasConnected.current = false;
-      vpnStopRequested.current = false;
-    }
+    let transferStarted = false;
     try {
+      if (mode === 'send') {
+        activeSendTransferRun.current = clientRunId;
+        setSendQrHasConnected(false);
+        setSendP2PReports({});
+        setSendTraffic(null);
+      } else if (mode === 'receive') {
+        activeReceiveTransferRun.current = clientRunId;
+        setReceiveQrHasConnected(false);
+        setReceiveP2PReport(null);
+        setRemoteList(null);
+        setRemoteListLoading(false);
+        setSelectedPaths(new Set());
+        setExcludedPaths(new Set());
+        setDownloadProgress(null);
+        ClearTaskbarProgress().catch(() => undefined);
+        setReceiveTraffic(null);
+        setCurrentRemotePath('/');
+      } else if (mode === 'vpnServer') {
+        setVpnServerP2PReports({});
+        setVpnServerTraffic(null);
+      } else {
+        setVpnClientP2PReport(null);
+        setVpnClientTraffic(null);
+        setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
+        setVpnClientSocks5Endpoint('');
+        vpnDisconnectNotified.current = false;
+        vpnStartedNotified.current = false;
+        vpnTunnelWasConnected.current = false;
+        vpnStopRequested.current = false;
+      }
       await StartTransfer({
         mode,
         password: passphrase,
@@ -1637,6 +1647,7 @@ function App() {
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
         ...(isFileTransferMode(mode) ? {clientRunId} : {}),
       });
+      transferStarted = true;
       if (mode === 'receive') {
         resetReceivedDownloadStateForNewConnection();
       } else if (mode === 'vpnServer') {
@@ -1646,12 +1657,15 @@ function App() {
       }
       await refreshStatus();
     } catch (err) {
-      if (mode === 'send' && activeSendTransferRun.current === clientRunId) {
+      if (!transferStarted && mode === 'send' && activeSendTransferRun.current === clientRunId) {
         activeSendTransferRun.current = 0;
-      } else if (mode === 'receive' && activeReceiveTransferRun.current === clientRunId) {
+      } else if (!transferStarted && mode === 'receive' && activeReceiveTransferRun.current === clientRunId) {
         activeReceiveTransferRun.current = 0;
       }
       setError(localizeError(String(err)));
+    } finally {
+      startPendingRef.current = false;
+      setStartPending(false);
     }
   }
 

@@ -7,6 +7,7 @@ import {
   isFileTransferMode,
   latchSuccessfulConnection,
   normalizedQrPassphrase,
+  transferStartGate,
 } from '../src/inlineQrState.js';
 
 test('limits inline QR to file-transfer modes', () => {
@@ -38,4 +39,9 @@ test('inline QR masking uses only the active file-transfer mode', () => {
   assert.equal(inlineQrShouldMask('send', true, false), true);
   assert.equal(inlineQrShouldMask('receive', false, true), true);
   assert.equal(inlineQrShouldMask('vpnServer', true, true), false);
+});
+
+test('transfer start gate synchronously rejects a concurrent start', () => {
+  assert.deepEqual(transferStartGate(false), {accepted: true, pending: true});
+  assert.deepEqual(transferStartGate(true), {accepted: false, pending: true});
 });

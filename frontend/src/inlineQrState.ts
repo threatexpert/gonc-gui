@@ -26,6 +26,13 @@ export function inlineQrShouldMask(
     : mode === 'receive' && receiveHasConnected;
 }
 
+export function transferStartGate(pending: boolean) {
+  return {
+    accepted: !pending,
+    pending: true,
+  };
+}
+
 export function isCurrentQrGeneration(
   requestId: number,
   currentId: number,
