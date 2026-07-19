@@ -695,6 +695,12 @@ final class ReceiveController {
             long runId, String checkedPath, long completionRefreshToken) {
         long checkId = ++receivedTargetCheckId;
         List<HttpReceiver.RemoteFile> snapshot = new ArrayList<>(visibleRemoteFiles());
+        Set<String> candidatePaths = new HashSet<>();
+        for (HttpReceiver.RemoteFile file : snapshot) {
+            if (file != null && !file.isDir) {
+                candidatePaths.add(normalizeRemotePath(file.path));
+            }
+        }
         Uri tree = saveTreeUri;
         String normalizedCheckedPath = normalizeRemotePath(checkedPath);
         String checkedTree = treeSnapshot(tree);
@@ -704,7 +710,10 @@ final class ReceiveController {
             Map<String, HttpReceiver.ReceivedTarget> checked;
             RuntimeException resolutionFailure = null;
             try {
-                checked = HttpReceiver.findReceivedTargets(checkContext, tree, snapshot);
+                checked = ReceivedTargetRefresh.collect(
+                        candidatePaths.size(),
+                        () -> HttpReceiver.findReceivedTargets(checkContext, tree, snapshot),
+                        Thread::sleep);
             } catch (RuntimeException error) {
                 checked = Collections.emptyMap();
                 resolutionFailure = error;
@@ -1050,6 +1059,7 @@ final class ReceiveController {
         remoteCurrentPath = normalizeRemotePath(path);
         remoteListStatus = remoteFiles.isEmpty() ? "No remote files" : "Remote list ready";
         host.requestRender();
+        refreshReceivedTargets(receiveRunId, remoteCurrentPath);
     }
 
     private List<String> currentDownloadPaths() {
