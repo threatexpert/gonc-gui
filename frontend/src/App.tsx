@@ -1058,6 +1058,10 @@ function App() {
       }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
+      const taskId = event.clientTaskId;
+      if (!taskId || taskId <= 0 || taskId !== receivedDownloadTaskId.current) {
+        return;
+      }
       const terminal = event.type === 'status' && (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error');
       if (event.type === 'progress') {
         setDownloadProgress(event);
@@ -1067,16 +1071,11 @@ function App() {
       }
       if (event.type === 'status') {
         if (terminal) {
-          const taskId = event.clientTaskId && event.clientTaskId > 0 && event.clientTaskId === receivedDownloadTaskId.current
-            ? event.clientTaskId
-            : null;
-          if (taskId !== null) {
-            if (event.level === 'error') {
-              setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
-            }
-            ClearTaskbarProgress().catch(() => undefined);
-            refreshReceivedFilesAfterDownload(taskId).catch(() => undefined);
+          if (event.level === 'error') {
+            setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
           }
+          ClearTaskbarProgress().catch(() => undefined);
+          refreshReceivedFilesAfterDownload(taskId).catch(() => undefined);
         } else {
           refreshStatus();
         }
