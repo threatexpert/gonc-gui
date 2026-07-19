@@ -25,4 +25,12 @@ public class ReceivedFileActionStateTest {
         assertFalse(ReceivedFileActionState.ownsCompletionRefresh(7, 6));
         assertFalse(ReceivedFileActionState.ownsCompletionRefresh(0, 0));
     }
+
+    @Test
+    public void onlyCurrentLiveWorkerCanBeginOneTerminalRefresh() {
+        assertTrue(ReceivedFileActionState.shouldBeginTerminalRefresh(8, 8, true, false));
+        assertFalse(ReceivedFileActionState.shouldBeginTerminalRefresh(9, 8, true, false));
+        assertFalse(ReceivedFileActionState.shouldBeginTerminalRefresh(8, 8, false, false));
+        assertFalse(ReceivedFileActionState.shouldBeginTerminalRefresh(8, 8, true, true));
+    }
 }

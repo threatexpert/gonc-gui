@@ -23,7 +23,7 @@ export function OpenSaveDir(arg1:string):Promise<string>;
 
 export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 
-export function RevealReceivedFile(arg1:string,arg2:httpdownload.FileInfo):Promise<void>;
+export function RevealReceivedFile(arg1:string,arg2:httpdownload.FileInfo):Promise<main.ReceivedFileActionResult>;
 
 export function SaveVPNProfiles(arg1:vpnprofile.Store):Promise<void>;
 

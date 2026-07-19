@@ -83,6 +83,7 @@ final class ReceiveController {
     private GoncBridge.Session receiveSession;
     private HttpReceiver.Session remoteListSession;
     private HttpReceiver.Session receiveDownload;
+    private long receiveDownloadId;
     private long receiveRunId;
     private long lastDownloadProgressRenderMs;
     private boolean downloadProgressRenderPending;
@@ -130,11 +131,12 @@ final class ReceiveController {
 
     /** True when any receive worker (session, remote listing, or download) is live. */
     boolean isBusy() {
-        return receiveSession != null || remoteListSession != null || receiveDownload != null;
+        return receiveSession != null || remoteListSession != null || receiveDownload != null
+                || receivedCompletionRefreshPending;
     }
 
     boolean isDownloading() {
-        return receiveDownload != null;
+        return receiveDownload != null || receivedCompletionRefreshPending;
     }
 
     /**
@@ -183,6 +185,7 @@ final class ReceiveController {
         receiveSession = null;
         remoteListSession = null;
         receiveDownload = null;
+        receiveDownloadId++;
         if (receive != null) {
             receive.stop();
         }
@@ -1469,6 +1472,12 @@ final class ReceiveController {
                 context(), passphrase, receiveUseUdp, callback(runId));
         receiveSession = started;
         if (started != null) {
+            HttpReceiver.Session staleDownload = receiveDownload;
+            receiveDownloadId++;
+            receiveDownload = null;
+            if (staleDownload != null) {
+                staleDownload.stop();
+            }
             receivedTargets.clear();
             receivedTargetCheckId++;
             receivedCompletionRefreshToken++;
@@ -1575,7 +1584,6 @@ final class ReceiveController {
         }
         if (receiveDownload != null) {
             receiveDownload.stop();
-            receiveDownload = null;
         }
         if (remoteListSession != null) {
             remoteListSession.stop();
@@ -1822,7 +1830,7 @@ final class ReceiveController {
             return;
         }
         if (receiveDownload != null) {
-            receiveDownload.stop();
+            return;
         }
         receiveEndpoint = endpoint;
         downloadStatus = "Preparing download";
@@ -1837,7 +1845,9 @@ final class ReceiveController {
         downloadFailedFiles = 0;
         downloadStartedAtMs = System.currentTimeMillis();
         downloadFinishedAtMs = 0;
-        receiveDownload = HttpReceiver.start(context(), endpoint, saveTreeUri, files, resumeDownloads, new HttpReceiver.Callback() {
+        long downloadId = ++receiveDownloadId;
+        DownloadTerminalHolder terminal = new DownloadTerminalHolder();
+        HttpReceiver.Session startedDownload = HttpReceiver.start(context(), endpoint, saveTreeUri, files, resumeDownloads, new HttpReceiver.Callback() {
             @Override
             public void onProgress(int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
                 queueDownloadProgress(runId, doneFiles, totalFiles, doneBytes, totalBytes, networkBytes, bytesPerSecond, current);
@@ -1845,70 +1855,83 @@ final class ReceiveController {
 
             @Override
             public void onComplete(int totalFiles, long doneBytes, long totalBytes, long networkBytes, int skippedFiles, int resumedFiles, List<HttpReceiver.DownloadFailure> failures) {
-                host.mainHandler().post(() -> {
-                    if (!isCurrentRun(runId) || shutdown) {
-                        return;
-                    }
-                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
-                        return;
-                    }
-                    long completionRefreshToken = ++receivedCompletionRefreshToken;
-                    receivedCompletionRefreshPending = true;
-                    receiveDownload = null;
-                    downloadDoneFiles = totalFiles;
-                    downloadTotalFiles = totalFiles;
-                    downloadDoneBytes = doneBytes;
-                    downloadTotalBytes = totalBytes;
-                    downloadNetworkBytes = networkBytes;
-                    downloadBytesPerSecond = 0;
-                    downloadFinishedAtMs = System.currentTimeMillis();
-                    downloadSkippedFiles = skippedFiles;
-                    downloadResumedFiles = resumedFiles;
-                    receiveMetrics.inBps = 0;
-                    receiveMetrics.outBps = 0;
-                    receiveMetrics.lastTrafficMs = 0;
-                    int failedFiles = failures == null ? 0 : failures.size();
-                    downloadFailedFiles = failedFiles;
-                    downloadStatus = failedFiles > 0 ? "Receive complete with failures" : "Receive complete";
-                    refreshReceivedTargets(
-                            runId, remoteCurrentPath, completionRefreshToken);
-                    host.refreshForegroundService();
-                    if (failedFiles > 0) {
-                        host.log("error", "Receive completed with " + failedFiles + " failed file(s): " + totalFiles + " total, "
-                                + HttpReceiver.formatBytes(doneBytes) + " / " + HttpReceiver.formatBytes(totalBytes)
-                                + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
-                        for (HttpReceiver.DownloadFailure failure : failures) {
-                            host.log("error", "Receive failed: " + failure.path + " - " + failure.message);
-                        }
-                    } else {
-                        host.log("info", "Receive complete: " + totalFiles + " file(s), " + HttpReceiver.formatBytes(totalBytes) + ", skipped " + skippedFiles + ", resumed " + resumedFiles);
-                    }
-                    host.requestRender();
-                });
+                terminal.result = DownloadTerminalResult.completed(
+                        totalFiles, doneBytes, totalBytes, networkBytes,
+                        skippedFiles, resumedFiles, failures);
             }
 
             @Override
             public void onError(Throwable error) {
-                host.mainHandler().post(() -> {
-                    if (!isCurrentRun(runId)) {
-                        return;
-                    }
-                    if (receiveDownload == null && "Stopped".equals(downloadStatus)) {
-                        return;
-                    }
-                    receiveDownload = null;
-                    downloadStatus = "Receive failed";
-                    downloadBytesPerSecond = 0;
-                    receiveMetrics.inBps = 0;
-                    receiveMetrics.outBps = 0;
-                    receiveMetrics.lastTrafficMs = 0;
-                    host.refreshForegroundService();
-                    host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    host.requestRender();
-                });
+                terminal.result = DownloadTerminalResult.failed(error);
             }
         });
+        receiveDownload = startedDownload;
+        startedDownload.onTerminated(() -> host.mainHandler().post(
+                () -> finishReceiveDownload(runId, downloadId, terminal.result)));
         host.refreshForegroundService();
+    }
+
+    private void finishReceiveDownload(
+            long runId, long downloadId, DownloadTerminalResult result) {
+        if (!isCurrentRun(runId) || shutdown
+                || !ReceivedFileActionState.shouldBeginTerminalRefresh(
+                receiveDownloadId, downloadId, receiveDownload != null,
+                receivedCompletionRefreshPending)) {
+            return;
+        }
+        long completionRefreshToken = ++receivedCompletionRefreshToken;
+        receivedCompletionRefreshPending = true;
+        receiveDownload = null;
+        synchronized (downloadProgressLock) {
+            pendingDownloadProgress = null;
+            downloadProgressApplyPending = false;
+        }
+        downloadBytesPerSecond = 0;
+        downloadFinishedAtMs = System.currentTimeMillis();
+        receiveMetrics.inBps = 0;
+        receiveMetrics.outBps = 0;
+        receiveMetrics.lastTrafficMs = 0;
+
+        if (result == null) {
+            downloadStatus = "Stopped";
+            host.log("warn", "Receive download stopped");
+        } else if (result.error != null) {
+            downloadStatus = "Receive failed";
+            host.log("error", result.error.getMessage() == null
+                    ? result.error.toString() : result.error.getMessage());
+        } else {
+            downloadDoneFiles = result.totalFiles;
+            downloadTotalFiles = result.totalFiles;
+            downloadDoneBytes = result.doneBytes;
+            downloadTotalBytes = result.totalBytes;
+            downloadNetworkBytes = result.networkBytes;
+            downloadSkippedFiles = result.skippedFiles;
+            downloadResumedFiles = result.resumedFiles;
+            int failedFiles = result.failures.size();
+            downloadFailedFiles = failedFiles;
+            downloadStatus = failedFiles > 0
+                    ? "Receive complete with failures" : "Receive complete";
+            if (failedFiles > 0) {
+                host.log("error", "Receive completed with " + failedFiles
+                        + " failed file(s): " + result.totalFiles + " total, "
+                        + HttpReceiver.formatBytes(result.doneBytes) + " / "
+                        + HttpReceiver.formatBytes(result.totalBytes)
+                        + ", skipped " + result.skippedFiles
+                        + ", resumed " + result.resumedFiles);
+                for (HttpReceiver.DownloadFailure failure : result.failures) {
+                    host.log("error", "Receive failed: " + failure.path
+                            + " - " + failure.message);
+                }
+            } else {
+                host.log("info", "Receive complete: " + result.totalFiles
+                        + " file(s), " + HttpReceiver.formatBytes(result.totalBytes)
+                        + ", skipped " + result.skippedFiles
+                        + ", resumed " + result.resumedFiles);
+            }
+        }
+        refreshReceivedTargets(runId, remoteCurrentPath, completionRefreshToken);
+        host.refreshForegroundService();
+        host.requestRender();
     }
 
     private void queueDownloadProgress(long runId, int doneFiles, int totalFiles, long doneBytes, long totalBytes, long networkBytes, double bytesPerSecond, String current) {
@@ -1955,14 +1978,12 @@ final class ReceiveController {
     private void stopReceiveDownload() {
         if (receiveDownload != null) {
             receiveDownload.stop();
-            receiveDownload = null;
         }
         synchronized (downloadProgressLock) {
             pendingDownloadProgress = null;
             downloadProgressApplyPending = false;
         }
-        downloadStatus = "Stopped";
-        downloadFinishedAtMs = System.currentTimeMillis();
+        downloadStatus = "Stopping";
         downloadBytesPerSecond = 0;
         receiveMetrics.inBps = 0;
         receiveMetrics.outBps = 0;
@@ -1979,7 +2000,6 @@ final class ReceiveController {
         }
         if (receiveDownload != null) {
             receiveDownload.stop();
-            receiveDownload = null;
         }
         downloadBytesPerSecond = 0;
         receiveMetrics.inBps = 0;
@@ -2276,5 +2296,58 @@ final class ReceiveController {
             this.bytesPerSecond = bytesPerSecond;
             this.current = current;
         }
+    }
+
+    private static final class DownloadTerminalResult {
+        final int totalFiles;
+        final long doneBytes;
+        final long totalBytes;
+        final long networkBytes;
+        final int skippedFiles;
+        final int resumedFiles;
+        final List<HttpReceiver.DownloadFailure> failures;
+        final Throwable error;
+
+        private DownloadTerminalResult(
+                int totalFiles,
+                long doneBytes,
+                long totalBytes,
+                long networkBytes,
+                int skippedFiles,
+                int resumedFiles,
+                List<HttpReceiver.DownloadFailure> failures,
+                Throwable error) {
+            this.totalFiles = totalFiles;
+            this.doneBytes = doneBytes;
+            this.totalBytes = totalBytes;
+            this.networkBytes = networkBytes;
+            this.skippedFiles = skippedFiles;
+            this.resumedFiles = resumedFiles;
+            this.failures = failures == null
+                    ? Collections.emptyList() : new ArrayList<>(failures);
+            this.error = error;
+        }
+
+        static DownloadTerminalResult completed(
+                int totalFiles,
+                long doneBytes,
+                long totalBytes,
+                long networkBytes,
+                int skippedFiles,
+                int resumedFiles,
+                List<HttpReceiver.DownloadFailure> failures) {
+            return new DownloadTerminalResult(
+                    totalFiles, doneBytes, totalBytes, networkBytes,
+                    skippedFiles, resumedFiles, failures, null);
+        }
+
+        static DownloadTerminalResult failed(Throwable error) {
+            return new DownloadTerminalResult(
+                    0, 0, 0, 0, 0, 0, Collections.emptyList(), error);
+        }
+    }
+
+    private static final class DownloadTerminalHolder {
+        volatile DownloadTerminalResult result;
     }
 }

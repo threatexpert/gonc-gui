@@ -1186,23 +1186,34 @@ function App() {
       return;
     }
     const generation = receivedCheckGeneration.current;
+    let unavailableError = '';
     try {
-      await RevealReceivedFile(local.saveDir, file as any);
-    } catch (err) {
-      if (generation !== receivedCheckGeneration.current || receivedLocalFilesRef.current.get(path) !== local) {
+      const result = await RevealReceivedFile(local.saveDir, file as any);
+      if (!result.error) {
         return;
       }
-      setReceivedLocalFiles((current) => {
-        if (generation !== receivedCheckGeneration.current || current.get(path) !== local) {
-          return current;
-        }
-        const next = new Map(current);
-        next.delete(path);
-        receivedLocalFilesRef.current = next;
-        return next;
-      });
-      setDownloadError(`${t.localFileUnavailable} ${localizeError(String(err))}`);
+      if (!result.unavailable) {
+        setDownloadError(localizeError(result.error));
+        return;
+      }
+      unavailableError = result.error;
+    } catch (err) {
+      setDownloadError(localizeError(String(err)));
+      return;
     }
+    if (generation !== receivedCheckGeneration.current || receivedLocalFilesRef.current.get(path) !== local) {
+      return;
+    }
+    setReceivedLocalFiles((current) => {
+      if (generation !== receivedCheckGeneration.current || current.get(path) !== local) {
+        return current;
+      }
+      const next = new Map(current);
+      next.delete(path);
+      receivedLocalFilesRef.current = next;
+      return next;
+    });
+    setDownloadError(`${t.localFileUnavailable} ${localizeError(unavailableError)}`);
   }
 
   function receivedDownloadImperativeBusy() {
@@ -1264,6 +1275,20 @@ function App() {
     setReceivedDownloadActiveState(false);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
+  }
+
+  function resetReceivedDownloadStateForNewConnection() {
+    receivedCheckGeneration.current += 1;
+    receivedDownloadTaskId.current += 1;
+    receivedDownloadActive.current = false;
+    setReceivedDownloadActiveState(false);
+    receivedCompletionRefreshPendingRef.current = false;
+    setReceivedCompletionRefreshPending(false);
+    receivedTerminalOwner.current = null;
+    receivedTerminalRefreshPromise.current = null;
+    const empty = new Map<string, ReceivedLocalState>();
+    receivedLocalFilesRef.current = empty;
+    setReceivedLocalFiles(empty);
   }
 
   async function openSaveDir() {
@@ -1586,8 +1611,7 @@ function App() {
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs
       });
       if (mode === 'receive') {
-        receivedCheckGeneration.current += 1;
-        setReceivedLocalFiles(new Map());
+        resetReceivedDownloadStateForNewConnection();
       } else if (mode === 'vpnServer') {
         setVpnServerAdvanced(false);
       } else if (mode === 'vpnClient') {
@@ -1604,8 +1628,21 @@ function App() {
     if (mode === 'vpnClient') {
       vpnStopRequested.current = true;
     }
+    const receiveTaskId = receivedDownloadTaskId.current;
+    const receiveDownloadWasBusy = mode === 'receive' && receivedDownloadImperativeBusy();
     try {
-      await StopTransfer(mode);
+      let stopFailure: unknown = null;
+      try {
+        await StopTransfer(mode);
+      } catch (err) {
+        stopFailure = err;
+      }
+      if (receiveDownloadWasBusy) {
+        await refreshReceivedFilesAfterDownload(receiveTaskId);
+      }
+      if (stopFailure) {
+        throw stopFailure;
+      }
       if (mode === 'send') {
         setSendP2PReports({});
         setSendTraffic(null);

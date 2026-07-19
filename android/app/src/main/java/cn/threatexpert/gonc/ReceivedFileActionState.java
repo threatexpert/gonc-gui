@@ -18,4 +18,14 @@ final class ReceivedFileActionState {
     static boolean ownsCompletionRefresh(long pendingToken, long finishedToken) {
         return pendingToken != 0L && pendingToken == finishedToken;
     }
+
+    static boolean shouldBeginTerminalRefresh(
+            long currentDownloadId,
+            long terminatedDownloadId,
+            boolean downloadActive,
+            boolean completionRefreshPending) {
+        return downloadActive
+                && !completionRefreshPending
+                && currentDownloadId == terminatedDownloadId;
+    }
 }

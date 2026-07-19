@@ -86,6 +86,11 @@ type ReceivedFileState struct {
 	Available  bool   `json:"available"`
 }
 
+type ReceivedFileActionResult struct {
+	Unavailable bool   `json:"unavailable"`
+	Error       string `json:"error"`
+}
+
 type VPNProfile = vpnprofile.Profile
 type VPNProfileStore = vpnprofile.Store
 
@@ -171,8 +176,18 @@ func (a *App) CheckReceivedFiles(saveDir string, files []httpdownload.FileInfo) 
 	return out
 }
 
-func (a *App) RevealReceivedFile(saveDir string, file httpdownload.FileInfo) error {
-	return receivedfile.Reveal(saveDir, file)
+func (a *App) RevealReceivedFile(saveDir string, file httpdownload.FileInfo) ReceivedFileActionResult {
+	return classifyRevealError(receivedfile.Reveal(saveDir, file))
+}
+
+func classifyRevealError(err error) ReceivedFileActionResult {
+	if err == nil {
+		return ReceivedFileActionResult{}
+	}
+	return ReceivedFileActionResult{
+		Unavailable: errors.Is(err, receivedfile.ErrUnavailable),
+		Error:       err.Error(),
+	}
 }
 
 func (a *App) GeneratePassword() (string, error) {

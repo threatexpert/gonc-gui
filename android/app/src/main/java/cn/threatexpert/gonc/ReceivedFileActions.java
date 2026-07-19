@@ -46,20 +46,17 @@ final class ReceivedFileActions {
     static void open(Context context, HttpReceiver.ReceivedTarget target, boolean chooser) {
         Uri uri = shareableUri(context, target.uri);
         String mime = mimeType(context, uri, target.displayName);
-        Intent view = grantReadAccess(context,
-                new Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime), uri, target.displayName);
-        startActivity(context, chooser
-                ? chooser(context, view, uri, target.displayName, R.string.open_with)
-                : view);
+        startActivity(context, buildIntent(context,
+                openPlan(uri.toString(), mime, chooser), uri, target.displayName,
+                R.string.open_with));
     }
 
     static void share(Context context, HttpReceiver.ReceivedTarget target) {
         Uri uri = shareableUri(context, target.uri);
         String mime = mimeType(context, uri, target.displayName);
-        Intent send = grantReadAccess(context, new Intent(Intent.ACTION_SEND)
-                .setType(mime)
-                .putExtra(Intent.EXTRA_STREAM, uri), uri, target.displayName);
-        startActivity(context, chooser(context, send, uri, target.displayName, R.string.share_file));
+        startActivity(context, buildIntent(context,
+                sharePlan(uri.toString(), mime), uri, target.displayName,
+                R.string.share_file));
     }
 
     static void showInfo(
@@ -104,9 +101,7 @@ final class ReceivedFileActions {
         try {
             File canonicalFile = file.getCanonicalFile();
             File canonicalDownloads = downloads.getCanonicalFile();
-            String rootPath = canonicalDownloads.getPath();
-            String filePath = canonicalFile.getPath();
-            if (!filePath.startsWith(rootPath + File.separator)) {
+            if (!isCanonicalChild(canonicalDownloads, canonicalFile)) {
                 throw new IllegalArgumentException("Legacy received file is outside Download/Gonc");
             }
             return FileProvider.getUriForFile(
@@ -116,15 +111,83 @@ final class ReceivedFileActions {
         }
     }
 
-    private static Intent grantReadAccess(Context context, Intent intent, Uri uri, String displayName) {
-        intent.setClipData(ClipData.newUri(context.getContentResolver(), displayName, uri));
-        return intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    static boolean isCanonicalChild(File root, File candidate) throws IOException {
+        String rootPath = root.getCanonicalFile().getPath();
+        String candidatePath = candidate.getCanonicalFile().getPath();
+        return candidatePath.startsWith(rootPath + File.separator);
     }
 
-    private static Intent chooser(
-            Context context, Intent target, Uri uri, String displayName, int titleRes) {
-        Intent chooser = Intent.createChooser(target, context.getString(titleRes));
-        return grantReadAccess(context, chooser, uri, displayName);
+    static IntentPlan openPlan(String uri, String mimeType, boolean chooser) {
+        return new IntentPlan(Intent.ACTION_VIEW, uri, mimeType, chooser,
+                true, true, false);
+    }
+
+    static IntentPlan sharePlan(String uri, String mimeType) {
+        return new IntentPlan(Intent.ACTION_SEND, uri, mimeType, true,
+                true, true, true);
+    }
+
+    private static Intent buildIntent(
+            Context context,
+            IntentPlan plan,
+            Uri uri,
+            String displayName,
+            int chooserTitleRes) {
+        Intent target = new Intent(plan.action);
+        if (plan.attachStream) {
+            target.setType(plan.mimeType).putExtra(Intent.EXTRA_STREAM, uri);
+        } else {
+            target.setDataAndType(uri, plan.mimeType);
+        }
+        applyUriAccess(context, target, uri, displayName, plan);
+        if (!plan.chooser) {
+            return target;
+        }
+        Intent chooser = Intent.createChooser(target, context.getString(chooserTitleRes));
+        applyUriAccess(context, chooser, uri, displayName, plan);
+        return chooser;
+    }
+
+    static final class IntentPlan {
+        final String action;
+        final String uri;
+        final String mimeType;
+        final boolean chooser;
+        final boolean grantReadUriPermission;
+        final boolean attachClipData;
+        final boolean attachStream;
+
+        IntentPlan(
+                String action,
+                String uri,
+                String mimeType,
+                boolean chooser,
+                boolean grantReadUriPermission,
+                boolean attachClipData,
+                boolean attachStream) {
+            this.action = action;
+            this.uri = uri;
+            this.mimeType = mimeType;
+            this.chooser = chooser;
+            this.grantReadUriPermission = grantReadUriPermission;
+            this.attachClipData = attachClipData;
+            this.attachStream = attachStream;
+        }
+    }
+
+    private static void applyUriAccess(
+            Context context,
+            Intent intent,
+            Uri uri,
+            String displayName,
+            IntentPlan plan) {
+        if (plan.attachClipData) {
+            intent.setClipData(ClipData.newUri(
+                    context.getContentResolver(), displayName, uri));
+        }
+        if (plan.grantReadUriPermission) {
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        }
     }
 
     private static void startActivity(Context context, Intent intent) {

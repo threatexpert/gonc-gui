@@ -93,6 +93,20 @@ export namespace main {
 	        this.defaultSaveDir = source["defaultSaveDir"];
 	    }
 	}
+	export class ReceivedFileActionResult {
+	    unavailable: boolean;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ReceivedFileActionResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unavailable = source["unavailable"];
+	        this.error = source["error"];
+	    }
+	}
 	export class ReceivedFileState {
 	    remotePath: string;
 	    available: boolean;
@@ -264,4 +278,3 @@ export namespace vpnprofile {
 	}
 
 }
-

@@ -101,6 +101,8 @@ final class HttpReceiver {
                 if (callback != null && !session.isStopped()) {
                     callback.onError(error);
                 }
+            } finally {
+                session.markTerminated();
             }
         }, "gonc-http-list");
         worker.start();
@@ -109,7 +111,13 @@ final class HttpReceiver {
 
     static Session start(Context context, String serverUrl, Uri saveTreeUri, List<RemoteFile> requestedFiles, boolean resume, Callback callback) {
         Session session = new Session();
-        Thread worker = new Thread(() -> run(context.getApplicationContext(), serverUrl, saveTreeUri, requestedFiles, resume, session, callback), "gonc-http-receive");
+        Thread worker = new Thread(() -> {
+            try {
+                run(context.getApplicationContext(), serverUrl, saveTreeUri, requestedFiles, resume, session, callback);
+            } finally {
+                session.markTerminated();
+            }
+        }, "gonc-http-receive");
         worker.start();
         return session;
     }
@@ -1511,6 +1519,8 @@ final class HttpReceiver {
     static final class Session {
         private volatile boolean stopped;
         private volatile HttpURLConnection activeConnection;
+        private boolean terminated;
+        private Runnable terminationListener;
 
         void stop() {
             stopped = true;
@@ -1522,6 +1532,35 @@ final class HttpReceiver {
 
         boolean isStopped() {
             return stopped;
+        }
+
+        void onTerminated(Runnable listener) {
+            boolean runNow;
+            synchronized (this) {
+                if (!terminated) {
+                    terminationListener = listener;
+                    return;
+                }
+                runNow = true;
+            }
+            if (runNow && listener != null) {
+                listener.run();
+            }
+        }
+
+        void markTerminated() {
+            Runnable listener;
+            synchronized (this) {
+                if (terminated) {
+                    return;
+                }
+                terminated = true;
+                listener = terminationListener;
+                terminationListener = null;
+            }
+            if (listener != null) {
+                listener.run();
+            }
         }
 
         void attach(HttpURLConnection conn) {

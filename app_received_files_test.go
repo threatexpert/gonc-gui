@@ -26,7 +26,20 @@ func TestReceivedFileAPIsCheckAndRevalidate(t *testing.T) {
 	if err := os.WriteFile(target, []byte("changed"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&App{}).RevealReceivedFile(root, file); !errors.Is(err, receivedfile.ErrUnavailable) {
-		t.Fatalf("error = %v, want ErrUnavailable", err)
+	result := (&App{}).RevealReceivedFile(root, file)
+	if !result.Unavailable || result.Error == "" {
+		t.Fatalf("result = %+v, want unavailable error", result)
+	}
+}
+
+func TestClassifyRevealErrorDistinguishesUnavailableFromLaunchFailure(t *testing.T) {
+	unavailable := classifyRevealError(receivedfile.ErrUnavailable)
+	if !unavailable.Unavailable || unavailable.Error == "" {
+		t.Fatalf("unavailable result = %+v", unavailable)
+	}
+
+	launch := classifyRevealError(errors.New("file manager failed to start"))
+	if launch.Unavailable || launch.Error == "" {
+		t.Fatalf("launch result = %+v", launch)
 	}
 }
