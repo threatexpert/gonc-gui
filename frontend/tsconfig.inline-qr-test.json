@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "Node",
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "node_modules/.cache/gonc-inline-qr-tests"
+  },
+  "include": ["src/inlineQrState.ts", "tests/inlineQrState.test.ts"]
+}
