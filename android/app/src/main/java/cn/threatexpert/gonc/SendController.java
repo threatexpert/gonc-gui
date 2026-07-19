@@ -193,12 +193,15 @@ final class SendController {
         UiKit u = host.ui();
         if (session != null) {
             LinearLayout qrOnly = u.column();
-            qrOnly.setGravity(Gravity.CENTER_HORIZONTAL);
-            qrOnly.addView(PassphraseQrView.create(
+            View qr = PassphraseQrView.create(
                     host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
                     sendQrHasConnected,
                     () -> host.showPassphraseQr(password.trim()),
-                    () -> host.toast(R.string.inline_qr_generation_failed)));
+                    () -> host.toast(R.string.inline_qr_generation_failed));
+            int qrSize = u.dp(TransferInlineQrState.inlineQrSizeDp());
+            LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(qrSize, qrSize);
+            qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+            qrOnly.addView(qr, qrParams);
             return qrOnly;
         }
         boolean locked = session != null;

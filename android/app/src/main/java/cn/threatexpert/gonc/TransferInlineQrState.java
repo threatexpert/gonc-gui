@@ -13,7 +13,6 @@ final class TransferInlineQrState {
     private static final int QR_BITMAP_CACHE_BUDGET_BYTES = 4 * 1024 * 1024;
     private static final int MAX_QR_PIXEL_SIZE = 512;
     private static final int INLINE_QR_SIZE_DP = 104;
-    private static final int INLINE_QR_FRAME_PADDING_DP = 2;
     private static final String MASKED_PATTERN_ID = "decorative-inline-qr-mask";
     private static final String EMPTY_MASKED_PATTERN_ID = "decorative-inline-qr-empty";
     private static final Set<String> INITIAL_RECEIVE_STATES =
@@ -45,10 +44,6 @@ final class TransferInlineQrState {
 
     static int inlineQrSizeDp() {
         return INLINE_QR_SIZE_DP;
-    }
-
-    static int inlineQrFramePaddingDp() {
-        return INLINE_QR_FRAME_PADDING_DP;
     }
 
     static BitmapCacheKey productionCacheKey(String passphrase, int requestedPixelSize, boolean masked) {

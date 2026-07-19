@@ -323,11 +323,13 @@ final class ReceiveController {
         row.addView(label, labelParams);
 
         if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
-            row.addView(PassphraseQrView.create(
+            int qrSize = dp(TransferInlineQrState.inlineQrSizeDp());
+            View qr = PassphraseQrView.create(
                     context(), host.ui(), receivePassword,
                     TransferInlineQrState.inlineQrSizeDp(), false,
                     () -> showPasswordQr(),
-                    () -> host.toast(R.string.inline_qr_generation_failed)));
+                    () -> host.toast(R.string.inline_qr_generation_failed));
+            row.addView(qr, new LinearLayout.LayoutParams(qrSize, qrSize));
         } else {
             Button passphrase = secondaryButton(string(R.string.passphrase));
             passphrase.setOnClickListener(v -> showPasswordQr());

@@ -11,7 +11,6 @@ public class TransferInlineQrStateTest {
     @Test
     public void inlineQrUsesSharedCompactDimensions() {
         assertEquals(104, TransferInlineQrState.inlineQrSizeDp());
-        assertEquals(2, TransferInlineQrState.inlineQrFramePaddingDp());
     }
 
     @Test

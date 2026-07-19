@@ -7,7 +7,6 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.util.LruCache;
 import android.view.View;
-import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import com.google.zxing.WriterException;
@@ -53,26 +52,21 @@ final class PassphraseQrView {
         image.setImageBitmap(entry.bitmap);
 
         boolean actionable = !cleanPassphrase.isEmpty() && !entry.failed;
-        FrameLayout container = new FrameLayout(context);
-        int padding = ui.dp(TransferInlineQrState.inlineQrFramePaddingDp());
-        container.setPadding(padding, padding, padding, padding);
-        container.setBackground(ui.rounded(Color.WHITE, ui.dp(8), Color.rgb(216, 226, 238), 1));
-        container.setEnabled(actionable);
-        container.setClickable(actionable);
-        container.setFocusable(actionable);
-        container.setImportantForAccessibility(actionable
+        image.setEnabled(actionable);
+        image.setClickable(actionable);
+        image.setFocusable(actionable);
+        image.setImportantForAccessibility(actionable
                 ? View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
                 : View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         if (actionable) {
-            container.setContentDescription(context.getString(R.string.view_passphrase_qr));
-            container.setOnClickListener(view -> {
+            image.setContentDescription(context.getString(R.string.view_passphrase_qr));
+            image.setOnClickListener(view -> {
                 if (onClick != null) {
                     onClick.run();
                 }
             });
         }
-        container.addView(image, new FrameLayout.LayoutParams(displayPixelSize, displayPixelSize));
-        return container;
+        return image;
     }
 
     static void clearCache() {
