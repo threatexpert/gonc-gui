@@ -125,9 +125,8 @@ final class HttpReceiver {
             if (file == null || file.isDir) {
                 continue;
             }
-            DocumentInfo info = resolver.findExisting(file.path, file.name);
-            boolean readable = info != null && resolver.canRead(info.uri);
-            if (info != null && ReceivedFileMatcher.isAvailable(true, readable, info.directory, info.size, file.size)) {
+            DocumentInfo info = resolver.findExisting(file.path, file.name, file.size);
+            if (info != null) {
                 found.put(normalizePath(file.path), new ReceivedTarget(
                         info.uri, displayName(context, info.uri), info.size, info.modifiedMs));
             }
@@ -1161,9 +1160,11 @@ final class HttpReceiver {
                     return null;
                 }
                 long size;
+                boolean sizeKnown;
                 try {
                     if (cursor.moveToFirst()) {
-                        size = cursor.isNull(0) ? 0 : cursor.getLong(0);
+                        sizeKnown = !cursor.isNull(0);
+                        size = sizeKnown ? cursor.getLong(0) : 0;
                     } else {
                         return null;
                     }
@@ -1171,15 +1172,15 @@ final class HttpReceiver {
                     cursor.close();
                 }
                 return new DocumentInfo(uri, size, queryModifiedMs(uri),
-                        DocumentsContract.Document.MIME_TYPE_DIR.equals(resolver.getType(uri)));
+                        DocumentsContract.Document.MIME_TYPE_DIR.equals(resolver.getType(uri)), sizeKnown);
             } catch (Exception error) {
                 return null;
             }
         }
 
-        DocumentInfo findExisting(String remotePath, String fallbackName) {
+        DocumentInfo findExisting(String remotePath, String fallbackName, long expectedSize) {
             DocumentInfo remembered = rememberedTarget(remotePath, false);
-            if (remembered != null) {
+            if (isAvailableTarget(remembered, expectedSize)) {
                 return remembered;
             }
 
@@ -1194,11 +1195,11 @@ final class HttpReceiver {
                     }
                     parent = directory.uri;
                 }
-                return bestResumeVariant(treeChildren(parent), name);
+                return availableVariant(treeChildren(parent), name, expectedSize);
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                return bestResumeVariant(publicFiles(publicRelativeDir(parts)), name);
+                return availableVariant(publicFiles(publicRelativeDir(parts)), name, expectedSize);
             }
 
             File dir = publicDownloadDir(parts);
@@ -1211,7 +1212,33 @@ final class HttpReceiver {
                 existing.put(child.getName(), new DocumentInfo(
                         Uri.fromFile(child), child.length(), child.lastModified(), child.isDirectory()));
             }
-            return bestResumeVariant(existing, name);
+            return availableVariant(existing, name, expectedSize);
+        }
+
+        private boolean isAvailableTarget(DocumentInfo info, long expectedSize) {
+            return info != null && ReceivedFileMatcher.isAvailable(
+                    true, canRead(info.uri), info.directory,
+                    ReceivedFileMatcher.reportedSize(info.sizeKnown, info.size), expectedSize);
+        }
+
+        private DocumentInfo availableVariant(Map<String, DocumentInfo> files, String name, long expectedSize) {
+            List<DocumentInfo> candidates = new ArrayList<>();
+            for (Map.Entry<String, DocumentInfo> entry : files.entrySet()) {
+                if (isNameVariant(entry.getKey(), name)) {
+                    candidates.add(entry.getValue());
+                }
+            }
+            boolean[] readable = new boolean[candidates.size()];
+            boolean[] directory = new boolean[candidates.size()];
+            long[] sizes = new long[candidates.size()];
+            for (int i = 0; i < candidates.size(); i++) {
+                DocumentInfo candidate = candidates.get(i);
+                readable[i] = canRead(candidate.uri);
+                directory[i] = candidate.directory;
+                sizes[i] = ReceivedFileMatcher.reportedSize(candidate.sizeKnown, candidate.size);
+            }
+            int selected = ReceivedFileMatcher.firstAvailableIndex(readable, directory, sizes, expectedSize);
+            return selected < 0 ? null : candidates.get(selected);
         }
 
         boolean canRead(Uri uri) {
@@ -1347,11 +1374,12 @@ final class HttpReceiver {
                         if (childName == null) {
                             continue;
                         }
-                        long size = cursor.isNull(2) ? 0 : cursor.getLong(2);
+                        boolean sizeKnown = !cursor.isNull(2);
+                        long size = sizeKnown ? cursor.getLong(2) : 0;
                         long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3);
                         Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0));
                         boolean directory = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(4));
-                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs, directory));
+                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs, directory, sizeKnown));
                     }
                 } finally {
                     cursor.close();
@@ -1441,10 +1469,11 @@ final class HttpReceiver {
                             continue;
                         }
                         long id = cursor.getLong(0);
-                        long size = cursor.isNull(2) ? 0 : cursor.getLong(2);
+                        boolean sizeKnown = !cursor.isNull(2);
+                        long size = sizeKnown ? cursor.getLong(2) : 0;
                         long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3) * 1000L;
                         Uri uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, String.valueOf(id));
-                        files.put(name, new DocumentInfo(uri, size, modifiedMs));
+                        files.put(name, new DocumentInfo(uri, size, modifiedMs, false, sizeKnown));
                     }
                 } finally {
                     cursor.close();
@@ -1462,8 +1491,7 @@ final class HttpReceiver {
         private DocumentInfo bestResumeVariant(Map<String, DocumentInfo> files, String name) {
             DocumentInfo best = null;
             for (Map.Entry<String, DocumentInfo> entry : files.entrySet()) {
-                if (!entry.getValue().directory && isNameVariant(entry.getKey(), name)
-                        && (best == null || entry.getValue().size > best.size)) {
+                if (isNameVariant(entry.getKey(), name) && (best == null || entry.getValue().size > best.size)) {
                     best = entry.getValue();
                 }
             }
@@ -1650,20 +1678,26 @@ final class HttpReceiver {
         final long size;
         final long modifiedMs;
         final boolean directory;
+        final boolean sizeKnown;
 
         DocumentInfo(Uri uri, long size) {
-            this(uri, size, 0, false);
+            this(uri, size, 0, false, true);
         }
 
         DocumentInfo(Uri uri, long size, long modifiedMs) {
-            this(uri, size, modifiedMs, false);
+            this(uri, size, modifiedMs, false, true);
         }
 
         DocumentInfo(Uri uri, long size, long modifiedMs, boolean directory) {
+            this(uri, size, modifiedMs, directory, true);
+        }
+
+        DocumentInfo(Uri uri, long size, long modifiedMs, boolean directory, boolean sizeKnown) {
             this.uri = uri;
             this.size = size;
             this.modifiedMs = modifiedMs;
             this.directory = directory;
+            this.sizeKnown = sizeKnown;
         }
     }
 
