@@ -10,9 +10,14 @@ import static org.junit.Assert.assertTrue;
 public class TransferInlineQrStateTest {
     @Test
     public void sendMaskLatchesAfterFirstConnection() {
-        assertFalse(TransferInlineQrState.latchSendConnected(false, 0));
-        assertTrue(TransferInlineQrState.latchSendConnected(false, 1));
-        assertTrue(TransferInlineQrState.latchSendConnected(true, 0));
+        boolean latched = false;
+        latched = TransferInlineQrState.latchSendConnected(latched, 0);
+        assertFalse(latched);
+        latched = TransferInlineQrState.latchSendConnected(latched, 1);
+        assertTrue(latched);
+        latched = TransferInlineQrState.latchSendConnected(latched, 0);
+        assertTrue(latched);
+        assertFalse(TransferInlineQrState.newSendRunLatch());
     }
 
     @Test

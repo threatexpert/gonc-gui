@@ -18,6 +18,10 @@ final class TransferInlineQrState {
         return latched || connectedCount > 0;
     }
 
+    static boolean newSendRunLatch() {
+        return false;
+    }
+
     static boolean showReceiveQr(boolean retired, String state) {
         return !retired && INITIAL_RECEIVE_STATES.contains(normalize(state));
     }
