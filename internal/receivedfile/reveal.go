@@ -17,9 +17,9 @@ func Reveal(saveDir string, file httpdownload.FileInfo) error {
 	if states := Check(saveDir, []httpdownload.FileInfo{file}); len(states) != 1 || !states[0].Available {
 		return ErrUnavailable
 	}
-	target, err := httpdownload.ResolveLocalPath(saveDir, file)
-	if err != nil {
-		return err
+	target, contained := resolveContainedPath(saveDir, file)
+	if !contained {
+		return ErrUnavailable
 	}
 	name, args, err := commandFor(runtime.GOOS, target)
 	if err != nil {

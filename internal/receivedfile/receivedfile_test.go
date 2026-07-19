@@ -3,8 +3,10 @@ package receivedfile
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"gonc-gui/internal/httpdownload"
@@ -37,6 +39,32 @@ func TestCheckRequiresExistingRegularMatchingFile(t *testing.T) {
 	assertAvailable(t, states, "/empty.txt", true)
 	assertAvailable(t, states, "/missing.txt", false)
 	assertAvailable(t, states, "/folder", false)
+}
+
+func TestCheckRejectsLinkToMatchingFileOutsideSaveRoot(t *testing.T) {
+	root := t.TempDir()
+	externalRoot := t.TempDir()
+	externalFile := filepath.Join(externalRoot, "payload.txt")
+	if err := os.WriteFile(externalFile, []byte("ready"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := createDirectoryLink(externalRoot, filepath.Join(root, "outside")); err != nil {
+		t.Fatalf("create directory link: %v", err)
+	}
+
+	file := httpdownload.FileInfo{Path: "/outside/payload.txt", Size: 5}
+	states := Check(root, []httpdownload.FileInfo{file})
+	assertAvailable(t, states, file.Path, false)
+	if err := Reveal(root, file); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Reveal error = %v, want ErrUnavailable", err)
+	}
+}
+
+func createDirectoryLink(target, link string) error {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd.exe", "/c", "mklink", "/J", link, target).Run()
+	}
+	return os.Symlink(target, link)
 }
 
 func TestCommandForUsesDirectArguments(t *testing.T) {
