@@ -74,6 +74,7 @@ type DownloadEvent = {
   level: string;
   message: string;
   time: string;
+  clientTaskId?: number;
   totalFiles?: number;
   doneFiles?: number;
   totalDirs?: number;
@@ -85,10 +86,6 @@ type DownloadEvent = {
   doneBytes?: number;
   bytesPerSecond?: number;
 };
-
-function terminalTaskForEvent(currentTaskId: number, eventTaskId: number | null, active: boolean, terminalOwner: number | null): number | null {
-  return active && eventTaskId === currentTaskId && terminalOwner === null ? currentTaskId : null;
-}
 
 type RemoteFile = {
   name: string;
@@ -781,7 +778,6 @@ function App() {
   const receivedDownloadActive = useRef(false);
   const receivedCompletionRefreshPendingRef = useRef(false);
   const receivedDownloadTaskId = useRef(0);
-  const receivedDownloadEventTaskId = useRef<number | null>(null);
   const receivedTerminalOwner = useRef<number | null>(null);
   const receivedTerminalRefreshPromise = useRef<{taskId: number; promise: Promise<void>} | null>(null);
   const receivedStatusDownloadingRef = useRef(status.downloading);
@@ -1063,9 +1059,6 @@ function App() {
     });
     EventsOn('download:event', (event: DownloadEvent) => {
       const terminal = event.type === 'status' && (event.message.includes('download complete') || event.message.includes('download finished') || event.level === 'error');
-      if (!terminal) {
-        noteCurrentReceivedDownloadEvent();
-      }
       if (event.type === 'progress') {
         setDownloadProgress(event);
         SetTaskbarProgress(event.doneBytes || 0, event.totalBytes || 0).catch(() => undefined);
@@ -1074,12 +1067,9 @@ function App() {
       }
       if (event.type === 'status') {
         if (terminal) {
-          const taskId = terminalTaskForEvent(
-            receivedDownloadTaskId.current,
-            receivedDownloadEventTaskId.current,
-            receivedDownloadActive.current,
-            receivedTerminalOwner.current
-          );
+          const taskId = event.clientTaskId && event.clientTaskId > 0 && event.clientTaskId === receivedDownloadTaskId.current
+            ? event.clientTaskId
+            : null;
           if (taskId !== null) {
             if (event.level === 'error') {
               setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
@@ -1220,12 +1210,6 @@ function App() {
     return receivedDownloadActive.current || receivedCompletionRefreshPendingRef.current || receivedStatusDownloadingRef.current;
   }
 
-  function noteCurrentReceivedDownloadEvent() {
-    if (receivedDownloadActive.current && receivedTerminalOwner.current === null) {
-      receivedDownloadEventTaskId.current = receivedDownloadTaskId.current;
-    }
-  }
-
   function refreshReceivedFilesAfterDownload(taskId: number): Promise<void> {
     if (taskId !== receivedDownloadTaskId.current) {
       return Promise.resolve();
@@ -1268,7 +1252,6 @@ function App() {
     setReceivedDownloadActiveState(true);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
-    receivedDownloadEventTaskId.current = null;
     receivedTerminalOwner.current = null;
     receivedTerminalRefreshPromise.current = null;
     return taskId;
@@ -1282,7 +1265,6 @@ function App() {
     setReceivedDownloadActiveState(false);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
-    receivedDownloadEventTaskId.current = null;
   }
 
   async function openSaveDir() {
@@ -1840,7 +1822,7 @@ function App() {
       return;
     }
     try {
-      await StartHTTPDownload(saveDir, '/', Array.from(selectedPaths), Array.from(excludedPaths), remoteFiles as any, downloadMode === 'resume');
+      await StartHTTPDownload(saveDir, '/', Array.from(selectedPaths), Array.from(excludedPaths), remoteFiles as any, downloadMode === 'resume', taskId);
       await refreshStatus();
     } catch (err) {
       abandonReceivedDownloadTask(taskId);
@@ -1856,7 +1838,7 @@ function App() {
       return;
     }
     try {
-      await StartHTTPDownload(saveDir, currentRemotePath, [], [], [], downloadMode === 'resume');
+      await StartHTTPDownload(saveDir, currentRemotePath, [], [], [], downloadMode === 'resume', taskId);
       await refreshStatus();
     } catch (err) {
       abandonReceivedDownloadTask(taskId);

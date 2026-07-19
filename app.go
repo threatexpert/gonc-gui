@@ -363,7 +363,17 @@ func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
 	return resp, nil
 }
 
-func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, excludePaths []string, cachedFiles []httpdownload.FileInfo, resume bool) error {
+func clientTaskDownloadSink(clientTaskID int64, sink httpdownload.Sink) httpdownload.Sink {
+	return func(event httpdownload.Event) {
+		event.ClientTaskID = clientTaskID
+		sink(event)
+	}
+}
+
+func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, excludePaths []string, cachedFiles []httpdownload.FileInfo, resume bool, clientTaskID int64) error {
+	if clientTaskID <= 0 {
+		return errors.New("client task ID is required")
+	}
 	if saveDir == "" {
 		saveDir = defaultSaveDir()
 	}
@@ -401,11 +411,12 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 	}
 
 	go func() {
-		err := d.Start(ctx, func(event httpdownload.Event) {
+		emit := clientTaskDownloadSink(clientTaskID, func(event httpdownload.Event) {
 			wailsruntime.EventsEmit(a.ctx, "download:event", event)
 		})
+		err := d.Start(ctx, emit)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			wailsruntime.EventsEmit(a.ctx, "download:event", httpdownload.Event{
+			emit(httpdownload.Event{
 				Type:    "status",
 				Level:   "error",
 				Message: err.Error(),

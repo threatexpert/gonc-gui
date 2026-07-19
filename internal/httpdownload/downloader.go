@@ -48,6 +48,7 @@ type Event struct {
 	Level            string `json:"level"`
 	Message          string `json:"message"`
 	Time             string `json:"time"`
+	ClientTaskID     int64  `json:"clientTaskId,omitempty"`
 	TotalFiles       int64  `json:"totalFiles,omitempty"`
 	DoneFiles        int64  `json:"doneFiles,omitempty"`
 	TotalDirs        int64  `json:"totalDirs,omitempty"`

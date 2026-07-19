@@ -58,8 +58,8 @@ export function SetTaskbarProgress(arg1, arg2) {
   return window['go']['main']['App']['SetTaskbarProgress'](arg1, arg2);
 }
 
-export function StartHTTPDownload(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['StartHTTPDownload'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function StartHTTPDownload(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['StartHTTPDownload'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function StartTransfer(arg1) {
