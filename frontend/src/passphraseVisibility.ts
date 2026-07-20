@@ -41,10 +41,14 @@ export function createPassphraseRevealCoordinator(
   cancel: CancelPassphraseTimer,
 ) {
   let versions = initialPassphraseRevealVersions();
+  let disposed = false;
   const timers: Partial<Record<PassphraseMode, PassphraseTimer>> = {};
 
   return {
     reveal(mode: PassphraseMode, hide: () => void) {
+      if (disposed) {
+        return false;
+      }
       versions = nextPassphraseRevealVersions(versions, mode);
       const version = versions[mode];
       const previousTimer = timers[mode];
@@ -60,9 +64,14 @@ export function createPassphraseRevealCoordinator(
         hide();
       }, 5000);
       timers[mode] = timer;
+      return true;
     },
 
     dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
       for (const mode of Object.keys(timers) as PassphraseMode[]) {
         const timer = timers[mode];
         if (timer !== undefined) {

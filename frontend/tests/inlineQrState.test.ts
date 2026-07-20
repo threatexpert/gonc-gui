@@ -138,6 +138,24 @@ test('disposing desktop passphrase reveals clears every pending timer', () => {
   assert.deepEqual(timers.cancelled, [1, 2, 3, 4]);
 });
 
+test('disposed desktop passphrase reveals permanently reject new work', () => {
+  const timers = fakePassphraseTimers();
+  const hidden: string[] = [];
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  assert.equal(coordinator.reveal('send', () => hidden.push('send')), true);
+  const queuedBeforeDispose = timers.scheduled.get(1)?.callback;
+  coordinator.dispose();
+  const scheduledAfterDispose = timers.scheduled.size;
+  const cancelledAfterDispose = [...timers.cancelled];
+
+  assert.equal(coordinator.reveal('receive', () => hidden.push('receive')), false);
+  queuedBeforeDispose?.();
+  assert.equal(timers.scheduled.size, scheduledAfterDispose);
+  assert.deepEqual(timers.cancelled, cancelledAfterDispose);
+  assert.deepEqual(hidden, []);
+});
+
 test('desktop mode subscription cleanup does not own passphrase timers', () => {
   const source = readFileSync('src/App.tsx', 'utf8');
   const refreshIndex = source.indexOf('    refreshStatus();');
@@ -148,8 +166,10 @@ test('desktop mode subscription cleanup does not own passphrase timers', () => {
   assert.doesNotMatch(modeEffect, /passwordRevealCoordinator|passwordTimers|passwordTimer|clearTimeout/);
   assert.match(source, /type=\{passwordVisibility\[mode\] \? 'text' : 'password'\}/);
   assert.match(source, /createPassphraseRevealCoordinator/);
-  assert.match(source, /passwordRevealCoordinator\.current\.reveal\(targetMode/);
-  assert.match(source, /passwordRevealCoordinator\.current\.dispose\(\)/);
+  assert.match(source, /const \[passwordRevealCoordinator\] = useState\(\(\) => createPassphraseRevealCoordinator\(/);
+  assert.doesNotMatch(source, /useRef\(createPassphraseRevealCoordinator/);
+  assert.match(source, /passwordRevealCoordinator\.reveal\(targetMode/);
+  assert.match(source, /passwordRevealCoordinator\.dispose\(\)/);
   assert.match(source, /function revealPasswordTemporarily\(targetMode: Mode\)/);
   assert.match(source, /scanPasswordMode\.current = mode/);
 

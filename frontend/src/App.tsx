@@ -808,14 +808,14 @@ function App() {
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
-  const passwordRevealCoordinator = useRef(createPassphraseRevealCoordinator(
+  const [passwordRevealCoordinator] = useState(() => createPassphraseRevealCoordinator(
     (callback, delay) => window.setTimeout(callback, delay),
     (timer) => window.clearTimeout(timer),
   ));
   const scanPasswordMode = useRef<Mode>('send');
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
 
-  useEffect(() => () => passwordRevealCoordinator.current.dispose(), []);
+  useEffect(() => () => passwordRevealCoordinator.dispose(), []);
 
   useEffect(() => {
     if (!aboutOpen) {
@@ -1431,10 +1431,13 @@ function App() {
   }
 
   function revealPasswordTemporarily(targetMode: Mode) {
-    setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, true));
-    passwordRevealCoordinator.current.reveal(targetMode, () => {
+    const accepted = passwordRevealCoordinator.reveal(targetMode, () => {
       setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, false));
     });
+    if (!accepted) {
+      return;
+    }
+    setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, true));
   }
 
   async function showPasswordQr() {
