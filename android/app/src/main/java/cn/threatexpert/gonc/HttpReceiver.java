@@ -27,6 +27,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.net.HttpURLConnection;
+import java.net.Proxy;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -782,7 +783,11 @@ final class HttpReceiver {
     }
 
     private static HttpURLConnection open(String url) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        return open(new URL(url));
+    }
+
+    static HttpURLConnection open(URL url) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(30000);
         return conn;
