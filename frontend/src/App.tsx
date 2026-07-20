@@ -14,6 +14,14 @@ import {
   maskAfterPassphraseUpdate,
   transferStartGate,
 } from './inlineQrState';
+import {
+  hiddenPassphraseVisibility,
+  initialPassphraseRevealVersions,
+  isCurrentPassphraseReveal,
+  nextPassphraseRevealVersions,
+  withPassphraseVisibility,
+  type PassphraseMode,
+} from './passphraseVisibility';
 import {vpnprofile} from '../wailsjs/go/models';
 import {
   CaptureScreen,
@@ -40,7 +48,7 @@ import {
 } from '../wailsjs/go/main/App';
 import {BrowserOpenURL, ClipboardGetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
-type Mode = 'send' | 'receive' | 'vpnServer' | 'vpnClient';
+type Mode = PassphraseMode;
 type Lang = 'zh' | 'en';
 type DownloadMode = 'resume' | 'overwrite';
 
@@ -762,7 +770,7 @@ function App() {
   const [vpnClientTraffic, setVpnClientTraffic] = useState<LogEvent | null>(null);
   const [vpnClientPeerIPv6, setVpnClientPeerIPv6] = useState('disabled');
   const [vpnClientSocks5Endpoint, setVpnClientSocks5Endpoint] = useState('');
-  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [passwordVisibility, setPasswordVisibility] = useState(hiddenPassphraseVisibility);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [qrPassword, setQrPassword] = useState('');
   const [qrTitle, setQrTitle] = useState('');
@@ -802,8 +810,18 @@ function App() {
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
-  const passwordTimer = useRef<number | null>(null);
+  const passwordTimers = useRef<Partial<Record<Mode, number>>>({});
+  const passwordRevealVersions = useRef(initialPassphraseRevealVersions());
+  const scanPasswordMode = useRef<Mode>('send');
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
+
+  useEffect(() => () => {
+    for (const timer of Object.values(passwordTimers.current)) {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (!aboutOpen) {
@@ -1134,9 +1152,6 @@ function App() {
       EventsOff('p2p:report');
       EventsOff('download:event');
       OnFileDropOff();
-      if (passwordTimer.current) {
-        window.clearTimeout(passwordTimer.current);
-      }
     };
   }, [mode]);
 
@@ -1349,32 +1364,33 @@ function App() {
   async function generatePassword() {
     setError('');
     setSendPassword(await GeneratePassword());
-    revealPasswordTemporarily();
+    revealPasswordTemporarily('send');
   }
 
   async function generateReceivePassword() {
     setError('');
     setReceivePassword(await GeneratePassword());
-    revealPasswordTemporarily();
+    revealPasswordTemporarily('receive');
   }
 
   async function generateVpnServerPassword() {
     setError('');
     setVpnServerPassword(await GeneratePassword());
-    revealPasswordTemporarily();
+    revealPasswordTemporarily('vpnServer');
   }
 
   async function generateVpnClientPassword() {
     setError('');
     const value = await GeneratePassword();
     setVpnProfileField('passphrase', value);
-    revealPasswordTemporarily();
+    revealPasswordTemporarily('vpnClient');
   }
 
   async function copyPassword() {
+    const targetMode = mode;
     if (activePassword) {
       await navigator.clipboard.writeText(activePassword);
-      revealPasswordTemporarily();
+      revealPasswordTemporarily(targetMode);
       appendLog('status', 'info', t.copied);
     }
   }
@@ -1391,43 +1407,56 @@ function App() {
   }
 
   async function pastePassword() {
+    const targetMode = mode;
     setError('');
     try {
       const value = await ClipboardGetText();
-      if (mode === 'vpnServer') {
-        setVpnServerPassword(value.trim());
-      } else if (mode === 'vpnClient') {
-        setVpnProfileField('passphrase', value.trim());
-      } else {
-        setReceivePassword(value.trim());
-      }
-      revealPasswordTemporarily();
+      setPasswordForMode(targetMode, value.trim());
+      revealPasswordTemporarily(targetMode);
     } catch (err) {
       try {
         const value = await navigator.clipboard.readText();
-        if (mode === 'vpnServer') {
-          setVpnServerPassword(value.trim());
-        } else if (mode === 'vpnClient') {
-          setVpnProfileField('passphrase', value.trim());
-        } else {
-          setReceivePassword(value.trim());
-        }
-        revealPasswordTemporarily();
+        setPasswordForMode(targetMode, value.trim());
+        revealPasswordTemporarily(targetMode);
       } catch {
         setError(localizeError(String(err)));
       }
     }
   }
 
-  function revealPasswordTemporarily() {
-    setPasswordVisible(true);
-    if (passwordTimer.current) {
-      window.clearTimeout(passwordTimer.current);
+  function setPasswordForMode(targetMode: Mode, value: string) {
+    if (targetMode === 'send') {
+      setSendPassword(value);
+    } else if (targetMode === 'receive') {
+      setReceivePassword(value);
+    } else if (targetMode === 'vpnServer') {
+      setVpnServerPassword(value);
+    } else {
+      setVpnProfileField('passphrase', value);
     }
-    passwordTimer.current = window.setTimeout(() => setPasswordVisible(false), 5000);
+  }
+
+  function revealPasswordTemporarily(targetMode: Mode) {
+    const versions = nextPassphraseRevealVersions(passwordRevealVersions.current, targetMode);
+    passwordRevealVersions.current = versions;
+    const version = versions[targetMode];
+    setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, true));
+
+    const previousTimer = passwordTimers.current[targetMode];
+    if (previousTimer !== undefined) {
+      window.clearTimeout(previousTimer);
+    }
+    passwordTimers.current[targetMode] = window.setTimeout(() => {
+      if (!isCurrentPassphraseReveal(passwordRevealVersions.current, targetMode, version)) {
+        return;
+      }
+      setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, false));
+      delete passwordTimers.current[targetMode];
+    }, 5000);
   }
 
   async function showPasswordQr() {
+    const targetMode = mode;
     const password = activePassword.trim();
     if (!password) {
       return;
@@ -1445,7 +1474,7 @@ function App() {
           light: '#ffffff',
         },
       }));
-      revealPasswordTemporarily();
+      revealPasswordTemporarily(targetMode);
     } catch (err) {
       setError(localizeError(String(err)));
     }
@@ -1481,6 +1510,9 @@ function App() {
   }
 
   async function startScreenScan(purpose: 'password' | 'vpnProfile' = 'password') {
+    if (purpose === 'password') {
+      scanPasswordMode.current = mode;
+    }
     const captureSeq = scanCaptureSeq.current + 1;
     scanCaptureSeq.current = captureSeq;
     setError('');
@@ -1529,16 +1561,11 @@ function App() {
           if (!importVpnProfileFromQr(decoded)) {
             return;
           }
-        } else if (mode === 'send') {
-          setSendPassword(decoded);
-        } else if (mode === 'vpnServer') {
-          setVpnServerPassword(decoded);
-        } else if (mode === 'vpnClient') {
-          setVpnProfileField('passphrase', decoded);
         } else {
-          setReceivePassword(decoded);
+          const targetMode = scanPasswordMode.current;
+          setPasswordForMode(targetMode, decoded);
+          revealPasswordTemporarily(targetMode);
         }
-        revealPasswordTemporarily();
         closeScreenScan();
         if (scanPurpose !== 'vpnProfile') {
           appendLog('status', 'info', t.scanSuccess);
@@ -2192,7 +2219,7 @@ function App() {
       <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
       <div className="inline password-line">
         <input
-          type={passwordVisible ? 'text' : 'password'}
+          type={passwordVisibility[mode] ? 'text' : 'password'}
           value={activePassword}
           onChange={(event) => {
             if (mode === 'send') {

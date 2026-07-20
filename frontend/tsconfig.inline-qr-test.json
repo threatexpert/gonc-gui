@@ -9,5 +9,9 @@
     "rootDir": ".",
     "outDir": "node_modules/.cache/gonc-inline-qr-tests"
   },
-  "include": ["src/inlineQrState.ts", "tests/inlineQrState.test.ts"]
+  "include": [
+    "src/inlineQrState.ts",
+    "src/passphraseVisibility.ts",
+    "tests/inlineQrState.test.ts"
+  ]
 }
