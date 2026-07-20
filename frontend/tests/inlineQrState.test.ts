@@ -14,12 +14,31 @@ import {
   transferStartGate,
 } from '../src/inlineQrState.js';
 import {
+  createPassphraseRevealCoordinator,
   hiddenPassphraseVisibility,
   initialPassphraseRevealVersions,
   isCurrentPassphraseReveal,
   nextPassphraseRevealVersions,
   withPassphraseVisibility,
 } from '../src/passphraseVisibility.js';
+
+function fakePassphraseTimers() {
+  let nextTimer = 1;
+  const scheduled = new Map<number, {callback: () => void; delay: number}>();
+  const cancelled: number[] = [];
+  return {
+    scheduled,
+    cancelled,
+    schedule(callback: () => void, delay: number) {
+      const timer = nextTimer++;
+      scheduled.set(timer, {callback, delay});
+      return timer;
+    },
+    cancel(timer: number) {
+      cancelled.push(timer);
+    },
+  };
+}
 
 test('all desktop passphrase modes begin hidden and reveal independently', () => {
   const hidden = hiddenPassphraseVisibility();
@@ -57,6 +76,68 @@ test('each desktop passphrase mode owns its reveal generation', () => {
   assert.equal(secondSend.vpnClient, 0);
 });
 
+test('desktop passphrase reveal schedules hiding after exactly 5000ms', () => {
+  const timers = fakePassphraseTimers();
+  const hidden: string[] = [];
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  coordinator.reveal('send', () => hidden.push('send'));
+
+  assert.equal(timers.scheduled.get(1)?.delay, 5000);
+  timers.scheduled.get(1)?.callback();
+  assert.deepEqual(hidden, ['send']);
+});
+
+test('desktop passphrase modes keep independent hide timers', () => {
+  const timers = fakePassphraseTimers();
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  coordinator.reveal('send', () => undefined);
+  coordinator.reveal('receive', () => undefined);
+
+  assert.deepEqual(timers.cancelled, []);
+  assert.equal(timers.scheduled.get(1)?.delay, 5000);
+  assert.equal(timers.scheduled.get(2)?.delay, 5000);
+});
+
+test('repeating a reveal cancels and reschedules only that mode', () => {
+  const timers = fakePassphraseTimers();
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  coordinator.reveal('send', () => undefined);
+  coordinator.reveal('send', () => undefined);
+
+  assert.deepEqual(timers.cancelled, [1]);
+  assert.equal(timers.scheduled.get(2)?.delay, 5000);
+});
+
+test('a cancelled stale reveal cannot hide or discard the newer timer', () => {
+  const timers = fakePassphraseTimers();
+  const hidden: string[] = [];
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  coordinator.reveal('send', () => hidden.push('old'));
+  coordinator.reveal('send', () => hidden.push('new'));
+  timers.scheduled.get(1)?.callback();
+
+  assert.deepEqual(hidden, []);
+  coordinator.dispose();
+  assert.deepEqual(timers.cancelled, [1, 2]);
+});
+
+test('disposing desktop passphrase reveals clears every pending timer', () => {
+  const timers = fakePassphraseTimers();
+  const coordinator = createPassphraseRevealCoordinator(timers.schedule, timers.cancel);
+
+  coordinator.reveal('send', () => undefined);
+  coordinator.reveal('receive', () => undefined);
+  coordinator.reveal('vpnServer', () => undefined);
+  coordinator.reveal('vpnClient', () => undefined);
+  coordinator.dispose();
+
+  assert.deepEqual(timers.cancelled, [1, 2, 3, 4]);
+});
+
 test('desktop mode subscription cleanup does not own passphrase timers', () => {
   const source = readFileSync('src/App.tsx', 'utf8');
   const refreshIndex = source.indexOf('    refreshStatus();');
@@ -64,11 +145,21 @@ test('desktop mode subscription cleanup does not own passphrase timers', () => {
   const effectEnd = source.indexOf('  }, [mode]);', effectStart);
   assert.ok(refreshIndex >= 0 && effectStart >= 0 && effectEnd > effectStart);
   const modeEffect = source.slice(effectStart, effectEnd);
-  assert.doesNotMatch(modeEffect, /passwordTimers|passwordTimer|clearTimeout/);
+  assert.doesNotMatch(modeEffect, /passwordRevealCoordinator|passwordTimers|passwordTimer|clearTimeout/);
   assert.match(source, /type=\{passwordVisibility\[mode\] \? 'text' : 'password'\}/);
-  assert.match(source, /Object\.values\(passwordTimers\.current\)/);
+  assert.match(source, /createPassphraseRevealCoordinator/);
+  assert.match(source, /passwordRevealCoordinator\.current\.reveal\(targetMode/);
+  assert.match(source, /passwordRevealCoordinator\.current\.dispose\(\)/);
   assert.match(source, /function revealPasswordTemporarily\(targetMode: Mode\)/);
   assert.match(source, /scanPasswordMode\.current = mode/);
+
+  const decodeStart = source.indexOf('async function decodeScanRegion');
+  const decodeEnd = source.indexOf('  function decodeWholeScan', decodeStart);
+  assert.ok(decodeStart >= 0 && decodeEnd > decodeStart);
+  const decodeSource = source.slice(decodeStart, decodeEnd);
+  const targetCapture = decodeSource.indexOf('const targetMode = scanPasswordMode.current;');
+  const firstDecodeAwait = decodeSource.indexOf('await decodeQrFromImageRegion');
+  assert.ok(targetCapture >= 0 && firstDecodeAwait >= 0 && targetCapture < firstDecodeAwait);
 });
 
 test('limits inline QR to file-transfer modes', () => {

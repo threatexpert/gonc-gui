@@ -15,10 +15,8 @@ import {
   transferStartGate,
 } from './inlineQrState';
 import {
+  createPassphraseRevealCoordinator,
   hiddenPassphraseVisibility,
-  initialPassphraseRevealVersions,
-  isCurrentPassphraseReveal,
-  nextPassphraseRevealVersions,
   withPassphraseVisibility,
   type PassphraseMode,
 } from './passphraseVisibility';
@@ -810,18 +808,14 @@ function App() {
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
   const [nowTick, setNowTick] = useState(Date.now());
-  const passwordTimers = useRef<Partial<Record<Mode, number>>>({});
-  const passwordRevealVersions = useRef(initialPassphraseRevealVersions());
+  const passwordRevealCoordinator = useRef(createPassphraseRevealCoordinator(
+    (callback, delay) => window.setTimeout(callback, delay),
+    (timer) => window.clearTimeout(timer),
+  ));
   const scanPasswordMode = useRef<Mode>('send');
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
 
-  useEffect(() => () => {
-    for (const timer of Object.values(passwordTimers.current)) {
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-      }
-    }
-  }, []);
+  useEffect(() => () => passwordRevealCoordinator.current.dispose(), []);
 
   useEffect(() => {
     if (!aboutOpen) {
@@ -1437,22 +1431,10 @@ function App() {
   }
 
   function revealPasswordTemporarily(targetMode: Mode) {
-    const versions = nextPassphraseRevealVersions(passwordRevealVersions.current, targetMode);
-    passwordRevealVersions.current = versions;
-    const version = versions[targetMode];
     setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, true));
-
-    const previousTimer = passwordTimers.current[targetMode];
-    if (previousTimer !== undefined) {
-      window.clearTimeout(previousTimer);
-    }
-    passwordTimers.current[targetMode] = window.setTimeout(() => {
-      if (!isCurrentPassphraseReveal(passwordRevealVersions.current, targetMode, version)) {
-        return;
-      }
+    passwordRevealCoordinator.current.reveal(targetMode, () => {
       setPasswordVisibility((current) => withPassphraseVisibility(current, targetMode, false));
-      delete passwordTimers.current[targetMode];
-    }, 5000);
+    });
   }
 
   async function showPasswordQr() {
@@ -1547,6 +1529,7 @@ function App() {
   }
 
   async function decodeScanRegion(sx: number, sy: number, sw: number, sh: number) {
+    const targetMode = scanPasswordMode.current;
     const img = scanImgRef.current;
     if (!img || sw < 2 || sh < 2) {
       return;
@@ -1562,7 +1545,6 @@ function App() {
             return;
           }
         } else {
-          const targetMode = scanPasswordMode.current;
           setPasswordForMode(targetMode, decoded);
           revealPasswordTemporarily(targetMode);
         }
