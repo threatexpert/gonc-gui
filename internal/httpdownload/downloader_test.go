@@ -653,6 +653,44 @@ func TestSingleFileNameCannotEscapeSaveDirectory(t *testing.T) {
 	}
 }
 
+func TestNewDirectHTTPClientDisablesProxyWithoutMutatingDefaultTransport(t *testing.T) {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default transport type = %T, want *http.Transport", http.DefaultTransport)
+	}
+	defaultProxy := defaultTransport.Proxy
+
+	client := newDirectHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("receiver transport type = %T, want *http.Transport", client.Transport)
+	}
+	if transport == defaultTransport {
+		t.Fatal("receiver transport aliases http.DefaultTransport")
+	}
+	if transport.Proxy != nil {
+		t.Fatal("receiver transport still has a proxy function")
+	}
+	if defaultTransport.Proxy == nil || reflect.ValueOf(defaultTransport.Proxy).Pointer() != reflect.ValueOf(defaultProxy).Pointer() {
+		t.Fatal("http.DefaultTransport proxy configuration was mutated")
+	}
+}
+
+func TestReceiverHTTPClientCanListFilesDirectly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintln(w, `{"name":"file.txt","is_dir":false,"size":4,"path":"/file.txt"}`)
+	}))
+	defer server.Close()
+
+	files, err := List(context.Background(), server.URL, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "/file.txt" {
+		t.Fatalf("files = %#v, want /file.txt", files)
+	}
+}
+
 func writeBlake3Manifest(t *testing.T, w http.ResponseWriter, remotePath string, content []byte, modTime time.Time, blockSize int64) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/x-ndjson")

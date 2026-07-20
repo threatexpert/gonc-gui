@@ -113,6 +113,14 @@ const (
 	maxRepairRangeCount      = 128
 )
 
+var receiverHTTPClient = newDirectHTTPClient()
+
+func newDirectHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Transport: transport}
+}
+
 func New(cfg Config) (*Downloader, error) {
 	if cfg.ServerURL == "" {
 		return nil, errors.New("local HTTP URL is not ready")
@@ -150,7 +158,7 @@ func List(ctx context.Context, serverURL, subPath string) ([]FileInfo, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Encoding", "zstd, gzip")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := receiverHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -238,12 +246,11 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			client := &http.Client{}
 			for file := range queue {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := d.downloadWithRetry(ctx, client, file, sink); err != nil {
+				if err := d.downloadWithRetry(ctx, receiverHTTPClient, file, sink); err != nil {
 					if !file.IsDir {
 						d.progress.failedFiles.Add(1)
 					}
