@@ -535,11 +535,6 @@ textarea:focus {
   background: #fff1f1;
 }
 
-.add-share-content {
-  justify-self: start;
-  margin-top: 7px;
-}
-
 .path-list {
   display: grid;
   gap: 6px;
@@ -549,14 +544,44 @@ textarea:focus {
   border-radius: 6px;
 }
 
-.drop-hint {
+.drop-hint-action {
   display: grid;
+  width: 100%;
   place-items: center;
-  min-height: 78px;
   margin: 0;
+  border: 0;
+  padding: 0 12px;
+  background: transparent;
   color: #64748b;
+  font: inherit;
   font-weight: 700;
   text-align: center;
+  cursor: pointer;
+}
+
+.drop-hint-action.empty {
+  min-height: 78px;
+}
+
+.drop-hint-action.compact {
+  min-height: 28px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.78;
+}
+
+.drop-hint-action:hover:not(:disabled) {
+  background: #eef6ff;
+  color: #2870d8;
+}
+
+.drop-hint-action:focus-visible {
+  outline: 3px solid rgba(40, 112, 216, 0.32);
+  outline-offset: -3px;
+}
+
+.drop-hint-action:disabled {
+  cursor: not-allowed;
 }
 
 .path-row {
@@ -1156,11 +1181,22 @@ progress {
 }
 
 .add-picker-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 82px;
   border: 1px solid #cbd7e6;
   background: #f8fbff;
   color: #245d9f;
   font-size: 14px;
+}
+
+.add-picker-option-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
 }
 
 .add-picker-options button:hover:not(:disabled) {
@@ -1250,13 +1286,6 @@ progress {
   color: #172033;
   font-size: 18px;
   text-align: center;
-}
-
-.drop-hint.compact {
-  min-height: 28px;
-  font-size: 11px;
-  font-weight: 600;
-  opacity: 0.78;
 }
 
 .about-dialog > p {

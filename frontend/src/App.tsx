@@ -5,6 +5,7 @@ import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/r
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import appIconUrl from './assets/images/appicon.png';
 import './App.css';
+import {SendContentOptionIcon} from './SendContentOptionIcon';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
   addedUniquePaths,
@@ -296,7 +297,6 @@ const text = {
     copied: '口令已复制',
     logsCopied: '日志已复制',
     sharedList: '文件',
-    add: '添加',
     addPickerTitle: '添加分享内容',
     addFileChoice: '文件',
     addFolderChoice: '文件夹',
@@ -310,8 +310,7 @@ const text = {
     back: '返回',
     pending: '处理中…',
     stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
-    dropHint: '拖放文件或目录到这里',
-    dropHintCompact: '也可以继续拖放文件或目录到这里',
+    dropHint: '点击这里添加，也可拖放文件或目录到这里',
     clipboardEmpty: '剪贴板为空，请先复制文件、图片或文字。',
     clipboardPlatformUnsupported: '当前平台不支持从剪贴板导入文件或图片。请复制文字后重试。',
     clipboardBusy: '剪贴板正忙，请稍后重试。',
@@ -502,7 +501,6 @@ const text = {
     copied: 'Passphrase copied',
     logsCopied: 'Activity copied',
     sharedList: 'Files',
-    add: 'Add',
     addPickerTitle: 'Add shared content',
     addFileChoice: 'Files',
     addFolderChoice: 'Folder',
@@ -516,8 +514,7 @@ const text = {
     back: 'Back',
     pending: 'Working…',
     stopBeforeEdit: 'Stop the sender before changing the shared list.',
-    dropHint: 'Drop files or folders here',
-    dropHintCompact: 'You can also drop more files or folders here',
+    dropHint: 'Click here to add, or drop files or folders here',
     clipboardEmpty: 'The clipboard is empty. Copy files, an image, or text first.',
     clipboardPlatformUnsupported: 'This platform does not support importing clipboard files or images. Copy text and try again.',
     clipboardBusy: 'The clipboard is busy. Try again shortly.',
@@ -2626,12 +2623,17 @@ function App() {
                           <button disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
                         </div>
                       ))}
-                      <p className={`drop-hint ${dropHintMode(sharePaths)}`}>
-                        {sharePaths.length === 0 ? t.dropHint : t.dropHintCompact}
-                      </p>
+                      <button
+                        ref={addPickerButtonRef}
+                        type="button"
+                        className={`drop-hint-action ${dropHintMode(sharePaths)}`}
+                        disabled={shareMutationPending || pickerPending || startPending}
+                        onClick={openAddPicker}
+                      >
+                        {t.dropHint}
+                      </button>
                     </div>
                   </div>
-                  <button ref={addPickerButtonRef} className="primary-light add-share-content" disabled={shareMutationPending || pickerPending || startPending} onClick={openAddPicker}>+ {t.add}</button>
                 </div>
               </>
             ) : mode === 'receive' ? (
@@ -3089,10 +3091,10 @@ function App() {
             </div>
             {addPickerState === 'choose' ? (
               <div className="add-picker-options">
-                <button autoFocus disabled={pickerPending || shareMutationPending || startPending} onClick={addFiles}>{t.addFileChoice}</button>
-                <button disabled={pickerPending || shareMutationPending || startPending} onClick={addFolder}>{t.addFolderChoice}</button>
-                <button disabled={pickerPending || shareMutationPending || startPending} onClick={showTextPicker}>{t.addTextChoice}</button>
-                <button disabled={pickerPending || shareMutationPending || startPending} onClick={importClipboardShare}>{t.addClipboardChoice}</button>
+                <button autoFocus disabled={pickerPending || shareMutationPending || startPending} onClick={addFiles}><SendContentOptionIcon kind="file" />{t.addFileChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={addFolder}><SendContentOptionIcon kind="folder" />{t.addFolderChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={showTextPicker}><SendContentOptionIcon kind="text" />{t.addTextChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={importClipboardShare}><SendContentOptionIcon kind="clipboard" />{t.addClipboardChoice}</button>
               </div>
             ) : (
               <form className="add-text-form" onSubmit={(event) => { event.preventDefault(); submitAuthoredText(); }}>

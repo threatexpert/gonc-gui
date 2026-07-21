@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -117,7 +117,38 @@ test('send content picker exposes all choices and persistent list controls', () 
   assert.match(app, /addClipboardChoice/);
   assert.match(app, /className="add-picker-backdrop"/);
   assert.match(app, /function clearSharePaths/);
-  assert.match(app, /dropHintCompact/);
+  assert.doesNotMatch(app, /className="primary-light add-share-content"/);
+  assert.match(app, /className={`drop-hint-action \$\{dropHintMode\(sharePaths\)\}`}/);
+  assert.match(app, /onClick=\{openAddPicker\}/);
+  assert.match(app, /disabled=\{shareMutationPending \|\| pickerPending \|\| startPending\}/);
+  assert.match(app, /点击这里添加，也可拖放文件或目录到这里/);
+  assert.match(app, /Click here to add, or drop files or folders here/);
+  assert.doesNotMatch(app, /dropHintCompact/);
+  for (const kind of ['file', 'folder', 'text', 'clipboard']) {
+    assert.match(app, new RegExp(`SendContentOptionIcon kind="${kind}"`));
+  }
+});
+
+test('picker uses decorative inline outline SVG icons', () => {
+  const iconPath = 'src/SendContentOptionIcon.tsx';
+  assert.equal(existsSync(iconPath), true, 'icon component must exist');
+  const icon = readFileSync(iconPath, 'utf8');
+  assert.match(icon, /<svg/);
+  assert.match(icon, /viewBox="0 0 24 24"/);
+  assert.match(icon, /fill="none"/);
+  assert.match(icon, /stroke="currentColor"/);
+  assert.match(icon, /aria-hidden="true"/);
+  for (const kind of ['file', 'folder', 'text', 'clipboard']) {
+    assert.match(icon, new RegExp(`kind === '${kind}'|case '${kind}'`));
+  }
+
+  const css = readFileSync('src/App.css', 'utf8');
+  assert.match(css, /\.drop-hint-action\s*\{[^}]*width:\s*100%[^}]*cursor:\s*pointer/s);
+  assert.match(css, /\.drop-hint-action\.empty\s*\{[^}]*min-height:\s*78px/s);
+  assert.match(css, /\.drop-hint-action\.compact\s*\{[^}]*min-height:\s*28px/s);
+  assert.match(css, /\.drop-hint-action:focus-visible/);
+  assert.match(css, /\.drop-hint-action:disabled\s*\{[^}]*cursor:\s*not-allowed/s);
+  assert.match(css, /\.add-picker-option-icon\s*\{/);
 });
 
 test('running share list changes synchronize transactionally instead of by effect', () => {
