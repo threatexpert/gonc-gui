@@ -7,6 +7,14 @@ import appIconUrl from './assets/images/appicon.png';
 import './App.css';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
+  appendUniquePaths,
+  dropHintMode,
+  nextAddPickerState,
+  removePath,
+  textCanSubmit,
+  type AddPickerState,
+} from './sendContentState';
+import {
   fileTransferReportBelongsToRun,
   inlineQrShouldMask,
   isFileTransferMode,
@@ -26,11 +34,14 @@ import {
   CheckReceivedFiles,
   CheckForUpdate,
   ClearTaskbarProgress,
+  CreateTextShare,
   GeneratePassword,
   IsAdministrator,
+  ImportClipboard,
   LoadVPNProfiles,
   OpenSaveDir,
   RemoteFiles,
+  ReleaseGeneratedSharePaths,
   RevealReceivedFile,
   SaveVPNProfiles,
   SelectFiles,
@@ -279,10 +290,26 @@ const text = {
     copied: '口令已复制',
     logsCopied: '日志已复制',
     sharedList: '文件',
-    addFiles: '添加文件',
-    addFolder: '添加目录',
+    add: '添加',
+    addPickerTitle: '添加分享内容',
+    addFileChoice: '文件',
+    addFolderChoice: '文件夹',
+    addTextChoice: '文字',
+    addClipboardChoice: '剪贴板',
+    clearSharePaths: '清空全部',
+    textShareTitle: '分享文字',
+    textSharePlaceholder: '输入要分享的文字',
+    textShareSubmit: '添加文字',
+    textShareFailed: '创建文字分享失败。',
+    back: '返回',
+    pending: '处理中…',
     stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
     dropHint: '拖放文件或目录到这里',
+    dropHintCompact: '也可以继续拖放文件或目录到这里',
+    clipboardEmpty: '剪贴板为空。',
+    clipboardUnsupported: '剪贴板中没有可分享的文件、图片或文字。',
+    clipboardBusy: '剪贴板正忙，请稍后重试。',
+    clipboardImportFailed: '导入剪贴板失败。',
     remove: '移除',
     saveDir: '保存目录',
     savePlaceholder: '选择下载文件保存的位置',
@@ -465,10 +492,26 @@ const text = {
     copied: 'Passphrase copied',
     logsCopied: 'Activity copied',
     sharedList: 'Files',
-    addFiles: 'Add Files',
-    addFolder: 'Add Folder',
+    add: 'Add',
+    addPickerTitle: 'Add shared content',
+    addFileChoice: 'Files',
+    addFolderChoice: 'Folder',
+    addTextChoice: 'Text',
+    addClipboardChoice: 'Clipboard',
+    clearSharePaths: 'Clear all',
+    textShareTitle: 'Share text',
+    textSharePlaceholder: 'Enter text to share',
+    textShareSubmit: 'Add text',
+    textShareFailed: 'Failed to create shared text.',
+    back: 'Back',
+    pending: 'Working…',
     stopBeforeEdit: 'Stop the sender before changing the shared list.',
     dropHint: 'Drop files or folders here',
+    dropHintCompact: 'You can also drop more files or folders here',
+    clipboardEmpty: 'The clipboard is empty.',
+    clipboardUnsupported: 'The clipboard has no shareable files, image, or text.',
+    clipboardBusy: 'The clipboard is busy. Try again shortly.',
+    clipboardImportFailed: 'Failed to import clipboard content.',
     remove: 'Remove',
     saveDir: 'Save directory',
     savePlaceholder: 'Choose where downloaded files will be saved',
@@ -718,6 +761,19 @@ function App() {
   const [vpnServerPassword, setVpnServerPassword] = useState('');
   const [vpnClientPassword, setVpnClientPassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
+  const sharePathsRef = useRef<string[]>([]);
+  const sendRunningRef = useRef(false);
+  const shareMutationPendingRef = useRef(false);
+  const shareMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const shareMutationCountRef = useRef(0);
+  const [shareMutationPending, setShareMutationPending] = useState(false);
+  const [addPickerState, setAddPickerState] = useState<AddPickerState>('closed');
+  const [authoredText, setAuthoredText] = useState('');
+  const [pickerError, setPickerError] = useState('');
+  const [pickerPending, setPickerPending] = useState(false);
+  const pickerPendingRef = useRef(false);
+  const addPickerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const addPickerDialogRef = useRef<HTMLElement | null>(null);
   const [saveDir, setSaveDir] = useState('');
   const [currentRemotePath, setCurrentRemotePath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
@@ -854,6 +910,8 @@ function App() {
   const receiveRunning = status.receiveRunning;
   const vpnServerRunning = status.vpnServerRunning;
   const vpnClientRunning = status.vpnClientRunning;
+  sharePathsRef.current = sharePaths;
+  sendRunningRef.current = sendRunning;
   const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
   const canStart = !startPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
@@ -1149,18 +1207,6 @@ function App() {
     };
   }, [mode]);
 
-  useEffect(() => {
-    if (!sendRunning) {
-      return;
-    }
-    if (sharePaths.length === 0) {
-      return;
-    }
-    UpdateSharePaths(sharePaths).catch((err) => {
-      setError(`${t.shareUpdateFailed} ${localizeError(String(err))}`);
-    });
-  }, [sendRunning, sharePaths, t.shareUpdateFailed]);
-
   async function refreshStatus() {
     try {
       const next = await Status();
@@ -1184,14 +1230,47 @@ function App() {
   }
 
   async function addFiles() {
-    setError('');
-    appendSharePaths(await SelectFiles() || []);
+    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+      return;
+    }
+    pickerPendingRef.current = true;
+    setPickerPending(true);
+    setPickerError('');
+    try {
+      const paths = await SelectFiles() || [];
+      if (paths.length > 0) {
+        if (await appendSharePaths(paths, [], setPickerError)) {
+          closeAddPicker(true);
+        }
+      }
+    } catch (err) {
+      setPickerError(localizeError(String(err)));
+    } finally {
+      pickerPendingRef.current = false;
+      setPickerPending(false);
+    }
   }
 
   async function addFolder() {
-    setError('');
-    const selected = await SelectFolder(t.addFolder);
-    appendSharePaths(selected ? [selected] : []);
+    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+      return;
+    }
+    pickerPendingRef.current = true;
+    setPickerPending(true);
+    setPickerError('');
+    try {
+      const selected = await SelectFolder(t.addFolderChoice);
+      if (selected) {
+        if (await appendSharePaths([selected], [], setPickerError)) {
+          closeAddPicker(true);
+        }
+      }
+    } catch (err) {
+      setPickerError(localizeError(String(err)));
+    } finally {
+      pickerPendingRef.current = false;
+      setPickerPending(false);
+    }
   }
 
   async function chooseSaveDir() {
@@ -2049,12 +2128,86 @@ function App() {
     }
   }
 
-  function appendSharePaths(paths: string[]) {
-    setSharePaths((current) => {
-      const next = new Set(current);
-      paths.filter(Boolean).forEach((path) => next.add(path));
-      return Array.from(next);
-    });
+  async function commitSharePaths(
+    proposed: string[],
+    generatedOnFailure: string[] = [],
+    onFailure?: (message: string) => void,
+  ) {
+    const current = sharePathsRef.current;
+    if (current.length === proposed.length && current.every((path, index) => path === proposed[index])) {
+      if (generatedOnFailure.length > 0) {
+        await ReleaseGeneratedSharePaths(generatedOnFailure).catch(() => undefined);
+      }
+      return true;
+    }
+    if (sendRunningRef.current) {
+      try {
+        await UpdateSharePaths(proposed);
+      } catch (err) {
+        if (generatedOnFailure.length > 0) {
+          await ReleaseGeneratedSharePaths(generatedOnFailure).catch(() => undefined);
+        }
+        const message = `${t.shareUpdateFailed} ${localizeError(String(err))}`;
+        setError(message);
+        onFailure?.(message);
+        return false;
+      }
+    }
+    sharePathsRef.current = proposed;
+    setSharePaths(proposed);
+    return true;
+  }
+
+  async function queueSharePathMutation(
+    propose: (current: string[]) => string[],
+    generatedOnFailure: string[] = [],
+    onFailure?: (message: string) => void,
+    releaseAfterSuccess?: (current: string[], proposed: string[]) => string[],
+  ) {
+    setError('');
+    shareMutationCountRef.current += 1;
+    shareMutationPendingRef.current = true;
+    setShareMutationPending(true);
+    const operation = shareMutationQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const current = sharePathsRef.current;
+        const proposed = propose(current);
+        const committed = await commitSharePaths(proposed, generatedOnFailure, onFailure);
+        if (committed && releaseAfterSuccess) {
+          const released = releaseAfterSuccess(current, proposed);
+          if (released.length > 0) {
+            await ReleaseGeneratedSharePaths(released).catch(() => undefined);
+          }
+        }
+        return committed;
+      });
+    shareMutationQueueRef.current = operation.then(() => undefined, () => undefined);
+    try {
+      return await operation;
+    } finally {
+      shareMutationCountRef.current -= 1;
+      if (shareMutationCountRef.current === 0) {
+        shareMutationPendingRef.current = false;
+        setShareMutationPending(false);
+      }
+    }
+  }
+
+  async function appendSharePaths(
+    paths: string[],
+    generatedOnFailure: string[] = [],
+    onFailure?: (message: string) => void,
+  ) {
+    const filtered = paths.filter(Boolean);
+    if (filtered.length === 0) {
+      return true;
+    }
+    return queueSharePathMutation(
+      (current) => appendUniquePaths(current, filtered),
+      generatedOnFailure,
+      onFailure,
+    );
   }
 
   function appendLog(type: string, level: string, message: string) {
@@ -2064,8 +2217,126 @@ function App() {
     ]);
   }
 
-  function removeSharePath(path: string) {
-    setSharePaths((current) => current.filter((item) => item !== path));
+  async function removeSharePath(path: string) {
+    await queueSharePathMutation(
+      (current) => removePath(current, path),
+      [],
+      undefined,
+      () => [path],
+    );
+  }
+
+  async function clearSharePaths() {
+    await queueSharePathMutation(
+      () => [],
+      [],
+      undefined,
+      (current) => current,
+    );
+  }
+
+  function openAddPicker() {
+    setPickerError('');
+    setAddPickerState((current) => nextAddPickerState(current, 'open'));
+  }
+
+  function closeAddPicker(force = false) {
+    if (pickerPendingRef.current && !force) {
+      return;
+    }
+    setPickerError('');
+    setAuthoredText('');
+    setAddPickerState((current) => nextAddPickerState(current, 'close'));
+    window.setTimeout(() => addPickerButtonRef.current?.focus(), 0);
+  }
+
+  function showTextPicker() {
+    setPickerError('');
+    setAddPickerState((current) => nextAddPickerState(current, 'text'));
+  }
+
+  function returnToAddChoices() {
+    if (pickerPendingRef.current) {
+      return;
+    }
+    setPickerError('');
+    setAddPickerState((current) => nextAddPickerState(current, 'back'));
+  }
+
+  function handleAddPickerKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeAddPicker();
+      return;
+    }
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const focusable = Array.from(addPickerDialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)') || []);
+    if (focusable.length === 0) {
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  async function submitAuthoredText() {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || !textCanSubmit(authoredText)) {
+      return;
+    }
+    pickerPendingRef.current = true;
+    setPickerPending(true);
+    setPickerError('');
+    try {
+      const path = await CreateTextShare(authoredText);
+      if (await appendSharePaths([path], [path], setPickerError)) {
+        pickerPendingRef.current = false;
+        setPickerPending(false);
+        closeAddPicker(true);
+        return;
+      }
+    } catch (err) {
+      const raw = String(err);
+      const localized = localizeError(raw);
+      setPickerError(localized === raw ? t.textShareFailed : localized);
+    } finally {
+      pickerPendingRef.current = false;
+      setPickerPending(false);
+    }
+  }
+
+  async function importClipboardShare() {
+    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+      return;
+    }
+    pickerPendingRef.current = true;
+    setPickerPending(true);
+    setPickerError('');
+    try {
+      const result = await ImportClipboard();
+      const paths = result.Paths || [];
+      const generated = result.Kind === 'files' ? [] : paths;
+      if (await appendSharePaths(paths, generated, setPickerError)) {
+        pickerPendingRef.current = false;
+        setPickerPending(false);
+        closeAddPicker(true);
+        return;
+      }
+    } catch (err) {
+      const raw = String(err);
+      const localized = localizeError(raw);
+      setPickerError(localized === raw ? t.clipboardImportFailed : `${t.clipboardImportFailed} ${localized}`);
+    } finally {
+      pickerPendingRef.current = false;
+      setPickerPending(false);
+    }
   }
 
   function toggleSelected(path: string) {
@@ -2129,6 +2400,15 @@ function App() {
   function localizeError(message: string) {
     if (message.includes('password is too weak')) {
       return t.weakPassword;
+    }
+    if (message.includes('clipboard is empty')) {
+      return t.clipboardEmpty;
+    }
+    if (message.includes('native clipboard is unsupported')) {
+      return t.clipboardUnsupported;
+    }
+    if (message.includes('clipboard is busy')) {
+      return t.clipboardBusy;
     }
     return message;
   }
@@ -2319,24 +2599,25 @@ function App() {
                 <div className="field">
                   <div className="field-heading">
                     <label>{t.sharedList}</label>
-                    <span>{sharePaths.length} {t.files}</span>
-                  </div>
-                  <div className="file-actions">
-                    <button className="primary-light" onClick={addFiles}>{t.addFiles}</button>
-                    <button className="secondary" onClick={addFolder}>{t.addFolder}</button>
+                    <div className="share-list-tools">
+                      <span>{sharePaths.length} {t.files}</span>
+                      <button className="clear-share-paths" disabled={sharePaths.length === 0 || shareMutationPending || pickerPending} onClick={clearSharePaths}>× {t.clearSharePaths}</button>
+                    </div>
                   </div>
                   <div className="drop-zone">
                     <div className="path-list">
-                      {sharePaths.length === 0 ? (
-                        <p className="drop-hint">{t.dropHint}</p>
-                      ) : sharePaths.map((path) => (
+                      {sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
-                          <button disabled={sendRunning && sharePaths.length <= 1} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`}>{t.remove}</button>
+                          <button disabled={shareMutationPending || pickerPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
                         </div>
                       ))}
+                      <p className={`drop-hint ${dropHintMode(sharePaths)}`}>
+                        {sharePaths.length === 0 ? t.dropHint : t.dropHintCompact}
+                      </p>
                     </div>
                   </div>
+                  <button ref={addPickerButtonRef} className="primary-light add-share-content" disabled={shareMutationPending || pickerPending} onClick={openAddPicker}>+ {t.add}</button>
                 </div>
               </>
             ) : mode === 'receive' ? (
@@ -2770,6 +3051,48 @@ function App() {
           </details>
         </section>
       </section>
+      {addPickerState !== 'closed' && (
+        <div
+          className="add-picker-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeAddPicker();
+            }
+          }}
+        >
+          <section
+            ref={addPickerDialogRef}
+            className="add-picker-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-picker-title"
+            onKeyDown={handleAddPickerKeyDown}
+          >
+            <div className="add-picker-heading">
+              <h2 id="add-picker-title">{addPickerState === 'text' ? t.textShareTitle : t.addPickerTitle}</h2>
+              <button className="add-picker-close" disabled={pickerPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
+            </div>
+            {addPickerState === 'choose' ? (
+              <div className="add-picker-options">
+                <button autoFocus disabled={pickerPending || shareMutationPending} onClick={addFiles}>{t.addFileChoice}</button>
+                <button disabled={pickerPending || shareMutationPending} onClick={addFolder}>{t.addFolderChoice}</button>
+                <button disabled={pickerPending || shareMutationPending} onClick={showTextPicker}>{t.addTextChoice}</button>
+                <button disabled={pickerPending || shareMutationPending} onClick={importClipboardShare}>{t.addClipboardChoice}</button>
+              </div>
+            ) : (
+              <form className="add-text-form" onSubmit={(event) => { event.preventDefault(); submitAuthoredText(); }}>
+                <textarea autoFocus value={authoredText} disabled={pickerPending} onChange={(event) => setAuthoredText(event.target.value)} placeholder={t.textSharePlaceholder} />
+                <div className="add-picker-actions">
+                  <button type="button" className="secondary" disabled={pickerPending} onClick={returnToAddChoices}>{t.back}</button>
+                  <button type="submit" className="primary" disabled={pickerPending || !textCanSubmit(authoredText)}>{pickerPending ? t.pending : t.textShareSubmit}</button>
+                </div>
+              </form>
+            )}
+            {pickerError && <div className="add-picker-error" role="alert">{pickerError}</div>}
+          </section>
+        </div>
+      )}
       {qrDataUrl && (
         <div className="qr-backdrop" role="presentation" onClick={closePasswordQr}>
           <section className="qr-dialog" role="dialog" aria-modal="true" aria-label={t.qr} onClick={(event) => event.stopPropagation()}>
