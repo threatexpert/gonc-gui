@@ -208,6 +208,25 @@ export namespace main {
 
 }
 
+export namespace sharecontent {
+	
+	export class ClipboardResult {
+	    Paths: string[];
+	    Kind: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClipboardResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Paths = source["Paths"];
+	        this.Kind = source["Kind"];
+	    }
+	}
+
+}
+
 export namespace vpnprofile {
 	
 	export class Profile {

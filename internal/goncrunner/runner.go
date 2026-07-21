@@ -788,9 +788,15 @@ func newDynamicFileSource(paths []string) (*dynamicFileSource, error) {
 }
 
 func (s *dynamicFileSource) UpdatePaths(paths []string) error {
-	next, err := httpfileshare.NewOSFileSource(paths)
-	if err != nil {
-		return err
+	var next *httpfileshare.OSFileSource
+	var err error
+	if len(paths) == 0 {
+		next = &httpfileshare.OSFileSource{}
+	} else {
+		next, err = httpfileshare.NewOSFileSource(paths)
+		if err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	s.source = next

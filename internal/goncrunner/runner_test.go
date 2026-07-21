@@ -1,10 +1,48 @@
 package goncrunner
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 )
+
+func TestDynamicFileSourceCanBecomeEmptyAndRecover(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "one.txt")
+	if err := os.WriteFile(file, []byte("one"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := newDynamicFileSource([]string{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.UpdatePaths(nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := source.ReadDir("/")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("entries=%v err=%v", entries, err)
+	}
+	info, err := source.Stat("/")
+	if err != nil || !info.IsDir() {
+		t.Fatalf("root=%v err=%v", info, err)
+	}
+	if err := source.UpdatePaths([]string{file}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = source.ReadDir("/")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("recovered entries=%v err=%v", entries, err)
+	}
+}
+
+func TestValidateRequestRejectsEmptyInitialSharePaths(t *testing.T) {
+	err := validateRequest(Request{Mode: ModeSend, Password: "pass1234"})
+	if err == nil || err.Error() != "select at least one file or folder to send" {
+		t.Fatalf("error = %v, want empty initial share error", err)
+	}
+}
 
 func TestParseTrafficWithConnectionCount(t *testing.T) {
 	line := "IN: 74.1 KiB (75891 bytes), 0.0 B/s | OUT: 145.9 MiB (152976138 bytes), 64.0 KiB/s | 2 | 00:07:27"

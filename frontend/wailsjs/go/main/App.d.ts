@@ -3,6 +3,7 @@
 import {appupdate} from '../models';
 import {httpdownload} from '../models';
 import {main} from '../models';
+import {sharecontent} from '../models';
 import {vpnprofile} from '../models';
 
 export function CaptureScreen():Promise<string>;
@@ -13,13 +14,19 @@ export function CheckReceivedFiles(arg1:string,arg2:Array<httpdownload.FileInfo>
 
 export function ClearTaskbarProgress():Promise<void>;
 
+export function CreateTextShare(arg1:string):Promise<string>;
+
 export function GeneratePassword():Promise<string>;
+
+export function ImportClipboard():Promise<sharecontent.ClipboardResult>;
 
 export function IsAdministrator():Promise<boolean>;
 
 export function LoadVPNProfiles():Promise<vpnprofile.Store>;
 
 export function OpenSaveDir(arg1:string):Promise<string>;
+
+export function ReleaseGeneratedSharePaths(arg1:Array<string>):Promise<void>;
 
 export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 

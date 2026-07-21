@@ -18,8 +18,16 @@ export function ClearTaskbarProgress() {
   return window['go']['main']['App']['ClearTaskbarProgress']();
 }
 
+export function CreateTextShare(arg1) {
+  return window['go']['main']['App']['CreateTextShare'](arg1);
+}
+
 export function GeneratePassword() {
   return window['go']['main']['App']['GeneratePassword']();
+}
+
+export function ImportClipboard() {
+  return window['go']['main']['App']['ImportClipboard']();
 }
 
 export function IsAdministrator() {
@@ -32,6 +40,10 @@ export function LoadVPNProfiles() {
 
 export function OpenSaveDir(arg1) {
   return window['go']['main']['App']['OpenSaveDir'](arg1);
+}
+
+export function ReleaseGeneratedSharePaths(arg1) {
+  return window['go']['main']['App']['ReleaseGeneratedSharePaths'](arg1);
 }
 
 export function RemoteFiles(arg1) {

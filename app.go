@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
 	"gonc-gui/internal/receivedfile"
+	"gonc-gui/internal/sharecontent"
 	"gonc-gui/internal/taskbar"
 	"gonc-gui/internal/vpnprofile"
 
@@ -30,16 +32,19 @@ const updateManifestURL = "https://www.gonc.cc/gui/manifest.json"
 type App struct {
 	ctx context.Context
 
-	mu                  sync.Mutex
-	sendRunner          *goncrunner.Runner
-	receiveRunner       *goncrunner.Runner
-	vpnServerRunner     *goncrunner.Runner
-	vpnClientRunner     *goncrunner.Runner
-	receiveLocalHTTPURL string
-	downloadCancel      context.CancelFunc
-	downloadDone        chan struct{}
-	downloadID          int64
-	startupSharePaths   []string
+	mu                    sync.Mutex
+	sendRunner            *goncrunner.Runner
+	receiveRunner         *goncrunner.Runner
+	vpnServerRunner       *goncrunner.Runner
+	vpnClientRunner       *goncrunner.Runner
+	receiveLocalHTTPURL   string
+	downloadCancel        context.CancelFunc
+	downloadDone          chan struct{}
+	downloadID            int64
+	startupSharePaths     []string
+	shareContent          *sharecontent.Manager
+	importNativeClipboard func() (sharecontent.ClipboardResult, error)
+	clipboardGetText      func(context.Context) (string, error)
 }
 
 type TransferRequest struct {
@@ -112,12 +117,16 @@ type VPNProfile = vpnprofile.Profile
 type VPNProfileStore = vpnprofile.Store
 
 func NewApp(startupSharePaths []string) *App {
+	shareContent := sharecontent.NewManager()
 	return &App{
-		sendRunner:        goncrunner.New(),
-		receiveRunner:     goncrunner.New(),
-		vpnServerRunner:   goncrunner.New(),
-		vpnClientRunner:   goncrunner.New(),
-		startupSharePaths: append([]string(nil), startupSharePaths...),
+		sendRunner:            goncrunner.New(),
+		receiveRunner:         goncrunner.New(),
+		vpnServerRunner:       goncrunner.New(),
+		vpnClientRunner:       goncrunner.New(),
+		startupSharePaths:     append([]string(nil), startupSharePaths...),
+		shareContent:          shareContent,
+		importNativeClipboard: shareContent.ImportNativeClipboard,
+		clipboardGetText:      wailsruntime.ClipboardGetText,
 	}
 }
 
@@ -146,6 +155,36 @@ func (a *App) SelectFolder(title string) (string, error) {
 
 func (a *App) StartupSharePaths() []string {
 	return append([]string(nil), a.startupSharePaths...)
+}
+
+func (a *App) CreateTextShare(text string) (string, error) {
+	if text == "" {
+		return "", errors.New("text content is empty")
+	}
+	return a.shareContent.CreateText("text", text)
+}
+
+func (a *App) ImportClipboard() (sharecontent.ClipboardResult, error) {
+	result, err := a.importNativeClipboard()
+	if err == nil {
+		return result, nil
+	}
+	if !errors.Is(err, sharecontent.ErrClipboardUnsupported) {
+		return sharecontent.ClipboardResult{}, err
+	}
+	text, err := a.clipboardGetText(a.ctx)
+	if err != nil {
+		return sharecontent.ClipboardResult{}, fmt.Errorf("read clipboard text: %w", err)
+	}
+	if text == "" {
+		return sharecontent.ClipboardResult{}, sharecontent.ErrClipboardUnsupported
+	}
+	path, err := a.shareContent.CreateText("clipboard-text", text)
+	return sharecontent.ClipboardResult{Paths: []string{path}, Kind: sharecontent.ClipboardText}, err
+}
+
+func (a *App) ReleaseGeneratedSharePaths(paths []string) error {
+	return a.shareContent.Release(paths)
 }
 
 func (a *App) CheckForUpdate(currentVersion string) (appupdate.Result, error) {
@@ -317,9 +356,6 @@ func (a *App) StopTransfer(mode string) error {
 }
 
 func (a *App) UpdateSharePaths(paths []string) error {
-	if len(paths) == 0 {
-		return errors.New("select at least one file or folder to send")
-	}
 	return a.sendRunner.UpdateSharePaths(paths)
 }
 
@@ -360,7 +396,9 @@ func (a *App) stopAllTransfers(requireRunning bool) error {
 func (a *App) cleanup(ctx context.Context) error {
 	done := make(chan error, 1)
 	go func() {
-		done <- a.stopAllTransfers(false)
+		transferErr := a.stopAllTransfers(false)
+		contentErr := a.shareContent.Cleanup()
+		done <- errors.Join(transferErr, contentErr)
 	}()
 	select {
 	case err := <-done:
