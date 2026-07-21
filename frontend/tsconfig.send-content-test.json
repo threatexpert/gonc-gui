@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "Node",
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "node_modules/.cache/gonc-send-content-tests"
+  },
+  "include": [
+    "src/sendContentState.ts",
+    "tests/sendContentState.test.ts"
+  ]
+}
