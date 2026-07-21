@@ -49,17 +49,44 @@ func TestReleaseGeneratedSharePathsRemovesOwnedText(t *testing.T) {
 	}
 }
 
-func TestCleanupRemovesGeneratedContentAfterTransfersStop(t *testing.T) {
+func TestShutdownCleanupRemovesRemainingGeneratedContent(t *testing.T) {
 	app := NewApp(nil)
-	path, err := app.CreateTextShare("temporary")
+	first, err := app.CreateTextShare("first")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := app.cleanup(context.Background()); err != nil {
+	second, err := app.CreateTextShare("second")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("generated file remains after cleanup: %v", err)
+	app.shutdown(context.Background())
+	for _, path := range []string{first, second} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("generated file remains after cleanup: %v", err)
+		}
+	}
+}
+
+func TestCleanupTransfersBeforeGeneratedContentAndJoinsErrors(t *testing.T) {
+	transferErr := errors.New("transfer cleanup failed")
+	contentErr := errors.New("content cleanup failed")
+	var order []string
+
+	err := cleanupTransfersThenContent(
+		func() error {
+			order = append(order, "transfers")
+			return transferErr
+		},
+		func() error {
+			order = append(order, "content")
+			return contentErr
+		},
+	)
+	if len(order) != 2 || order[0] != "transfers" || order[1] != "content" {
+		t.Fatalf("cleanup order = %v, want [transfers content]", order)
+	}
+	if !errors.Is(err, transferErr) || !errors.Is(err, contentErr) {
+		t.Fatalf("cleanup error = %v, want both failures", err)
 	}
 }
 
@@ -121,6 +148,20 @@ func TestImportClipboardEmptyFallbackRemainsUnsupported(t *testing.T) {
 	_, err := app.ImportClipboard()
 	if !errors.Is(err, sharecontent.ErrClipboardUnsupported) {
 		t.Fatalf("error = %v, want unsupported", err)
+	}
+}
+
+func TestImportClipboardWrapsWailsTextReadError(t *testing.T) {
+	app := NewApp(nil)
+	app.importNativeClipboard = func() (sharecontent.ClipboardResult, error) {
+		return sharecontent.ClipboardResult{}, sharecontent.ErrClipboardUnsupported
+	}
+	want := errors.New("clipboard unavailable")
+	app.clipboardGetText = func(context.Context) (string, error) { return "", want }
+
+	_, err := app.ImportClipboard()
+	if !errors.Is(err, want) || err.Error() != "read clipboard text: clipboard unavailable" {
+		t.Fatalf("error = %v, want wrapped clipboard read error", err)
 	}
 }
 

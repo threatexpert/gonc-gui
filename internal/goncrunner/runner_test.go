@@ -6,7 +6,42 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"gonc-gui/internal/sharecontent"
 )
+
+func TestGeneratedShareLifecycleCanListBecomeEmptyAndRelease(t *testing.T) {
+	manager := sharecontent.NewManager()
+	t.Cleanup(func() { _ = manager.Cleanup() })
+
+	generated, err := manager.CreateText("text", "temporary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := newDynamicFileSource([]string{generated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := source.ReadDir("/")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("generated entries=%v err=%v", entries, err)
+	}
+
+	if err := source.UpdatePaths(nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = source.ReadDir("/")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty entries=%v err=%v", entries, err)
+	}
+
+	if err := manager.Release([]string{generated}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(generated); !os.IsNotExist(err) {
+		t.Fatalf("released generated file still exists: %v", err)
+	}
+}
 
 func TestDynamicFileSourceCanBecomeEmptyAndRecover(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "one.txt")

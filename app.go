@@ -396,9 +396,10 @@ func (a *App) stopAllTransfers(requireRunning bool) error {
 func (a *App) cleanup(ctx context.Context) error {
 	done := make(chan error, 1)
 	go func() {
-		transferErr := a.stopAllTransfers(false)
-		contentErr := a.shareContent.Cleanup()
-		done <- errors.Join(transferErr, contentErr)
+		done <- cleanupTransfersThenContent(
+			func() error { return a.stopAllTransfers(false) },
+			a.shareContent.Cleanup,
+		)
 	}()
 	select {
 	case err := <-done:
@@ -408,6 +409,12 @@ func (a *App) cleanup(ctx context.Context) error {
 	case <-time.After(6 * time.Second):
 		return errors.New("timed out waiting for gonc embedded session cleanup")
 	}
+}
+
+func cleanupTransfersThenContent(stopTransfers, cleanupContent func() error) error {
+	transferErr := stopTransfers()
+	contentErr := cleanupContent()
+	return errors.Join(transferErr, contentErr)
 }
 
 func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
