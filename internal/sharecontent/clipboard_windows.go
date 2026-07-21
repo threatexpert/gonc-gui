@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
+	"math/bits"
 	"runtime"
 	"time"
 	"unsafe"
@@ -41,38 +43,39 @@ var (
 	procDragQueryFileW    = shell32.NewProc("DragQueryFileW")
 )
 
-type clipboardFormats struct {
-	files []string
-	png   []byte
-	dibV5 []byte
-	dib   []byte
-	text  string
+type clipboardBackend interface {
+	open() error
+	close()
+	readFiles() ([]string, bool, error)
+	readImage() (image.Image, bool, error)
+	readText() (string, bool, error)
 }
 
-type clipboardPayload struct {
-	kind ClipboardKind
-}
+type win32ClipboardBackend struct{}
 
-func chooseClipboardPayload(formats clipboardFormats) clipboardPayload {
-	if len(formats.files) != 0 {
-		return clipboardPayload{kind: ClipboardFiles}
-	}
-	if len(formats.png) != 0 || len(formats.dibV5) != 0 || len(formats.dib) != 0 {
-		return clipboardPayload{kind: ClipboardImage}
-	}
-	if formats.text != "" {
-		return clipboardPayload{kind: ClipboardText}
-	}
-	return clipboardPayload{}
+func (win32ClipboardBackend) open() error { return openClipboardWithRetry() }
+func (win32ClipboardBackend) close()      { procCloseClipboard.Call() }
+func (win32ClipboardBackend) readFiles() ([]string, bool, error) {
+	return readHDrop()
+}
+func (win32ClipboardBackend) readImage() (image.Image, bool, error) {
+	return readClipboardImage()
+}
+func (win32ClipboardBackend) readText() (string, bool, error) {
+	return readUnicodeText()
 }
 
 func (m *Manager) ImportNativeClipboard() (ClipboardResult, error) {
-	if err := openClipboardWithRetry(); err != nil {
+	return m.importNativeClipboard(win32ClipboardBackend{})
+}
+
+func (m *Manager) importNativeClipboard(backend clipboardBackend) (ClipboardResult, error) {
+	if err := backend.open(); err != nil {
 		return ClipboardResult{}, err
 	}
-	defer procCloseClipboard.Call()
+	defer backend.close()
 
-	if paths, ok, err := readHDrop(); ok || err != nil {
+	if paths, ok, err := backend.readFiles(); ok || err != nil {
 		if err != nil {
 			return ClipboardResult{}, err
 		}
@@ -81,14 +84,14 @@ func (m *Manager) ImportNativeClipboard() (ClipboardResult, error) {
 			return ClipboardResult{Paths: paths, Kind: ClipboardFiles}, nil
 		}
 	}
-	if img, ok, err := readClipboardImage(); ok || err != nil {
+	if img, ok, err := backend.readImage(); ok || err != nil {
 		if err != nil {
 			return ClipboardResult{}, err
 		}
 		path, err := m.CreatePNG("clipboard-image", img)
 		return ClipboardResult{Paths: []string{path}, Kind: ClipboardImage}, err
 	}
-	if text, ok, err := readUnicodeText(); ok || err != nil {
+	if text, ok, err := backend.readText(); ok || err != nil {
 		if err != nil {
 			return ClipboardResult{}, err
 		}
@@ -188,8 +191,13 @@ func readUnicodeText() (string, bool, error) {
 	if !ok || err != nil {
 		return "", ok, err
 	}
+	text, err := decodeUnicodeText(data)
+	return text, true, err
+}
+
+func decodeUnicodeText(data []byte) (string, error) {
 	if len(data)%2 != 0 {
-		return "", true, fmt.Errorf("clipboard Unicode text has odd byte length %d", len(data))
+		return "", fmt.Errorf("clipboard Unicode text has odd byte length %d", len(data))
 	}
 	text := make([]uint16, len(data)/2)
 	for index := range text {
@@ -199,7 +207,7 @@ func readUnicodeText() (string, bool, error) {
 			break
 		}
 	}
-	return windows.UTF16ToString(text), true, nil
+	return windows.UTF16ToString(text), nil
 }
 
 func clipboardFormatAvailable(format uint32) bool {
@@ -256,6 +264,7 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if width <= 0 || height == 0 || height == -1<<31 {
 		return nil, fmt.Errorf("invalid DIB dimensions %dx%d", width, height)
 	}
+	topDown := height < 0
 	if height < 0 {
 		height = -height
 	}
@@ -265,10 +274,11 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if planes != 1 {
 		return nil, fmt.Errorf("invalid DIB plane count %d", planes)
 	}
-	if depth != 8 && depth != 24 && depth != 32 {
+	packedBitfields := headerSize == 40 && compression == 3 && (depth == 16 || depth == 32)
+	if depth != 8 && depth != 24 && depth != 32 && !(packedBitfields && depth == 16) {
 		return nil, fmt.Errorf("unsupported DIB depth %d", depth)
 	}
-	if compression != 0 {
+	if compression != 0 && !packedBitfields {
 		defaultMasks := headerSize > 40 && binary.LittleEndian.Uint32(data[40:44]) == 0xff0000 &&
 			binary.LittleEndian.Uint32(data[44:48]) == 0xff00 &&
 			binary.LittleEndian.Uint32(data[48:52]) == 0xff &&
@@ -289,6 +299,19 @@ func decodeDIB(data []byte) (image.Image, error) {
 		}
 	}
 	pixelOffset := uint64(headerSize) + paletteEntries*4
+	var masks [3]uint32
+	if packedBitfields {
+		if len(data) < 52 {
+			return nil, fmt.Errorf("DIB bit masks are truncated")
+		}
+		for index := range masks {
+			masks[index] = binary.LittleEndian.Uint32(data[40+index*4 : 44+index*4])
+		}
+		if err := validateBitfieldMasks(depth, masks); err != nil {
+			return nil, err
+		}
+		pixelOffset += 12
+	}
 	rowBytes := (uint64(width)*uint64(depth) + 31) / 32 * 4
 	pixelBytes := rowBytes * uint64(height)
 	if pixelOffset > uint64(len(data)) || pixelBytes > uint64(len(data))-pixelOffset {
@@ -296,6 +319,9 @@ func decodeDIB(data []byte) (image.Image, error) {
 	}
 	if uint64(len(data)) > uint64(^uint32(0))-14 {
 		return nil, fmt.Errorf("DIB is too large: %d bytes", len(data))
+	}
+	if packedBitfields {
+		return decodeBitfields(data[pixelOffset:pixelOffset+pixelBytes], int(width), int(height), topDown, depth, masks, int(rowBytes))
 	}
 
 	bmpData := make([]byte, 14+len(data))
@@ -308,6 +334,56 @@ func decodeDIB(data []byte) (image.Image, error) {
 		return nil, fmt.Errorf("decode DIB as BMP: %w", err)
 	}
 	return img, nil
+}
+
+func validateBitfieldMasks(depth uint16, masks [3]uint32) error {
+	var used uint32
+	for _, mask := range masks {
+		if mask == 0 || mask&used != 0 {
+			return fmt.Errorf("invalid overlapping or empty DIB bit masks %#x", masks)
+		}
+		shift := bits.TrailingZeros32(mask)
+		normalized := mask >> shift
+		if normalized&(normalized+1) != 0 || (depth < 32 && mask>>depth != 0) {
+			return fmt.Errorf("invalid non-contiguous DIB bit mask %#x", mask)
+		}
+		used |= mask
+	}
+	return nil
+}
+
+func decodeBitfields(data []byte, width, height int, topDown bool, depth uint16, masks [3]uint32, rowBytes int) (image.Image, error) {
+	result := image.NewRGBA(image.Rect(0, 0, width, height))
+	bytesPerPixel := int(depth / 8)
+	for sourceY := 0; sourceY < height; sourceY++ {
+		destinationY := height - 1 - sourceY
+		if topDown {
+			destinationY = sourceY
+		}
+		for x := 0; x < width; x++ {
+			offset := sourceY*rowBytes + x*bytesPerPixel
+			var packed uint32
+			if depth == 16 {
+				packed = uint32(binary.LittleEndian.Uint16(data[offset : offset+2]))
+			} else {
+				packed = binary.LittleEndian.Uint32(data[offset : offset+4])
+			}
+			result.SetRGBA(x, destinationY, color.RGBA{
+				R: bitfieldChannel(packed, masks[0]),
+				G: bitfieldChannel(packed, masks[1]),
+				B: bitfieldChannel(packed, masks[2]),
+				A: 255,
+			})
+		}
+	}
+	return result, nil
+}
+
+func bitfieldChannel(value, mask uint32) uint8 {
+	shift := bits.TrailingZeros32(mask)
+	maximum := mask >> shift
+	component := (value & mask) >> shift
+	return uint8((uint64(component)*255 + uint64(maximum)/2) / uint64(maximum))
 }
 
 func win32Error(operation string, err error) error {
