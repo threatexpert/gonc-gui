@@ -96,8 +96,25 @@ Gonc's expected IPv4 traversal support:
 
 ## Send Files
 
+Desktop send-content capabilities:
+
+| Content source | Windows desktop | macOS/Linux desktop |
+| --- | --- | --- |
+| File | Supported | Supported |
+| Folder | Supported | Supported |
+| Authored text | Supported | Supported |
+| Clipboard text | Supported | Supported |
+| Native clipboard files | Supported | Unsupported; the app shows an explicit unsupported message when no readable clipboard text is available |
+| Native clipboard image | Supported (saved as a generated PNG) | Unsupported; the app shows an explicit unsupported message when no readable clipboard text is available |
+
+The single **Add** button opens a four-option picker for **File**, **Folder**,
+**Text**, and **Clipboard**. Files and folders can also be added by drag and
+drop. Each list row has its own remove control, and **Clear all** empties the
+whole list. Changes made while a send session is running are synchronized with
+the receiver, including an empty list after the receiver refreshes.
+
 1. Open **Send Files**.
-2. Add files or folders.
+2. Add the content to share.
 3. Use the generated passphrase, or enter your own strong passphrase.
 4. Share the passphrase or QR code with the receiver through a trusted channel.
 5. Keep the sender running until the receiver finishes.
