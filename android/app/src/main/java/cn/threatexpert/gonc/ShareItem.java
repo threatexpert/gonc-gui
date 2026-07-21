@@ -12,13 +12,19 @@ final class ShareItem {
     private final boolean directory;
     private final boolean treeUri;
     private final long lastModifiedMillis;
+    private final File ownedFile;
     private File cachedFile;
 
     ShareItem(Uri uri, String displayName, long size, String mimeType) {
-        this(uri, displayName, size, mimeType, false, false, 0);
+        this(uri, displayName, size, mimeType, false, false, 0, null);
     }
 
     ShareItem(Uri uri, String displayName, long size, String mimeType, boolean directory, boolean treeUri, long lastModifiedMillis) {
+        this(uri, displayName, size, mimeType, directory, treeUri, lastModifiedMillis, null);
+    }
+
+    ShareItem(Uri uri, String displayName, long size, String mimeType, boolean directory,
+              boolean treeUri, long lastModifiedMillis, File ownedFile) {
         this.uri = uri;
         this.displayName = displayName == null || displayName.trim().isEmpty() ? "shared-file" : displayName;
         this.size = size;
@@ -26,6 +32,7 @@ final class ShareItem {
         this.directory = directory;
         this.treeUri = treeUri;
         this.lastModifiedMillis = lastModifiedMillis;
+        this.ownedFile = ownedFile;
     }
 
     Uri uri() {
@@ -54,6 +61,10 @@ final class ShareItem {
 
     long lastModifiedMillis() {
         return lastModifiedMillis;
+    }
+
+    File ownedFile() {
+        return ownedFile;
     }
 
     File cachedFile() {

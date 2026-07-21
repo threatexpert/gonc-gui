@@ -11,6 +11,7 @@ import android.provider.OpenableColumns;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.channels.FileChannel;
@@ -339,6 +340,10 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
         }
 
         static OpenHandle open(ContentResolver resolver, Uri uri) throws Exception {
+            if ("file".equalsIgnoreCase(uri.getScheme())) {
+                FileInputStream input = new FileInputStream(new File(uri.getPath()));
+                return new OpenHandle(input, input.getChannel(), null);
+            }
             ParcelFileDescriptor descriptor = resolver.openFileDescriptor(uri, "r");
             if (descriptor != null) {
                 FileInputStream input = new FileInputStream(descriptor.getFileDescriptor());
