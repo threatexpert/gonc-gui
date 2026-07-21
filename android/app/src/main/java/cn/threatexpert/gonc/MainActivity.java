@@ -114,6 +114,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private int aboutUpdateGeneration;
 
     private LinearLayout root;
+    private ScrollView mainScrollView;
     private boolean sendMode = true;
     private boolean vpnMode;
     private boolean vpnServerMode;
@@ -182,8 +183,8 @@ public final class MainActivity extends Activity implements ModuleHost {
             appendLog("error", "Previous crash:\n" + lastCrash);
             activityExpanded = true;
         }
-        handleIncomingIntent(getIntent());
         render();
+        handleIncomingIntent(getIntent());
         if (!lastCrash.trim().isEmpty()) {
             mainHandler.post(this::showPreviousCrashDialog);
         }
@@ -194,7 +195,6 @@ public final class MainActivity extends Activity implements ModuleHost {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIncomingIntent(intent);
-        render();
     }
 
     @Override
@@ -267,17 +267,14 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         if (requestCode == REQUEST_OPEN_DOCUMENT && resultCode == RESULT_OK && data != null) {
             List<Uri> uris = collectPickerUris(data);
+            applyModule(MODULE_SEND, true);
             addUris(uris, data);
-            applyModule(MODULE_SEND, true);
-            render();
         } else if (requestCode == REQUEST_OPEN_SEND_MEDIA && resultCode == RESULT_OK && data != null) {
+            applyModule(MODULE_SEND, true);
             addMediaUris(collectPickerUris(data), data);
-            applyModule(MODULE_SEND, true);
-            render();
         } else if (requestCode == REQUEST_OPEN_SEND_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            addTreeUri(data.getData(), data);
             applyModule(MODULE_SEND, true);
-            render();
+            addTreeUri(data.getData(), data);
         } else if (requestCode == REQUEST_OPEN_SAVE_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri saveTreeUri = data.getData();
             int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -358,6 +355,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
 
         ScrollView scrollView = new ScrollView(this);
+        mainScrollView = scrollView;
         scrollView.setFillViewport(true);
         scrollView.setBackgroundColor(Color.rgb(246, 248, 251));
 
@@ -1602,6 +1600,26 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     @Override
+    public void revealAfterRender(View target) {
+        target.post(() -> {
+            if (mainScrollView == null || !target.isAttachedToWindow()) {
+                return;
+            }
+            int[] targetLocation = new int[2];
+            target.getLocationInWindow(targetLocation);
+            int targetBottom = targetLocation[1] + target.getHeight();
+            int[] scrollLocation = new int[2];
+            mainScrollView.getLocationInWindow(scrollLocation);
+            int viewportBottom = scrollLocation[1] + mainScrollView.getHeight()
+                    - mainScrollView.getPaddingBottom();
+            int overlap = targetBottom - viewportBottom;
+            if (overlap > 0) {
+                mainScrollView.smoothScrollBy(0, overlap + dp(12));
+            }
+        });
+    }
+
+    @Override
     public void requestImmediateRender() {
         render();
     }
@@ -1857,8 +1875,8 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         List<Uri> uris = collectUris(intent);
         if (!uris.isEmpty()) {
-            addUris(uris, intent);
             applyModule(MODULE_SEND, true);
+            addUris(uris, intent);
             appendLog("info", "Received " + uris.size() + " file(s) from Android");
         }
     }
@@ -1970,9 +1988,8 @@ public final class MainActivity extends Activity implements ModuleHost {
     private void appendGeneratedFile(File file, String mimeType) {
         ShareItem item = new ShareItem(Uri.fromFile(file), file.getName(), file.length(), mimeType,
                 false, false, file.lastModified(), file);
-        sendController.addFiles(Collections.singletonList(item));
         applyModule(MODULE_SEND, true);
-        render();
+        sendController.addFiles(Collections.singletonList(item));
     }
 
     private File generatedSendRoot() {

@@ -3,6 +3,7 @@ package cn.threatexpert.gonc;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
+import android.view.View;
 
 import java.util.function.Consumer;
 
@@ -61,6 +62,8 @@ interface ModuleHost {
 
     /** Full rebuild of the visible screen. */
     void requestRender();
+
+    void revealAfterRender(View target);
 
     /** Full rebuild for an explicit user action; bypasses text-input deferral. */
     void requestImmediateRender();

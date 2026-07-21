@@ -45,6 +45,7 @@ final class SendController {
     private GoncBridge.Session session;
     private long runId;
     private long renderGeneration;
+    private boolean revealAddAfterNextRender;
 
     SendController(ModuleHost host) {
         this.host = host;
@@ -94,6 +95,7 @@ final class SendController {
             }
         }
         if (added) {
+            revealAddAfterNextRender = true;
             syncSource();
             host.requestRender();
         }
@@ -171,6 +173,10 @@ final class SendController {
             continueAdd.setPadding(u.dp(8), u.dp(12), u.dp(8), u.dp(6));
             continueAdd.setOnClickListener(v -> showAddTypeDialog());
             card.addView(continueAdd, u.blockParams(0));
+            if (revealAddAfterNextRender) {
+                revealAddAfterNextRender = false;
+                host.revealAfterRender(continueAdd);
+            }
         }
 
         card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), true), u.blockParams(u.dp(14)));

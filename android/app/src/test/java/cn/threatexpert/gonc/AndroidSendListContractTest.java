@@ -90,6 +90,19 @@ public class AndroidSendListContractTest {
         assertTrue(send.contains("FrameLayout"));
     }
 
+    @Test
+    public void onlyRealAdditionsRequestOneShotRevealAfterRender() throws Exception {
+        String send = source("SendController.java");
+        String host = source("ModuleHost.java");
+        String activity = source("MainActivity.java");
+
+        assertTrue(host.contains("void revealAfterRender(View target);"));
+        assertTrue(send.contains("revealAddAfterNextRender"));
+        assertTrue(send.contains("if (added)"));
+        assertTrue(send.contains("host.revealAfterRender(continueAdd)"));
+        assertTrue(activity.contains("mainScrollView.smoothScrollBy"));
+    }
+
     private static String source(String fileName) throws Exception {
         return read("src/main/java/cn/threatexpert/gonc/" + fileName);
     }
