@@ -8,6 +8,7 @@ import './App.css';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
   appendUniquePaths,
+  createSharePathTransactionCoordinator,
   dropHintMode,
   nextAddPickerState,
   removePath,
@@ -764,9 +765,8 @@ function App() {
   const sharePathsRef = useRef<string[]>([]);
   const sendRunningRef = useRef(false);
   const shareMutationPendingRef = useRef(false);
-  const shareMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const shareMutationCountRef = useRef(0);
   const [shareMutationPending, setShareMutationPending] = useState(false);
+  const shareCoordinatorRef = useRef<ReturnType<typeof createSharePathTransactionCoordinator> | null>(null);
   const [addPickerState, setAddPickerState] = useState<AddPickerState>('closed');
   const [authoredText, setAuthoredText] = useState('');
   const [pickerError, setPickerError] = useState('');
@@ -912,6 +912,25 @@ function App() {
   const vpnClientRunning = status.vpnClientRunning;
   sharePathsRef.current = sharePaths;
   sendRunningRef.current = sendRunning;
+  if (!shareCoordinatorRef.current) {
+    shareCoordinatorRef.current = createSharePathTransactionCoordinator({
+      getPaths: () => sharePathsRef.current,
+      isRunning: () => sendRunningRef.current,
+      update: UpdateSharePaths,
+      commit: (proposed) => {
+        sharePathsRef.current = proposed;
+        setSharePaths(proposed);
+      },
+      release: ReleaseGeneratedSharePaths,
+      clearError: () => setError(''),
+      showError: setError,
+      formatError: (error) => `${t.shareUpdateFailed} ${localizeError(String(error))}`,
+      onPendingChange: (pending) => {
+        shareMutationPendingRef.current = pending;
+        setShareMutationPending(pending);
+      },
+    });
+  }
   const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
   const canStart = !startPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
@@ -2128,70 +2147,21 @@ function App() {
     }
   }
 
-  async function commitSharePaths(
-    proposed: string[],
-    generatedOnFailure: string[] = [],
-    onFailure?: (message: string) => void,
-  ) {
-    const current = sharePathsRef.current;
-    if (current.length === proposed.length && current.every((path, index) => path === proposed[index])) {
-      if (generatedOnFailure.length > 0) {
-        await ReleaseGeneratedSharePaths(generatedOnFailure).catch(() => undefined);
-      }
-      return true;
-    }
-    if (sendRunningRef.current) {
-      try {
-        await UpdateSharePaths(proposed);
-      } catch (err) {
-        if (generatedOnFailure.length > 0) {
-          await ReleaseGeneratedSharePaths(generatedOnFailure).catch(() => undefined);
-        }
-        const message = `${t.shareUpdateFailed} ${localizeError(String(err))}`;
-        setError(message);
-        onFailure?.(message);
-        return false;
-      }
-    }
-    sharePathsRef.current = proposed;
-    setSharePaths(proposed);
-    return true;
-  }
-
   async function queueSharePathMutation(
     propose: (current: string[]) => string[],
     generatedOnFailure: string[] = [],
     onFailure?: (message: string) => void,
     releaseAfterSuccess?: (current: string[], proposed: string[]) => string[],
   ) {
-    setError('');
-    shareMutationCountRef.current += 1;
-    shareMutationPendingRef.current = true;
-    setShareMutationPending(true);
-    const operation = shareMutationQueueRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        const current = sharePathsRef.current;
-        const proposed = propose(current);
-        const committed = await commitSharePaths(proposed, generatedOnFailure, onFailure);
-        if (committed && releaseAfterSuccess) {
-          const released = releaseAfterSuccess(current, proposed);
-          if (released.length > 0) {
-            await ReleaseGeneratedSharePaths(released).catch(() => undefined);
-          }
-        }
-        return committed;
-      });
-    shareMutationQueueRef.current = operation.then(() => undefined, () => undefined);
-    try {
-      return await operation;
-    } finally {
-      shareMutationCountRef.current -= 1;
-      if (shareMutationCountRef.current === 0) {
-        shareMutationPendingRef.current = false;
-        setShareMutationPending(false);
-      }
+    const result = await shareCoordinatorRef.current!.enqueue({
+      propose,
+      generatedOnFailure,
+      releaseAfterSuccess,
+    });
+    if (!result.ok) {
+      onFailure?.(result.error);
     }
+    return result.ok;
   }
 
   async function appendSharePaths(
@@ -2241,7 +2211,7 @@ function App() {
   }
 
   function closeAddPicker(force = false) {
-    if (pickerPendingRef.current && !force) {
+    if ((pickerPendingRef.current || shareMutationPendingRef.current) && !force) {
       return;
     }
     setPickerError('');
@@ -2256,7 +2226,7 @@ function App() {
   }
 
   function returnToAddChoices() {
-    if (pickerPendingRef.current) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current) {
       return;
     }
     setPickerError('');
@@ -3071,7 +3041,7 @@ function App() {
           >
             <div className="add-picker-heading">
               <h2 id="add-picker-title">{addPickerState === 'text' ? t.textShareTitle : t.addPickerTitle}</h2>
-              <button className="add-picker-close" disabled={pickerPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
+              <button className="add-picker-close" disabled={pickerPending || shareMutationPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
             </div>
             {addPickerState === 'choose' ? (
               <div className="add-picker-options">
@@ -3082,10 +3052,10 @@ function App() {
               </div>
             ) : (
               <form className="add-text-form" onSubmit={(event) => { event.preventDefault(); submitAuthoredText(); }}>
-                <textarea autoFocus value={authoredText} disabled={pickerPending} onChange={(event) => setAuthoredText(event.target.value)} placeholder={t.textSharePlaceholder} />
+                <textarea autoFocus value={authoredText} disabled={pickerPending || shareMutationPending} onChange={(event) => setAuthoredText(event.target.value)} placeholder={t.textSharePlaceholder} />
                 <div className="add-picker-actions">
-                  <button type="button" className="secondary" disabled={pickerPending} onClick={returnToAddChoices}>{t.back}</button>
-                  <button type="submit" className="primary" disabled={pickerPending || !textCanSubmit(authoredText)}>{pickerPending ? t.pending : t.textShareSubmit}</button>
+                  <button type="button" className="secondary" disabled={pickerPending || shareMutationPending} onClick={returnToAddChoices}>{t.back}</button>
+                  <button type="submit" className="primary" disabled={pickerPending || shareMutationPending || !textCanSubmit(authoredText)}>{pickerPending || shareMutationPending ? t.pending : t.textShareSubmit}</button>
                 </div>
               </form>
             )}
