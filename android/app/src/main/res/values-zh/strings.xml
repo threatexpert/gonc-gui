@@ -18,6 +18,16 @@
     <string name="passphrase_config">口令配置</string>
     <string name="add_files">添加文件</string>
     <string name="add_folder">添加目录</string>
+    <string name="send_content_title">发送内容</string>
+    <string name="send_content_title_count">发送内容 · %1$d</string>
+    <string name="send_empty_add_hint">点击这里添加文件、文件夹、媒体或文字</string>
+    <string name="send_continue_add">点击这里继续添加</string>
+    <string name="send_add_type_title">想加入什么内容？</string>
+    <string name="add_media">媒体</string>
+    <string name="add_text">文字</string>
+    <string name="add_clipboard">剪贴板</string>
+    <string name="add_text_title">添加文字</string>
+    <string name="add_content_action">添加</string>
     <string name="toast_send_clipboard_unsupported">剪贴板中没有可添加的文字或图片</string>
     <string name="toast_send_content_create_failed">无法添加此内容</string>
     <string name="toast_send_media_partial_failed">已添加可用媒体，另有 %1$d 项无法读取</string>

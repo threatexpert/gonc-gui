@@ -17,6 +17,16 @@
     <string name="passphrase_config">Passphrase settings</string>
     <string name="add_files">Add files</string>
     <string name="add_folder">Add folder</string>
+    <string name="send_content_title">Send content</string>
+    <string name="send_content_title_count">Send content · %1$d</string>
+    <string name="send_empty_add_hint">Tap here to add files, folders, media, or text</string>
+    <string name="send_continue_add">Tap here to add more</string>
+    <string name="send_add_type_title">What would you like to add?</string>
+    <string name="add_media">Media</string>
+    <string name="add_text">Text</string>
+    <string name="add_clipboard">Clipboard</string>
+    <string name="add_text_title">Add text</string>
+    <string name="add_content_action">Add</string>
     <string name="toast_send_clipboard_unsupported">Clipboard has no text or image to add</string>
     <string name="toast_send_content_create_failed">Could not add this content</string>
     <string name="toast_send_media_partial_failed">Added available media; %1$d item(s) could not be read</string>

@@ -1,8 +1,10 @@
 package cn.threatexpert.gonc;
 
+import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.Editable;
+import android.text.InputType;
 import android.text.TextWatcher;
 import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
@@ -11,13 +13,15 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.io.File;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 /**
  * Send ("share files") module: owns the chosen items, passphrase/protocol
@@ -73,38 +77,63 @@ final class SendController {
 
     // --- items ------------------------------------------------------------
 
-    void addFiles(List<ShareItem> newItems) {
-        Map<String, ShareItem> existing = new LinkedHashMap<>();
+    boolean addFiles(List<ShareItem> newItems) {
+        Set<String> existing = new HashSet<>();
         for (ShareItem item : shareItems) {
-            existing.put(item.uri().toString(), item);
+            existing.add(item.uri().toString());
         }
+        boolean added = false;
         for (ShareItem item : newItems) {
-            existing.put(item.uri().toString(), item);
+            if (existing.add(item.uri().toString())) {
+                shareItems.add(item);
+                added = true;
+            }
         }
-        shareItems.clear();
-        shareItems.addAll(existing.values());
-        syncSource();
-        host.requestRender();
+        if (added) {
+            syncSource();
+            host.requestRender();
+        }
+        return added;
     }
 
     void addFolder(ShareItem item) {
-        Map<String, ShareItem> existing = new LinkedHashMap<>();
-        for (ShareItem it : shareItems) {
-            existing.put(it.uri().toString(), it);
+        if (addFiles(java.util.Collections.singletonList(item))) {
+            host.log("info", "Shared folder added: " + item.displayName());
         }
-        existing.put(item.uri().toString(), item);
-        shareItems.clear();
-        shareItems.addAll(existing.values());
-        syncSource();
-        host.log("info", "Shared folder added: " + shareItems.get(shareItems.size() - 1).displayName());
-        host.requestRender();
     }
 
     private void removeItem(ShareItem item) {
-        shareItems.remove(item);
+        if (!shareItems.remove(item)) {
+            return;
+        }
         syncSource();
+        deleteOwned(item);
         host.log("info", "Removed shared item: " + item.displayName());
         host.requestRender();
+    }
+
+    private void clearItems() {
+        if (shareItems.isEmpty()) {
+            return;
+        }
+        List<ShareItem> removed = new ArrayList<>(shareItems);
+        shareItems.clear();
+        syncSource();
+        for (ShareItem item : removed) {
+            deleteOwned(item);
+        }
+        host.log("info", "Cleared shared items");
+        host.requestRender();
+    }
+
+    private void deleteOwned(ShareItem item) {
+        if (item.ownedFile() != null) {
+            GeneratedSendFiles.deleteOwned(generatedSendRoot(), item.ownedFile());
+        }
+    }
+
+    private File generatedSendRoot() {
+        return new File(host.context().getCacheDir(), "generated-send");
     }
 
     private void syncSource() {
@@ -119,27 +148,25 @@ final class SendController {
         UiKit u = host.ui();
         LinearLayout card = u.card();
 
-        card.addView(u.sectionBoundaryTitle(string(R.string.share_files_config), false), u.blockParams(0));
+        card.addView(contentHeader(), u.blockParams(0));
         if (shareItems.isEmpty()) {
-            TextView empty = u.text(string(R.string.no_files_selected), 14, u.muted(), Typeface.NORMAL);
+            TextView empty = u.text(string(R.string.send_empty_add_hint), 14, u.muted(), Typeface.BOLD);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(u.dp(12), u.dp(22), u.dp(12), u.dp(22));
             empty.setBackground(u.rounded(Color.rgb(248, 251, 255), u.dp(8), Color.rgb(143, 168, 195), 1));
+            empty.setOnClickListener(v -> showAddTypeDialog());
             card.addView(empty, u.blockParams());
         } else {
             for (ShareItem item : shareItems) {
                 card.addView(fileRow(item));
             }
+            TextView continueAdd = u.text(string(R.string.send_continue_add), 13,
+                    Color.rgb(40, 112, 216), Typeface.BOLD);
+            continueAdd.setGravity(Gravity.CENTER);
+            continueAdd.setPadding(u.dp(8), u.dp(12), u.dp(8), u.dp(6));
+            continueAdd.setOnClickListener(v -> showAddTypeDialog());
+            card.addView(continueAdd, u.blockParams(0));
         }
-
-        LinearLayout actions = u.row();
-        Button add = u.secondaryButton(string(R.string.add_files));
-        add.setOnClickListener(v -> host.pickSendFiles());
-        Button addFolder = u.secondaryButton(string(R.string.add_folder));
-        addFolder.setOnClickListener(v -> host.pickSendFolder());
-        actions.addView(add, new LinearLayout.LayoutParams(0, u.dp(42), 1));
-        actions.addView(addFolder, new LinearLayout.LayoutParams(0, u.dp(42), 1));
-        card.addView(actions, u.blockParams());
 
         card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), true), u.blockParams(u.dp(14)));
         card.addView(passwordField());
@@ -160,6 +187,25 @@ final class SendController {
         return card;
     }
 
+    private View contentHeader() {
+        UiKit u = host.ui();
+        LinearLayout header = u.row();
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        String title = shareItems.isEmpty()
+                ? string(R.string.send_content_title)
+                : host.context().getString(R.string.send_content_title_count, shareItems.size());
+        header.addView(u.text(title, 13, Color.rgb(64, 81, 105), Typeface.BOLD),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (!shareItems.isEmpty()) {
+            Button clear = u.compactGhostButton(string(R.string.clear));
+            clear.setTextColor(Color.rgb(138, 46, 46));
+            clear.setOnClickListener(v -> clearItems());
+            header.addView(clear, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(32)));
+        }
+        return header;
+    }
+
     private View fileRow(ShareItem item) {
         UiKit u = host.ui();
         LinearLayout row = u.row();
@@ -167,7 +213,13 @@ final class SendController {
         row.setPadding(u.dp(12), u.dp(9), u.dp(12), u.dp(9));
         row.setBackground(u.rounded(Color.rgb(251, 253, 255), u.dp(7), Color.rgb(226, 232, 240), 1));
 
+        ImageView icon = new ImageView(host.context());
+        icon.setImageResource(iconFor(item));
+        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        row.addView(icon, new LinearLayout.LayoutParams(u.dp(48), u.dp(48)));
+
         LinearLayout labels = u.column();
+        labels.setPadding(u.dp(10), 0, u.dp(8), 0);
         TextView name = u.text(item.displayName(), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
         name.setSingleLine(true);
         labels.addView(name);
@@ -182,11 +234,106 @@ final class SendController {
         labels.addView(u.text(detail, 12, u.muted(), Typeface.NORMAL));
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
-        Button remove = u.ghostButton(string(R.string.remove));
+        Button remove = u.compactGhostButton("");
+        remove.setText("×");
+        remove.setTextSize(20);
+        remove.setTextColor(Color.rgb(138, 46, 46));
+        remove.setContentDescription(string(R.string.remove) + " " + item.displayName());
+        remove.setBackground(u.rounded(Color.rgb(241, 245, 249), u.dp(16), 0, 0));
         remove.setOnClickListener(v -> removeItem(item));
-        row.addView(remove, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(38)));
+        row.addView(remove, new LinearLayout.LayoutParams(u.dp(32), u.dp(32)));
         row.setLayoutParams(u.blockParams(u.dp(8)));
         return row;
+    }
+
+    private int iconFor(ShareItem item) {
+        if (item.isDirectory()) {
+            return R.drawable.ic_send_folder;
+        }
+        String mimeType = item.mimeType();
+        if (mimeType.startsWith("image/") || mimeType.startsWith("video/")) {
+            return R.drawable.ic_send_media;
+        }
+        if (mimeType.startsWith("text/")) {
+            return R.drawable.ic_send_text;
+        }
+        return R.drawable.ic_send_file;
+    }
+
+    private void showAddTypeDialog() {
+        UiKit u = host.ui();
+        LinearLayout choices = u.column();
+        choices.setPadding(u.dp(8), u.dp(4), u.dp(8), u.dp(4));
+        AlertDialog dialog = new AlertDialog.Builder(host.context())
+                .setTitle(R.string.send_add_type_title)
+                .setView(choices)
+                .setNegativeButton(R.string.cancel, null)
+                .create();
+        addChoice(choices, R.drawable.ic_send_file, R.string.add_files, () -> {
+            dialog.dismiss();
+            host.pickSendFiles();
+        });
+        addChoice(choices, R.drawable.ic_send_folder, R.string.add_folder, () -> {
+            dialog.dismiss();
+            host.pickSendFolder();
+        });
+        addChoice(choices, R.drawable.ic_send_media, R.string.add_media, () -> {
+            dialog.dismiss();
+            host.pickSendMedia();
+        });
+        addChoice(choices, R.drawable.ic_send_text, R.string.add_text, () -> {
+            dialog.dismiss();
+            showAuthoredTextDialog();
+        });
+        addChoice(choices, R.drawable.ic_send_clipboard, R.string.add_clipboard, () -> {
+            dialog.dismiss();
+            host.importSendClipboard();
+        });
+        dialog.show();
+    }
+
+    private void showAuthoredTextDialog() {
+        UiKit u = host.ui();
+        EditText input = new EditText(host.context());
+        input.setMinLines(5);
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setPadding(u.dp(12), u.dp(10), u.dp(12), u.dp(10));
+        input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
+        AlertDialog dialog = new AlertDialog.Builder(host.context())
+                .setTitle(R.string.add_text_title)
+                .setView(input)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.add_content_action, null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    String value = input.getText().toString();
+                    if (value.isEmpty()) {
+                        return;
+                    }
+                    host.addAuthoredSendText(value);
+                    dialog.dismiss();
+                }));
+        dialog.show();
+    }
+
+    private void addChoice(LinearLayout parent, int iconRes, int labelRes, Runnable action) {
+        UiKit u = host.ui();
+        LinearLayout row = u.row();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(u.dp(10), u.dp(8), u.dp(10), u.dp(8));
+        ImageView icon = new ImageView(host.context());
+        icon.setImageResource(iconRes);
+        row.addView(icon, new LinearLayout.LayoutParams(u.dp(28), u.dp(28)));
+        TextView label = u.text(string(labelRes), 15, u.ink(), Typeface.BOLD);
+        label.setPadding(u.dp(12), 0, 0, 0);
+        row.addView(label, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.setMinimumHeight(u.dp(48));
+        row.setOnClickListener(v -> action.run());
+        parent.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private View passwordField() {
@@ -414,6 +561,9 @@ final class SendController {
     }
 
     void resetForFreshLaunch() {
+        for (ShareItem item : new ArrayList<>(shareItems)) {
+            deleteOwned(item);
+        }
         shareItems.clear();
         useUdp = false;
         passwordVisible = false;
