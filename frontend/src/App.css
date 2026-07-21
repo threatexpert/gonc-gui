@@ -619,6 +619,30 @@ textarea:focus {
   color: #405169;
 }
 
+.path-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.path-row .reveal-share-path {
+  position: static;
+  background: transparent;
+  color: #47647f;
+}
+
+.path-row:hover .reveal-share-path,
+.path-row:focus-within .reveal-share-path {
+  opacity: 0.78;
+  pointer-events: auto;
+}
+
+.path-row .reveal-share-path:hover,
+.path-row .reveal-share-path:focus-visible {
+  background: #e8f0f8;
+  opacity: 1;
+}
+
 .check input {
   width: 18px;
   min-height: 18px;

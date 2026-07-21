@@ -32,6 +32,8 @@ export function RemoteFiles(arg1:string):Promise<main.RemoteListResponse>;
 
 export function RevealReceivedFile(arg1:string,arg2:httpdownload.FileInfo):Promise<main.ReceivedFileActionResult>;
 
+export function RevealSharePath(arg1:string):Promise<main.ReceivedFileActionResult>;
+
 export function SaveVPNProfiles(arg1:vpnprofile.Store):Promise<void>;
 
 export function SelectFiles():Promise<Array<string>>;

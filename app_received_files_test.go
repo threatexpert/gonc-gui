@@ -43,3 +43,10 @@ func TestClassifyRevealErrorDistinguishesUnavailableFromLaunchFailure(t *testing
 		t.Fatalf("launch result = %+v", launch)
 	}
 }
+
+func TestRevealSharePathRejectsMissingPath(t *testing.T) {
+	result := (&App{}).RevealSharePath(filepath.Join(t.TempDir(), "missing.txt"))
+	if !result.Unavailable || result.Error == "" {
+		t.Fatalf("result = %+v, want unavailable error", result)
+	}
+}

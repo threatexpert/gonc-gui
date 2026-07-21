@@ -129,6 +129,15 @@ test('send content picker exposes all choices and persistent list controls', () 
   }
 });
 
+test('send rows reveal their local path with the received-file control style', () => {
+  const app = readFileSync('src/App.tsx', 'utf8');
+  const css = readFileSync('src/App.css', 'utf8');
+  assert.match(app, /RevealSharePath/);
+  assert.match(app, /className="reveal-received-file reveal-share-path"/);
+  assert.match(app, /className="reveal-folder-icon"/);
+  assert.match(css, /\.path-row:hover \.reveal-share-path/);
+});
+
 test('picker uses decorative inline outline SVG icons', () => {
   const iconPath = 'src/SendContentOptionIcon.tsx';
   assert.equal(existsSync(iconPath), true, 'icon component must exist');

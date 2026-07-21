@@ -54,6 +54,10 @@ export function RevealReceivedFile(arg1, arg2) {
   return window['go']['main']['App']['RevealReceivedFile'](arg1, arg2);
 }
 
+export function RevealSharePath(arg1) {
+  return window['go']['main']['App']['RevealSharePath'](arg1);
+}
+
 export function SaveVPNProfiles(arg1) {
   return window['go']['main']['App']['SaveVPNProfiles'](arg1);
 }

@@ -90,6 +90,13 @@ func TestRevealRejectsChangedFileBeforeStartingProcess(t *testing.T) {
 	}
 }
 
+func TestRevealPathRejectsMissingPathBeforeStartingProcess(t *testing.T) {
+	err := RevealPath(filepath.Join(t.TempDir(), "missing.txt"))
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error=%v, want ErrUnavailable", err)
+	}
+}
+
 func assertAvailable(t *testing.T, states []State, remotePath string, want bool) {
 	t.Helper()
 	for _, state := range states {

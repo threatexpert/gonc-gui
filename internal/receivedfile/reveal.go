@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -19,6 +20,27 @@ func Reveal(saveDir string, file httpdownload.FileInfo) error {
 	}
 	target, contained := resolveContainedPath(saveDir, file)
 	if !contained {
+		return ErrUnavailable
+	}
+	name, args, err := commandFor(runtime.GOOS, target)
+	if err != nil {
+		return err
+	}
+	if err = exec.Command(name, args...).Start(); err == nil || runtime.GOOS != "linux" {
+		return err
+	}
+	return exec.Command("xdg-open", filepath.Dir(target)).Start()
+}
+
+func RevealPath(path string) error {
+	if path == "" {
+		return ErrUnavailable
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if _, err = os.Stat(target); err != nil {
 		return ErrUnavailable
 	}
 	name, args, err := commandFor(runtime.GOOS, target)

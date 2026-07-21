@@ -50,6 +50,7 @@ import {
   RemoteFiles,
   ReleaseGeneratedSharePaths,
   RevealReceivedFile,
+  RevealSharePath,
   SaveVPNProfiles,
   SelectFiles,
   SelectFolder,
@@ -2233,6 +2234,17 @@ function App() {
     );
   }
 
+  async function revealSharePath(path: string) {
+    try {
+      const result = await RevealSharePath(path);
+      if (result.error) {
+        setError(localizeError(result.error));
+      }
+    } catch (err) {
+      setError(localizeError(String(err)));
+    }
+  }
+
   async function clearSharePaths() {
     await queueSharePathMutation(
       () => [],
@@ -2620,7 +2632,12 @@ function App() {
                       {sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
-                          <button disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
+                          <div className="path-row-actions">
+                            <button className="reveal-received-file reveal-share-path" onClick={() => revealSharePath(path)} aria-label={revealFileLabel} title={revealFileLabel}>
+                              <span className="reveal-folder-icon" aria-hidden="true" />
+                            </button>
+                            <button disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
+                          </div>
                         </div>
                       ))}
                       <button

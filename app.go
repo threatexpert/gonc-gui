@@ -241,6 +241,10 @@ func (a *App) RevealReceivedFile(saveDir string, file httpdownload.FileInfo) Rec
 	return classifyRevealError(receivedfile.Reveal(saveDir, file))
 }
 
+func (a *App) RevealSharePath(path string) ReceivedFileActionResult {
+	return classifyRevealError(receivedfile.RevealPath(path))
+}
+
 func classifyRevealError(err error) ReceivedFileActionResult {
 	if err == nil {
 		return ReceivedFileActionResult{}
