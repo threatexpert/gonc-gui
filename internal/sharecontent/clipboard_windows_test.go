@@ -312,6 +312,15 @@ func TestDecodeDIBV4V5EmbeddedBITFIELDS(t *testing.T) {
 	}
 }
 
+func TestDecodeDIBV5EmbeddedAlphaMask(t *testing.T) {
+	masks := [4]uint32{0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000}
+	got, err := decodeDIB(makeEmbeddedBITFIELDSDIB(124, 32, masks, 0x80402010))
+	if err != nil {
+		t.Fatalf("decodeDIB() error = %v", err)
+	}
+	assertRGB(t, got.At(0, 0), color.RGBA{R: 0x40, G: 0x20, B: 0x10, A: 0x80})
+}
+
 func TestDecodeDIBV4RejectsInvalidEmbeddedMasks(t *testing.T) {
 	for _, masks := range [][4]uint32{
 		{0xff, 0xff, 0xff0000, 0},

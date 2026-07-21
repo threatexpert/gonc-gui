@@ -349,7 +349,7 @@ func decodeDIB(data []byte) (image.Image, error) {
 		return nil, fmt.Errorf("DIB is too large: %d bytes", len(data))
 	}
 	if bitfields {
-		return decodeBitfields(data[pixelOffset:pixelOffset+pixelBytes], int(width), int(height), topDown, depth, [3]uint32{masks[0], masks[1], masks[2]}, int(rowBytes))
+		return decodeBitfields(data[pixelOffset:pixelOffset+pixelBytes], int(width), int(height), topDown, depth, masks, int(rowBytes))
 	}
 
 	bmpData := make([]byte, 14+len(data))
@@ -383,7 +383,7 @@ func validateBitfieldMasks(depth uint16, masks [4]uint32) error {
 	return nil
 }
 
-func decodeBitfields(data []byte, width, height int, topDown bool, depth uint16, masks [3]uint32, rowBytes int) (image.Image, error) {
+func decodeBitfields(data []byte, width, height int, topDown bool, depth uint16, masks [4]uint32, rowBytes int) (image.Image, error) {
 	result := image.NewRGBA(image.Rect(0, 0, width, height))
 	bytesPerPixel := int(depth / 8)
 	for sourceY := 0; sourceY < height; sourceY++ {
@@ -399,11 +399,15 @@ func decodeBitfields(data []byte, width, height int, topDown bool, depth uint16,
 			} else {
 				packed = binary.LittleEndian.Uint32(data[offset : offset+4])
 			}
+			alpha := uint8(255)
+			if masks[3] != 0 {
+				alpha = bitfieldChannel(packed, masks[3])
+			}
 			result.SetRGBA(x, destinationY, color.RGBA{
 				R: bitfieldChannel(packed, masks[0]),
 				G: bitfieldChannel(packed, masks[1]),
 				B: bitfieldChannel(packed, masks[2]),
-				A: 255,
+				A: alpha,
 			})
 		}
 	}

@@ -45,6 +45,7 @@ type App struct {
 	shareContent          *sharecontent.Manager
 	importNativeClipboard func() (sharecontent.ClipboardResult, error)
 	clipboardGetText      func(context.Context) (string, error)
+	createShareText       func(string, string) (string, error)
 }
 
 type TransferRequest struct {
@@ -127,6 +128,7 @@ func NewApp(startupSharePaths []string) *App {
 		shareContent:          shareContent,
 		importNativeClipboard: shareContent.ImportNativeClipboard,
 		clipboardGetText:      wailsruntime.ClipboardGetText,
+		createShareText:       shareContent.CreateText,
 	}
 }
 
@@ -161,7 +163,7 @@ func (a *App) CreateTextShare(text string) (string, error) {
 	if text == "" {
 		return "", errors.New("text content is empty")
 	}
-	return a.shareContent.CreateText("text", text)
+	return a.createShareText("text", text)
 }
 
 func (a *App) ImportClipboard() (sharecontent.ClipboardResult, error) {
@@ -174,13 +176,16 @@ func (a *App) ImportClipboard() (sharecontent.ClipboardResult, error) {
 	}
 	text, err := a.clipboardGetText(a.ctx)
 	if err != nil {
-		return sharecontent.ClipboardResult{}, fmt.Errorf("read clipboard text: %w", err)
+		return sharecontent.ClipboardResult{}, fmt.Errorf("%w: read clipboard text: %w", sharecontent.ErrClipboardAccess, err)
 	}
 	if text == "" {
 		return sharecontent.ClipboardResult{}, sharecontent.ErrClipboardUnsupported
 	}
-	path, err := a.shareContent.CreateText("clipboard-text", text)
-	return sharecontent.ClipboardResult{Paths: []string{path}, Kind: sharecontent.ClipboardText}, err
+	path, err := a.createShareText("clipboard-text", text)
+	if err != nil {
+		return sharecontent.ClipboardResult{}, fmt.Errorf("%w: create clipboard text: %w", sharecontent.ErrClipboardTemporaryFile, err)
+	}
+	return sharecontent.ClipboardResult{Paths: []string{path}, Kind: sharecontent.ClipboardText}, nil
 }
 
 func (a *App) ReleaseGeneratedSharePaths(paths []string) error {

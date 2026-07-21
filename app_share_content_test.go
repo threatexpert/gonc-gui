@@ -160,8 +160,23 @@ func TestImportClipboardWrapsWailsTextReadError(t *testing.T) {
 	app.clipboardGetText = func(context.Context) (string, error) { return "", want }
 
 	_, err := app.ImportClipboard()
-	if !errors.Is(err, want) || err.Error() != "read clipboard text: clipboard unavailable" {
-		t.Fatalf("error = %v, want wrapped clipboard read error", err)
+	if !errors.Is(err, sharecontent.ErrClipboardAccess) || !errors.Is(err, want) {
+		t.Fatalf("error = %v, want clipboard access code wrapping cause", err)
+	}
+}
+
+func TestImportClipboardWrapsFallbackTemporaryFileError(t *testing.T) {
+	app := NewApp(nil)
+	app.importNativeClipboard = func() (sharecontent.ClipboardResult, error) {
+		return sharecontent.ClipboardResult{}, sharecontent.ErrClipboardUnsupported
+	}
+	app.clipboardGetText = func(context.Context) (string, error) { return "text", nil }
+	want := errors.New("disk full")
+	app.createShareText = func(string, string) (string, error) { return "", want }
+
+	_, err := app.ImportClipboard()
+	if !errors.Is(err, sharecontent.ErrClipboardTemporaryFile) || !errors.Is(err, want) {
+		t.Fatalf("error = %v, want temporary-file code wrapping cause", err)
 	}
 }
 
