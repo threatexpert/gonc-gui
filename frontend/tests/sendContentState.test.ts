@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {
   appendUniquePaths,
   dropHintMode,
+  nextAddPickerState,
   removePath,
   textCanSubmit,
-  type AddPickerState,
 } from '../src/sendContentState.js';
 
 test('paths can be cleared while preserving deterministic append order', () => {
@@ -18,9 +18,12 @@ test('authored text rejects only an empty string', () => {
   assert.equal(textCanSubmit('   '), true);
 });
 
-test('picker state supports closed, chooser, and authored text transitions', () => {
-  const transitions: AddPickerState[] = ['closed', 'choose', 'text', 'closed'];
-  assert.deepEqual(transitions, ['closed', 'choose', 'text', 'closed']);
+test('picker transitions between closed, chooser, and authored text states', () => {
+  assert.equal(nextAddPickerState('closed', 'open'), 'choose');
+  assert.equal(nextAddPickerState('choose', 'text'), 'text');
+  assert.equal(nextAddPickerState('text', 'back'), 'choose');
+  assert.equal(nextAddPickerState('choose', 'close'), 'closed');
+  assert.equal(nextAddPickerState('text', 'close'), 'closed');
 });
 
 test('drop hint is empty without paths and compact with paths', () => {
