@@ -5,6 +5,7 @@ package sharecontent
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -71,34 +72,58 @@ func (m *Manager) ImportNativeClipboard() (ClipboardResult, error) {
 
 func (m *Manager) importNativeClipboard(backend clipboardBackend) (ClipboardResult, error) {
 	if err := backend.open(); err != nil {
-		return ClipboardResult{}, err
-	}
-	defer backend.close()
-
-	if paths, ok, err := backend.readFiles(); ok || err != nil {
-		if err != nil {
+		if errors.Is(err, ErrClipboardBusy) {
 			return ClipboardResult{}, err
 		}
+		return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardAccess, err)
+	}
+	closed := false
+	closeClipboard := func() {
+		if !closed {
+			backend.close()
+			closed = true
+		}
+	}
+	defer closeClipboard()
+
+	invalidPaths := false
+	if paths, ok, err := backend.readFiles(); ok || err != nil {
+		if err != nil {
+			return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardAccess, err)
+		}
+		originalCount := len(paths)
 		paths = existingPaths(paths)
 		if len(paths) > 0 {
 			return ClipboardResult{Paths: paths, Kind: ClipboardFiles}, nil
 		}
+		invalidPaths = originalCount > 0
 	}
 	if img, ok, err := backend.readImage(); ok || err != nil {
 		if err != nil {
-			return ClipboardResult{}, err
+			return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardAccess, err)
 		}
+		closeClipboard()
 		path, err := m.CreatePNG("clipboard-image", img)
-		return ClipboardResult{Paths: []string{path}, Kind: ClipboardImage}, err
+		if err != nil {
+			return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardTemporaryFile, err)
+		}
+		return ClipboardResult{Paths: []string{path}, Kind: ClipboardImage}, nil
 	}
 	if text, ok, err := backend.readText(); ok || err != nil {
 		if err != nil {
-			return ClipboardResult{}, err
+			return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardAccess, err)
 		}
 		if text != "" {
+			closeClipboard()
 			path, err := m.CreateText("clipboard-text", text)
-			return ClipboardResult{Paths: []string{path}, Kind: ClipboardText}, err
+			if err != nil {
+				return ClipboardResult{}, fmt.Errorf("%w: %v", ErrClipboardTemporaryFile, err)
+			}
+			return ClipboardResult{Paths: []string{path}, Kind: ClipboardText}, nil
 		}
+	}
+	if invalidPaths {
+		return ClipboardResult{}, ErrClipboardInvalidPaths
 	}
 	return ClipboardResult{}, ErrClipboardEmpty
 }
@@ -274,18 +299,12 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if planes != 1 {
 		return nil, fmt.Errorf("invalid DIB plane count %d", planes)
 	}
-	packedBitfields := headerSize == 40 && compression == 3 && (depth == 16 || depth == 32)
-	if depth != 8 && depth != 24 && depth != 32 && !(packedBitfields && depth == 16) {
+	bitfields := compression == 3 && (depth == 16 || depth == 32)
+	if depth != 8 && depth != 24 && depth != 32 && !(bitfields && depth == 16) {
 		return nil, fmt.Errorf("unsupported DIB depth %d", depth)
 	}
-	if compression != 0 && !packedBitfields {
-		defaultMasks := headerSize > 40 && binary.LittleEndian.Uint32(data[40:44]) == 0xff0000 &&
-			binary.LittleEndian.Uint32(data[44:48]) == 0xff00 &&
-			binary.LittleEndian.Uint32(data[48:52]) == 0xff &&
-			binary.LittleEndian.Uint32(data[52:56]) == 0xff000000
-		if compression != 3 || !defaultMasks {
-			return nil, fmt.Errorf("unsupported DIB compression %d", compression)
-		}
+	if compression != 0 && !bitfields {
+		return nil, fmt.Errorf("unsupported DIB compression %d", compression)
 	}
 
 	paletteEntries := uint64(0)
@@ -299,18 +318,27 @@ func decodeDIB(data []byte) (image.Image, error) {
 		}
 	}
 	pixelOffset := uint64(headerSize) + paletteEntries*4
-	var masks [3]uint32
-	if packedBitfields {
-		if len(data) < 52 {
+	var masks [4]uint32
+	if bitfields {
+		maskEnd := 56
+		if headerSize == 40 {
+			maskEnd = 52
+		}
+		if len(data) < maskEnd {
 			return nil, fmt.Errorf("DIB bit masks are truncated")
 		}
-		for index := range masks {
+		for index := 0; index < 3; index++ {
 			masks[index] = binary.LittleEndian.Uint32(data[40+index*4 : 44+index*4])
+		}
+		if headerSize > 40 {
+			masks[3] = binary.LittleEndian.Uint32(data[52:56])
 		}
 		if err := validateBitfieldMasks(depth, masks); err != nil {
 			return nil, err
 		}
-		pixelOffset += 12
+		if headerSize == 40 {
+			pixelOffset += 12
+		}
 	}
 	rowBytes := (uint64(width)*uint64(depth) + 31) / 32 * 4
 	pixelBytes := rowBytes * uint64(height)
@@ -320,8 +348,8 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if uint64(len(data)) > uint64(^uint32(0))-14 {
 		return nil, fmt.Errorf("DIB is too large: %d bytes", len(data))
 	}
-	if packedBitfields {
-		return decodeBitfields(data[pixelOffset:pixelOffset+pixelBytes], int(width), int(height), topDown, depth, masks, int(rowBytes))
+	if bitfields {
+		return decodeBitfields(data[pixelOffset:pixelOffset+pixelBytes], int(width), int(height), topDown, depth, [3]uint32{masks[0], masks[1], masks[2]}, int(rowBytes))
 	}
 
 	bmpData := make([]byte, 14+len(data))
@@ -336,9 +364,12 @@ func decodeDIB(data []byte) (image.Image, error) {
 	return img, nil
 }
 
-func validateBitfieldMasks(depth uint16, masks [3]uint32) error {
+func validateBitfieldMasks(depth uint16, masks [4]uint32) error {
 	var used uint32
-	for _, mask := range masks {
+	for index, mask := range masks {
+		if index == 3 && mask == 0 {
+			continue
+		}
 		if mask == 0 || mask&used != 0 {
 			return fmt.Errorf("invalid overlapping or empty DIB bit masks %#x", masks)
 		}

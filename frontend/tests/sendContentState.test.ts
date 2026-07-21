@@ -5,6 +5,8 @@ import {
   appendUniquePaths,
   clipboardErrorKey,
   createSharePathTransactionCoordinator,
+  createShareStartCoordinator,
+  latchSendRunningAfterStart,
   dropHintMode,
   nextAddPickerState,
   removePath,
@@ -56,17 +58,23 @@ test('drop hint is empty without paths and compact with paths', () => {
   assert.equal(dropHintMode(['a']), 'compact');
 });
 
-test('clipboard errors distinguish empty content from unsupported platform formats', () => {
-  assert.equal(clipboardErrorKey('clipboard is empty'), 'empty');
-  assert.equal(clipboardErrorKey('Error: native clipboard is unsupported'), 'platformUnsupported');
-  assert.equal(clipboardErrorKey('clipboard format is unsupported'), 'platformUnsupported');
-  assert.equal(clipboardErrorKey('clipboard is busy'), 'busy');
+test('clipboard stable codes classify every actionable failure without backend prose', () => {
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_EMPTY'), 'empty');
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_UNSUPPORTED'), 'platformUnsupported');
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_BUSY'), 'busy');
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_ACCESS: GetClipboardData failed'), 'access');
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_INVALID_PATHS'), 'invalidPaths');
+  assert.equal(clipboardErrorKey('Error: GONC_CLIPBOARD_TEMPORARY_FILE: create failed'), 'temporaryFile');
   assert.equal(clipboardErrorKey('other clipboard failure'), null);
 
   const app = readFileSync('src/App.tsx', 'utf8');
-  assert.match(app, /clipboardPlatformUnsupported: '当前平台不支持从剪贴板导入文件或图片。请复制文字后重试。'/);
-  assert.match(app, /clipboardPlatformUnsupported: 'This platform does not support importing clipboard files or images\. Copy text and try again\.'/);
-  assert.match(app, /case 'platformUnsupported':\s*return t\.clipboardPlatformUnsupported/);
+  for (const key of ['clipboardEmpty', 'clipboardPlatformUnsupported', 'clipboardBusy', 'clipboardAccess', 'clipboardInvalidPaths', 'clipboardTemporaryFile']) {
+    assert.equal((app.match(new RegExp(`${key}:`, 'g')) || []).length, 2, `${key} must have zh/en text`);
+  }
+  for (const key of ['platformUnsupported', 'busy', 'access', 'invalidPaths', 'temporaryFile']) {
+    assert.match(app, new RegExp(`case '${key}':\\s*return t\\.`));
+  }
+  assert.doesNotMatch(app, /localized === raw \? t\.clipboardImportFailed/);
 });
 
 test('send content picker exposes all choices and persistent list controls', () => {
@@ -91,7 +99,7 @@ test('running share list changes synchronize transactionally instead of by effec
 test('picker operations use a synchronous pending guard against rapid duplicate actions', () => {
   const app = readFileSync('src/App.tsx', 'utf8');
   assert.match(app, /pickerPendingRef\.current = true/);
-  assert.match(app, /if \(pickerPendingRef\.current \|\| shareMutationPendingRef\.current\)/);
+  assert.match(app, /if \(pickerPendingRef\.current \|\| shareMutationPendingRef\.current \|\| startPendingRef\.current\)/);
   assert.match(app, /pickerPendingRef\.current = false/);
 });
 
@@ -149,6 +157,93 @@ test('coordinator serializes rapid mutations against the last committed list', a
   ]);
   assert.deepEqual(commits, [['a', 'b'], ['a', 'b', 'c']]);
   assert.deepEqual(pending, [true, false]);
+});
+
+test('startup waits for an admitted mutation then reads the latest committed paths', async () => {
+  let current = ['a'];
+  const updateGate = deferred();
+  const starts: string[][] = [];
+  const coordinator = createCoordinator({
+    getPaths: () => current,
+    isRunning: () => true,
+    update: async () => { await updateGate.promise; },
+    commit: (paths) => { current = paths; },
+    release: async () => undefined,
+    clearError: () => undefined,
+    showError: () => undefined,
+    formatError: String,
+    onPendingChange: () => undefined,
+  });
+  const mutation = coordinator.enqueue({propose: (paths) => [...paths, 'b']});
+  const startup = createShareStartCoordinator(coordinator, () => current);
+  const start = startup.run(async (paths) => { starts.push([...paths]); });
+  await flushPromises();
+  assert.deepEqual(starts, []);
+  updateGate.resolve();
+  await Promise.all([mutation, start]);
+  assert.deepEqual(starts, [['a', 'b']]);
+});
+
+test('startup reservation synchronously rejects later list mutations', async () => {
+  let current = ['a'];
+  const startGate = deferred();
+  const coordinator = createCoordinator({
+    getPaths: () => current,
+    isRunning: () => false,
+    update: async () => undefined,
+    commit: (paths) => { current = paths; },
+    release: async () => undefined,
+    clearError: () => undefined,
+    showError: () => undefined,
+    formatError: String,
+    onPendingChange: () => undefined,
+  });
+  const startup = createShareStartCoordinator(coordinator, () => current);
+  const start = startup.run(async () => { await startGate.promise; });
+  assert.equal(startup.isPending(), true);
+  assert.deepEqual(
+    await coordinator.enqueue({propose: (paths) => [...paths, 'b']}),
+    {ok: false, changed: false, error: 'startupPending'},
+  );
+  assert.deepEqual(current, ['a']);
+  startGate.resolve();
+  await start;
+  assert.equal(startup.isPending(), false);
+});
+
+test('startup rejection releases generated content that cannot be admitted', async () => {
+  const released: string[][] = [];
+  const coordinator = createCoordinator({
+    getPaths: () => ['a'],
+    isRunning: () => false,
+    update: async () => undefined,
+    commit: () => undefined,
+    release: async (paths) => { released.push([...paths]); },
+    clearError: () => undefined,
+    showError: () => undefined,
+    formatError: String,
+    onPendingChange: () => undefined,
+  });
+  const gate = deferred();
+  const startup = createShareStartCoordinator(coordinator, () => ['a']);
+  const start = startup.run(async () => { await gate.promise; });
+  await coordinator.enqueue({propose: (paths) => [...paths, 'generated.txt'], generatedOnFailure: ['generated.txt']});
+  assert.deepEqual(released, [['generated.txt']]);
+  gate.resolve();
+  await start;
+});
+
+test('successful send startup latches the running predicate before mutations resume', () => {
+  let running = false;
+  latchSendRunningAfterStart('send', (value) => { running = value; });
+  assert.equal(running, true);
+
+  running = false;
+  latchSendRunningAfterStart('receive', (value) => { running = value; });
+  assert.equal(running, false);
+
+  const app = readFileSync('src/App.tsx', 'utf8');
+  assert.match(app, /await StartTransfer\([\s\S]*?latchSendRunningAfterStart\(mode, \(running\) => \{ sendRunningRef\.current = running; \}\)/);
 });
 
 test('a later queued success clears an earlier operation failure when execution begins', async () => {
@@ -311,12 +406,12 @@ test('no-op skips backend and commit while releasing an unused generated path', 
   assert.deepEqual(released, [['unused.txt']]);
 });
 
-test('text modal disables editing and submission for either pending source', () => {
+test('text modal disables editing and submission for mutation, picker, or startup pending', () => {
   const app = readFileSync('src/App.tsx', 'utf8');
-  assert.match(app, /textarea[^>]*disabled=\{pickerPending \|\| shareMutationPending\}/s);
-  assert.match(app, /type="submit"[^>]*disabled=\{pickerPending \|\| shareMutationPending \|\| !textCanSubmit\(authoredText\)\}/s);
-  assert.match(app, /className="add-picker-close" disabled=\{pickerPending \|\| shareMutationPending\}/);
-  assert.match(app, /type="button" className="secondary" disabled=\{pickerPending \|\| shareMutationPending\}/);
-  assert.match(app, /function closeAddPicker[\s\S]*?if \(\(pickerPendingRef\.current \|\| shareMutationPendingRef\.current\) && !force\)/);
+  assert.match(app, /textarea[^>]*disabled=\{pickerPending \|\| shareMutationPending \|\| startPending\}/s);
+  assert.match(app, /type="submit"[^>]*disabled=\{pickerPending \|\| shareMutationPending \|\| startPending \|\| !textCanSubmit\(authoredText\)\}/s);
+  assert.match(app, /className="add-picker-close" disabled=\{pickerPending \|\| shareMutationPending \|\| startPending\}/);
+  assert.match(app, /type="button" className="secondary" disabled=\{pickerPending \|\| shareMutationPending \|\| startPending\}/);
+  assert.match(app, /function closeAddPicker[\s\S]*?if \(\(pickerPendingRef\.current \|\| shareMutationPendingRef\.current \|\| startPendingRef\.current\) && !force\)/);
   assert.match(app, /if \(event\.key === 'Escape'\)[\s\S]*?closeAddPicker\(\)/);
 });

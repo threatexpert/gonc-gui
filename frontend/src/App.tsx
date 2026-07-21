@@ -10,7 +10,9 @@ import {
   appendUniquePaths,
   clipboardErrorKey,
   createSharePathTransactionCoordinator,
+  createShareStartCoordinator,
   dropHintMode,
+  latchSendRunningAfterStart,
   nextAddPickerState,
   removePath,
   textCanSubmit,
@@ -308,10 +310,14 @@ const text = {
     stopBeforeEdit: '请先停止发送任务，再修改分享列表。',
     dropHint: '拖放文件或目录到这里',
     dropHintCompact: '也可以继续拖放文件或目录到这里',
-    clipboardEmpty: '剪贴板为空。',
+    clipboardEmpty: '剪贴板为空，请先复制文件、图片或文字。',
     clipboardPlatformUnsupported: '当前平台不支持从剪贴板导入文件或图片。请复制文字后重试。',
     clipboardBusy: '剪贴板正忙，请稍后重试。',
+    clipboardAccess: '无法读取剪贴板。请关闭可能占用剪贴板的应用后重试。',
+    clipboardInvalidPaths: '剪贴板中的文件已不存在。请重新复制有效文件，或改为复制图片或文字。',
+    clipboardTemporaryFile: '无法创建临时分享文件。请检查临时目录权限和可用空间。',
     clipboardImportFailed: '导入剪贴板失败。',
+    shareStartupPending: '正在启动共享，文件列表暂时无法更改。',
     remove: '移除',
     saveDir: '保存目录',
     savePlaceholder: '选择下载文件保存的位置',
@@ -510,10 +516,14 @@ const text = {
     stopBeforeEdit: 'Stop the sender before changing the shared list.',
     dropHint: 'Drop files or folders here',
     dropHintCompact: 'You can also drop more files or folders here',
-    clipboardEmpty: 'The clipboard is empty.',
+    clipboardEmpty: 'The clipboard is empty. Copy files, an image, or text first.',
     clipboardPlatformUnsupported: 'This platform does not support importing clipboard files or images. Copy text and try again.',
     clipboardBusy: 'The clipboard is busy. Try again shortly.',
+    clipboardAccess: 'The clipboard could not be read. Close apps that may be holding it and try again.',
+    clipboardInvalidPaths: 'The clipboard files no longer exist. Copy valid files again, or copy an image or text.',
+    clipboardTemporaryFile: 'A temporary share file could not be created. Check temporary-folder permissions and free space.',
     clipboardImportFailed: 'Failed to import clipboard content.',
+    shareStartupPending: 'Sharing is starting. Wait before changing the file list.',
     remove: 'Remove',
     saveDir: 'Save directory',
     savePlaceholder: 'Choose where downloaded files will be saved',
@@ -768,6 +778,7 @@ function App() {
   const shareMutationPendingRef = useRef(false);
   const [shareMutationPending, setShareMutationPending] = useState(false);
   const shareCoordinatorRef = useRef<ReturnType<typeof createSharePathTransactionCoordinator> | null>(null);
+  const shareStartCoordinatorRef = useRef<ReturnType<typeof createShareStartCoordinator> | null>(null);
   const [addPickerState, setAddPickerState] = useState<AddPickerState>('closed');
   const [authoredText, setAuthoredText] = useState('');
   const [pickerError, setPickerError] = useState('');
@@ -931,10 +942,14 @@ function App() {
         setShareMutationPending(pending);
       },
     });
+    shareStartCoordinatorRef.current = createShareStartCoordinator(
+      shareCoordinatorRef.current,
+      () => sharePathsRef.current,
+    );
   }
   const isWindows = runtimePlatform === 'windows';
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
-  const canStart = !startPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
+  const canStart = !startPending && !shareMutationPending && !pickerPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
   const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !receivedActionsUnavailable);
   const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !receivedActionsUnavailable);
@@ -1250,7 +1265,7 @@ function App() {
   }
 
   async function addFiles() {
-    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current) {
       return;
     }
     pickerPendingRef.current = true;
@@ -1272,7 +1287,7 @@ function App() {
   }
 
   async function addFolder() {
-    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current) {
       return;
     }
     pickerPendingRef.current = true;
@@ -1722,6 +1737,7 @@ function App() {
     }
     startPendingRef.current = gate.pending;
     setStartPending(gate.pending);
+    return shareStartCoordinatorRef.current!.run(async (startupSharePaths) => {
     setError('');
     const passphrase = activePassword.trim();
     const clientRunId = isFileTransferMode(mode) ? ++transferRunSequence.current : 0;
@@ -1760,7 +1776,7 @@ function App() {
       await StartTransfer({
         mode,
         password: passphrase,
-        sharePaths,
+        sharePaths: startupSharePaths,
         saveDir,
         downloadSubPath: currentRemotePath,
         useUDP: mode === 'vpnServer' ? vpnServerUseUDP : (mode === 'vpnClient' ? vpnClientUseUDP : useUDP),
@@ -1777,6 +1793,7 @@ function App() {
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
         ...(isFileTransferMode(mode) ? {clientRunId} : {}),
       });
+      latchSendRunningAfterStart(mode, (running) => { sendRunningRef.current = running; });
       transferStarted = true;
       if (mode === 'receive') {
         resetReceivedDownloadStateForNewConnection();
@@ -1797,6 +1814,7 @@ function App() {
       startPendingRef.current = false;
       setStartPending(false);
     }
+    });
   }
 
   async function stop() {
@@ -2160,7 +2178,11 @@ function App() {
       releaseAfterSuccess,
     });
     if (!result.ok) {
-      onFailure?.(result.error);
+      const message = result.error === 'startupPending' ? t.shareStartupPending : result.error;
+      if (result.error === 'startupPending') {
+        setError(message);
+      }
+      onFailure?.(message);
     }
     return result.ok;
   }
@@ -2212,7 +2234,7 @@ function App() {
   }
 
   function closeAddPicker(force = false) {
-    if ((pickerPendingRef.current || shareMutationPendingRef.current) && !force) {
+    if ((pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current) && !force) {
       return;
     }
     setPickerError('');
@@ -2227,7 +2249,7 @@ function App() {
   }
 
   function returnToAddChoices() {
-    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current) {
       return;
     }
     setPickerError('');
@@ -2259,7 +2281,7 @@ function App() {
   }
 
   async function submitAuthoredText() {
-    if (pickerPendingRef.current || shareMutationPendingRef.current || !textCanSubmit(authoredText)) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current || !textCanSubmit(authoredText)) {
       return;
     }
     pickerPendingRef.current = true;
@@ -2284,7 +2306,7 @@ function App() {
   }
 
   async function importClipboardShare() {
-    if (pickerPendingRef.current || shareMutationPendingRef.current) {
+    if (pickerPendingRef.current || shareMutationPendingRef.current || startPendingRef.current) {
       return;
     }
     pickerPendingRef.current = true;
@@ -2302,8 +2324,7 @@ function App() {
       }
     } catch (err) {
       const raw = String(err);
-      const localized = localizeError(raw);
-      setPickerError(localized === raw ? t.clipboardImportFailed : `${t.clipboardImportFailed} ${localized}`);
+      setPickerError(clipboardErrorKey(raw) ? localizeError(raw) : t.clipboardImportFailed);
     } finally {
       pickerPendingRef.current = false;
       setPickerPending(false);
@@ -2379,6 +2400,12 @@ function App() {
         return t.clipboardPlatformUnsupported;
       case 'busy':
         return t.clipboardBusy;
+      case 'access':
+        return t.clipboardAccess;
+      case 'invalidPaths':
+        return t.clipboardInvalidPaths;
+      case 'temporaryFile':
+        return t.clipboardTemporaryFile;
     }
     return message;
   }
@@ -2571,7 +2598,7 @@ function App() {
                     <label>{t.sharedList}</label>
                     <div className="share-list-tools">
                       <span>{sharePaths.length} {t.files}</span>
-                      <button className="clear-share-paths" disabled={sharePaths.length === 0 || shareMutationPending || pickerPending} onClick={clearSharePaths}>× {t.clearSharePaths}</button>
+                      <button className="clear-share-paths" disabled={sharePaths.length === 0 || shareMutationPending || pickerPending || startPending} onClick={clearSharePaths}>× {t.clearSharePaths}</button>
                     </div>
                   </div>
                   <div className="drop-zone">
@@ -2579,7 +2606,7 @@ function App() {
                       {sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
-                          <button disabled={shareMutationPending || pickerPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
+                          <button disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
                         </div>
                       ))}
                       <p className={`drop-hint ${dropHintMode(sharePaths)}`}>
@@ -2587,7 +2614,7 @@ function App() {
                       </p>
                     </div>
                   </div>
-                  <button ref={addPickerButtonRef} className="primary-light add-share-content" disabled={shareMutationPending || pickerPending} onClick={openAddPicker}>+ {t.add}</button>
+                  <button ref={addPickerButtonRef} className="primary-light add-share-content" disabled={shareMutationPending || pickerPending || startPending} onClick={openAddPicker}>+ {t.add}</button>
                 </div>
               </>
             ) : mode === 'receive' ? (
@@ -3041,21 +3068,21 @@ function App() {
           >
             <div className="add-picker-heading">
               <h2 id="add-picker-title">{addPickerState === 'text' ? t.textShareTitle : t.addPickerTitle}</h2>
-              <button className="add-picker-close" disabled={pickerPending || shareMutationPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
+              <button className="add-picker-close" disabled={pickerPending || shareMutationPending || startPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
             </div>
             {addPickerState === 'choose' ? (
               <div className="add-picker-options">
-                <button autoFocus disabled={pickerPending || shareMutationPending} onClick={addFiles}>{t.addFileChoice}</button>
-                <button disabled={pickerPending || shareMutationPending} onClick={addFolder}>{t.addFolderChoice}</button>
-                <button disabled={pickerPending || shareMutationPending} onClick={showTextPicker}>{t.addTextChoice}</button>
-                <button disabled={pickerPending || shareMutationPending} onClick={importClipboardShare}>{t.addClipboardChoice}</button>
+                <button autoFocus disabled={pickerPending || shareMutationPending || startPending} onClick={addFiles}>{t.addFileChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={addFolder}>{t.addFolderChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={showTextPicker}>{t.addTextChoice}</button>
+                <button disabled={pickerPending || shareMutationPending || startPending} onClick={importClipboardShare}>{t.addClipboardChoice}</button>
               </div>
             ) : (
               <form className="add-text-form" onSubmit={(event) => { event.preventDefault(); submitAuthoredText(); }}>
-                <textarea autoFocus value={authoredText} disabled={pickerPending || shareMutationPending} onChange={(event) => setAuthoredText(event.target.value)} placeholder={t.textSharePlaceholder} />
+                <textarea autoFocus value={authoredText} disabled={pickerPending || shareMutationPending || startPending} onChange={(event) => setAuthoredText(event.target.value)} placeholder={t.textSharePlaceholder} />
                 <div className="add-picker-actions">
-                  <button type="button" className="secondary" disabled={pickerPending || shareMutationPending} onClick={returnToAddChoices}>{t.back}</button>
-                  <button type="submit" className="primary" disabled={pickerPending || shareMutationPending || !textCanSubmit(authoredText)}>{pickerPending || shareMutationPending ? t.pending : t.textShareSubmit}</button>
+                  <button type="button" className="secondary" disabled={pickerPending || shareMutationPending || startPending} onClick={returnToAddChoices}>{t.back}</button>
+                  <button type="submit" className="primary" disabled={pickerPending || shareMutationPending || startPending || !textCanSubmit(authoredText)}>{pickerPending || shareMutationPending || startPending ? t.pending : t.textShareSubmit}</button>
                 </div>
               </form>
             )}

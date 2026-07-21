@@ -5,6 +5,7 @@ package sharecontent
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
 	"os"
@@ -79,6 +80,40 @@ func TestImportClipboardFallsBackFromMissingFilesToImage(t *testing.T) {
 	}
 }
 
+func TestImportClipboardReportsInvalidPathsOnlyAfterFallbacksAreExhausted(t *testing.T) {
+	backend := &fakeClipboardBackend{paths: []string{filepath.Join(t.TempDir(), "missing")}, filesOK: true}
+	_, err := newManagerAt(t.TempDir()).importNativeClipboard(backend)
+	if !errors.Is(err, ErrClipboardInvalidPaths) {
+		t.Fatalf("error = %v, want ErrClipboardInvalidPaths", err)
+	}
+}
+
+func TestImportClipboardClosesBeforeCreatingTemporaryText(t *testing.T) {
+	manager := newManagerAt(filepath.Join(t.TempDir(), "blocked"))
+	if err := os.WriteFile(manager.root, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backend := &fakeClipboardBackend{text: "text", textOK: true}
+	_, err := manager.importNativeClipboard(backend)
+	if !errors.Is(err, ErrClipboardTemporaryFile) {
+		t.Fatalf("error = %v, want ErrClipboardTemporaryFile", err)
+	}
+	if !reflect.DeepEqual(backend.calls, []string{"open", "files", "image", "text", "close"}) {
+		t.Fatalf("calls = %#v; clipboard must close before temp-file failure returns", backend.calls)
+	}
+}
+
+func TestImportClipboardClassifiesAccessFailure(t *testing.T) {
+	backend := &fakeClipboardBackend{filesOK: true, filesErr: errors.New("GetClipboardData failed")}
+	_, err := newManagerAt(t.TempDir()).importNativeClipboard(backend)
+	if !errors.Is(err, ErrClipboardAccess) {
+		t.Fatalf("error = %v, want ErrClipboardAccess", err)
+	}
+	if !reflect.DeepEqual(backend.calls, []string{"open", "files", "close"}) {
+		t.Fatalf("calls = %#v", backend.calls)
+	}
+}
+
 func TestImportClipboardFallsBackToUnicodeText(t *testing.T) {
 	manager := newManagerAt(t.TempDir())
 	backend := &fakeClipboardBackend{text: "中文😀", textOK: true}
@@ -128,13 +163,14 @@ func TestDecodeUnicodeText(t *testing.T) {
 }
 
 type fakeClipboardBackend struct {
-	calls   []string
-	paths   []string
-	filesOK bool
-	image   image.Image
-	imageOK bool
-	text    string
-	textOK  bool
+	calls    []string
+	paths    []string
+	filesOK  bool
+	filesErr error
+	image    image.Image
+	imageOK  bool
+	text     string
+	textOK   bool
 }
 
 func (backend *fakeClipboardBackend) open() error {
@@ -148,7 +184,7 @@ func (backend *fakeClipboardBackend) close() {
 
 func (backend *fakeClipboardBackend) readFiles() ([]string, bool, error) {
 	backend.calls = append(backend.calls, "files")
-	return backend.paths, backend.filesOK, nil
+	return backend.paths, backend.filesOK, backend.filesErr
 }
 
 func (backend *fakeClipboardBackend) readImage() (image.Image, bool, error) {
@@ -253,6 +289,41 @@ func TestDecodeDIBBITFIELDS32(t *testing.T) {
 	assertRGB(t, got.At(1, 0), color.RGBA{G: 255, A: 255})
 }
 
+func TestDecodeDIBV4V5EmbeddedBITFIELDS(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		header uint32
+		depth  uint16
+		masks  [4]uint32
+		pixel  uint32
+		want   color.RGBA
+	}{
+		{name: "V4 standard zero alpha", header: 108, depth: 32, masks: [4]uint32{0xff0000, 0xff00, 0xff, 0}, pixel: 0xff0000, want: color.RGBA{R: 255, A: 255}},
+		{name: "V5 custom 32", header: 124, depth: 32, masks: [4]uint32{0x000003ff, 0x000ffc00, 0x3ff00000, 0}, pixel: 0x000003ff, want: color.RGBA{R: 255, A: 255}},
+		{name: "V4 RGB565", header: 108, depth: 16, masks: [4]uint32{0xf800, 0x07e0, 0x001f, 0}, pixel: 0x07e0, want: color.RGBA{G: 255, A: 255}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := decodeDIB(makeEmbeddedBITFIELDSDIB(test.header, test.depth, test.masks, test.pixel))
+			if err != nil {
+				t.Fatalf("decodeDIB() error = %v", err)
+			}
+			assertRGB(t, got.At(0, 0), test.want)
+		})
+	}
+}
+
+func TestDecodeDIBV4RejectsInvalidEmbeddedMasks(t *testing.T) {
+	for _, masks := range [][4]uint32{
+		{0xff, 0xff, 0xff0000, 0},
+		{0x55, 0xff00, 0xff0000, 0},
+		{0x10000, 0x03e0, 0x001f, 0},
+	} {
+		if _, err := decodeDIB(makeEmbeddedBITFIELDSDIB(108, 16, masks, 0)); err == nil {
+			t.Fatalf("masks %#v succeeded, want error", masks)
+		}
+	}
+}
+
 func TestDecodeDIBBITFIELDSScalingDoesNotOverflow(t *testing.T) {
 	masks := [3]uint32{0xffffff80, 0x00000070, 0x0000000f}
 	pixels := make([]byte, 4)
@@ -306,6 +377,26 @@ func makeBITFIELDSDIB(width, height int32, depth uint16, masks [3]uint32, pixels
 		binary.LittleEndian.PutUint32(data[40+index*4:44+index*4], mask)
 	}
 	copy(data[52:], pixels)
+	return data
+}
+
+func makeEmbeddedBITFIELDSDIB(header uint32, depth uint16, masks [4]uint32, pixel uint32) []byte {
+	row := 4
+	data := make([]byte, int(header)+row)
+	binary.LittleEndian.PutUint32(data[0:4], header)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	binary.LittleEndian.PutUint32(data[8:12], ^uint32(0))
+	binary.LittleEndian.PutUint16(data[12:14], 1)
+	binary.LittleEndian.PutUint16(data[14:16], depth)
+	binary.LittleEndian.PutUint32(data[16:20], 3)
+	for index, mask := range masks {
+		binary.LittleEndian.PutUint32(data[40+index*4:44+index*4], mask)
+	}
+	if depth == 16 {
+		binary.LittleEndian.PutUint16(data[header:], uint16(pixel))
+	} else {
+		binary.LittleEndian.PutUint32(data[header:], pixel)
+	}
 	return data
 }
 

@@ -19,9 +19,12 @@ type ClipboardResult struct {
 }
 
 var (
-	ErrClipboardEmpty       = errors.New("clipboard is empty")
-	ErrClipboardUnsupported = errors.New("native clipboard is unsupported")
-	ErrClipboardBusy        = errors.New("clipboard is busy")
+	ErrClipboardEmpty         = errors.New("GONC_CLIPBOARD_EMPTY")
+	ErrClipboardUnsupported   = errors.New("GONC_CLIPBOARD_UNSUPPORTED")
+	ErrClipboardBusy          = errors.New("GONC_CLIPBOARD_BUSY")
+	ErrClipboardAccess        = errors.New("GONC_CLIPBOARD_ACCESS")
+	ErrClipboardInvalidPaths  = errors.New("GONC_CLIPBOARD_INVALID_PATHS")
+	ErrClipboardTemporaryFile = errors.New("GONC_CLIPBOARD_TEMPORARY_FILE")
 )
 
 func existingPaths(paths []string) []string {

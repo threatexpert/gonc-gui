@@ -30,17 +30,35 @@ export const textCanSubmit = (text: string) => text.length > 0;
 
 export const dropHintMode = (paths: string[]) => paths.length === 0 ? 'empty' : 'compact';
 
-export type ClipboardErrorKey = 'empty' | 'platformUnsupported' | 'busy';
+export function latchSendRunningAfterStart(
+  mode: string,
+  setRunning: (running: boolean) => void,
+) {
+  if (mode === 'send') {
+    setRunning(true);
+  }
+}
+
+export type ClipboardErrorKey = 'empty' | 'platformUnsupported' | 'busy' | 'access' | 'invalidPaths' | 'temporaryFile';
 
 export function clipboardErrorKey(message: string): ClipboardErrorKey | null {
-  if (message.includes('clipboard is empty')) {
+  if (message.includes('GONC_CLIPBOARD_EMPTY')) {
     return 'empty';
   }
-  if (message.includes('native clipboard is unsupported') || message.includes('clipboard format is unsupported')) {
+  if (message.includes('GONC_CLIPBOARD_UNSUPPORTED')) {
     return 'platformUnsupported';
   }
-  if (message.includes('clipboard is busy')) {
+  if (message.includes('GONC_CLIPBOARD_BUSY')) {
     return 'busy';
+  }
+  if (message.includes('GONC_CLIPBOARD_ACCESS')) {
+    return 'access';
+  }
+  if (message.includes('GONC_CLIPBOARD_INVALID_PATHS')) {
+    return 'invalidPaths';
+  }
+  if (message.includes('GONC_CLIPBOARD_TEMPORARY_FILE')) {
+    return 'temporaryFile';
   }
   return null;
 }
@@ -75,6 +93,7 @@ export function createSharePathTransactionCoordinator(
 ) {
   let tail: Promise<void> = Promise.resolve();
   let pendingCount = 0;
+  let startupPending = false;
 
   async function execute(mutation: SharePathMutation): Promise<SharePathMutationResult> {
     dependencies.clearError();
@@ -112,6 +131,12 @@ export function createSharePathTransactionCoordinator(
   }
 
   function enqueue(mutation: SharePathMutation): Promise<SharePathMutationResult> {
+    if (startupPending) {
+      const release = mutation.generatedOnFailure?.length
+        ? dependencies.release(mutation.generatedOnFailure).catch(() => undefined)
+        : Promise.resolve();
+      return release.then(() => ({ok: false, changed: false, error: 'startupPending'}));
+    }
     pendingCount += 1;
     if (pendingCount === 1) {
       dependencies.onPendingChange(true);
@@ -126,5 +151,33 @@ export function createSharePathTransactionCoordinator(
     });
   }
 
-  return {enqueue};
+  return {
+    enqueue,
+    whenIdle: () => tail,
+    setStartupPending: (pending: boolean) => { startupPending = pending; },
+  };
+}
+
+export function createShareStartCoordinator(
+  mutations: ReturnType<typeof createSharePathTransactionCoordinator>,
+  getPaths: () => string[],
+) {
+  let pending = false;
+
+  async function run<T>(start: (paths: string[]) => Promise<T>): Promise<T> {
+    if (pending) {
+      throw new Error('startupPending');
+    }
+    pending = true;
+    mutations.setStartupPending(true);
+    try {
+      await mutations.whenIdle();
+      return await start([...getPaths()]);
+    } finally {
+      mutations.setStartupPending(false);
+      pending = false;
+    }
+  }
+
+  return {run, isPending: () => pending};
 }
