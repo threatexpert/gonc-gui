@@ -18,13 +18,17 @@ import (
 const generatedDirectory = "gonc-gui-share"
 
 type Manager struct {
-	mu    sync.Mutex
-	root  string
-	owned map[string]struct{}
+	mu            sync.Mutex
+	root          string
+	owned         map[string]struct{}
+	exclusiveRoot bool
 }
 
 func NewManager() *Manager {
-	return newManagerAt(filepath.Join(os.TempDir(), generatedDirectory))
+	return &Manager{
+		owned:         make(map[string]struct{}),
+		exclusiveRoot: true,
+	}
 }
 
 func newManagerAt(root string) *Manager {
@@ -59,7 +63,7 @@ func (m *Manager) create(prefix, extension string, write func(*os.File) error) (
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := os.MkdirAll(m.root, 0700); err != nil {
+	if err := m.ensureRoot(); err != nil {
 		return "", fmt.Errorf("create generated file directory: %w", err)
 	}
 
@@ -119,10 +123,45 @@ func (m *Manager) Cleanup() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := os.RemoveAll(m.root); err != nil {
-		return fmt.Errorf("remove generated file directory: %w", err)
+	if m.exclusiveRoot {
+		if m.root == "" {
+			return nil
+		}
+		if err := os.RemoveAll(m.root); err != nil {
+			return fmt.Errorf("remove generated file directory: %w", err)
+		}
+		clear(m.owned)
+		m.root = ""
+		return nil
 	}
-	clear(m.owned)
+
+	var errs []error
+	for path := range m.owned {
+		if !m.contains(path) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			errs = append(errs, fmt.Errorf("remove generated file %q: %w", path, err))
+			continue
+		}
+		delete(m.owned, path)
+	}
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+
+	entries, err := os.ReadDir(m.root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect generated file directory: %w", err)
+	}
+	if len(entries) == 0 {
+		if err := os.Remove(m.root); err != nil {
+			return fmt.Errorf("remove generated file directory: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -145,4 +184,25 @@ func (m *Manager) contains(path string) bool {
 		return false
 	}
 	return relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func (m *Manager) ensureRoot() error {
+	if !m.exclusiveRoot {
+		return os.MkdirAll(m.root, 0700)
+	}
+	if m.root != "" {
+		return nil
+	}
+
+	root, err := os.MkdirTemp("", generatedDirectory+"-")
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.Abs(root)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		return err
+	}
+	m.root = filepath.Clean(resolved)
+	return nil
 }

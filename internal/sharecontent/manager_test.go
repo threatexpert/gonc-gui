@@ -124,3 +124,79 @@ func TestManagerCleanupRemovesOnlyOwnedRoot(t *testing.T) {
 		t.Fatal("cleaned path is still owned")
 	}
 }
+
+func TestManagerCleanupDoesNotDeleteAnotherManagersFiles(t *testing.T) {
+	first := NewManager()
+	t.Cleanup(func() { _ = first.Cleanup() })
+	second := NewManager()
+	t.Cleanup(func() { _ = second.Cleanup() })
+
+	firstPath, err := first.CreateText("text", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath, err := second.CreateText("text", "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(firstPath) == filepath.Dir(secondPath) {
+		t.Fatalf("managers share root %q", filepath.Dir(firstPath))
+	}
+
+	if err := first.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("second manager's file removed: %v", err)
+	}
+	if !second.Owns(secondPath) {
+		t.Fatal("second manager lost ownership of its file")
+	}
+}
+
+func TestManagerCleanupPreservesUnownedFileInsideConfiguredRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "shared")
+	m := newManagerAt(root)
+	owned, err := m.CreateText("text", "owned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unowned := filepath.Join(root, "unowned.txt")
+	if err := os.WriteFile(unowned, []byte("user"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(owned); !os.IsNotExist(err) {
+		t.Fatalf("owned file still exists: %v", err)
+	}
+	if got, err := os.ReadFile(unowned); err != nil || string(got) != "user" {
+		t.Fatalf("unowned file changed: content %q, err %v", got, err)
+	}
+}
+
+func TestManagerReleaseRetainsOwnershipWhenDeletionFails(t *testing.T) {
+	m := newManagerAt(filepath.Join(t.TempDir(), "generated"))
+	path, err := m.CreateText("text", "temporary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), []byte("block removal"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Release([]string{path}); err == nil {
+		t.Fatal("release succeeded despite failed deletion")
+	}
+	if !m.Owns(path) {
+		t.Fatal("failed release discarded ownership")
+	}
+}
