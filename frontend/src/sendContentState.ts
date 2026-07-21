@@ -23,12 +23,20 @@ export function nextAddPickerState(
 export const appendUniquePaths = (current: string[], added: string[]) =>
   Array.from(new Set([...current, ...added]));
 
+export function addedUniquePaths(current: string[], proposed: string[]): boolean {
+  return proposed.length > current.length;
+}
+
 export const removePath = (current: string[], removed: string) =>
   current.filter((path) => path !== removed);
 
 export const textCanSubmit = (text: string) => text.length > 0;
 
 export const dropHintMode = (paths: string[]) => paths.length === 0 ? 'empty' : 'compact';
+
+export function scrollListToBottom(list: {scrollTop: number; scrollHeight: number}) {
+  list.scrollTop = list.scrollHeight;
+}
 
 export function latchSendRunningAfterStart(
   mode: string,

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {
+  addedUniquePaths,
   appendUniquePaths,
   clipboardErrorKey,
   createSharePathTransactionCoordinator,
@@ -10,6 +11,7 @@ import {
   dropHintMode,
   nextAddPickerState,
   removePath,
+  scrollListToBottom,
   textCanSubmit,
   type SharePathTransactionDependencies,
 } from '../src/sendContentState.js';
@@ -56,6 +58,36 @@ test('picker transitions between closed, chooser, and authored text states', () 
 test('drop hint is empty without paths and compact with paths', () => {
   assert.equal(dropHintMode([]), 'empty');
   assert.equal(dropHintMode(['a']), 'compact');
+});
+
+test('only a newly committed unique path requests bottom scrolling', () => {
+  assert.equal(addedUniquePaths(['a'], ['a', 'b']), true);
+  assert.equal(addedUniquePaths(['a'], ['a']), false);
+  assert.equal(addedUniquePaths(['a', 'b'], ['a']), false);
+});
+
+test('scroll helper reveals the final list row', () => {
+  const list = {scrollTop: 10, scrollHeight: 240};
+  scrollListToBottom(list);
+  assert.equal(list.scrollTop, 240);
+});
+
+test('App scrolls only after a successful unique addition', () => {
+  const app = readFileSync('src/App.tsx', 'utf8');
+  assert.match(app, /const pathListRef = useRef<HTMLDivElement \| null>\(null\)/);
+  assert.match(app, /ref=\{pathListRef\}/);
+  const appendStart = app.indexOf('async function appendSharePaths');
+  const appendEnd = app.indexOf('  function appendLog', appendStart);
+  const appendSource = app.slice(appendStart, appendEnd);
+  assert.match(appendSource, /addedUniquePaths/);
+  assert.match(appendSource, /await queueSharePathMutation/);
+  assert.match(appendSource, /if \(succeeded && added\)/);
+  assert.match(appendSource, /requestAnimationFrame/);
+  assert.match(appendSource, /scrollListToBottom/);
+
+  const removeStart = app.indexOf('async function removeSharePath');
+  const removeEnd = app.indexOf('  function openAddPicker', removeStart);
+  assert.doesNotMatch(app.slice(removeStart, removeEnd), /scrollListToBottom|requestAnimationFrame/);
 });
 
 test('clipboard stable codes classify every actionable failure without backend prose', () => {

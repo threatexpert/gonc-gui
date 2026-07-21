@@ -7,6 +7,7 @@ import appIconUrl from './assets/images/appicon.png';
 import './App.css';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
+  addedUniquePaths,
   appendUniquePaths,
   clipboardErrorKey,
   createSharePathTransactionCoordinator,
@@ -15,6 +16,7 @@ import {
   latchSendRunningAfterStart,
   nextAddPickerState,
   removePath,
+  scrollListToBottom,
   textCanSubmit,
   type AddPickerState,
 } from './sendContentState';
@@ -784,6 +786,7 @@ function App() {
   const [pickerError, setPickerError] = useState('');
   const [pickerPending, setPickerPending] = useState(false);
   const pickerPendingRef = useRef(false);
+  const pathListRef = useRef<HTMLDivElement | null>(null);
   const addPickerButtonRef = useRef<HTMLButtonElement | null>(null);
   const addPickerDialogRef = useRef<HTMLElement | null>(null);
   const [saveDir, setSaveDir] = useState('');
@@ -2196,11 +2199,25 @@ function App() {
     if (filtered.length === 0) {
       return true;
     }
-    return queueSharePathMutation(
-      (current) => appendUniquePaths(current, filtered),
+    let added = false;
+    const succeeded = await queueSharePathMutation(
+      (current) => {
+        const proposed = appendUniquePaths(current, filtered);
+        added = addedUniquePaths(current, proposed);
+        return proposed;
+      },
       generatedOnFailure,
       onFailure,
     );
+    if (succeeded && added) {
+      window.requestAnimationFrame(() => {
+        const list = pathListRef.current;
+        if (list) {
+          scrollListToBottom(list);
+        }
+      });
+    }
+    return succeeded;
   }
 
   function appendLog(type: string, level: string, message: string) {
@@ -2602,7 +2619,7 @@ function App() {
                     </div>
                   </div>
                   <div className="drop-zone">
-                    <div className="path-list">
+                    <div ref={pathListRef} className="path-list">
                       {sharePaths.map((path) => (
                         <div className="path-row" key={path}>
                           <span>{path}</span>
