@@ -149,6 +149,7 @@ test('picker uses decorative inline outline SVG icons', () => {
   assert.match(css, /\.drop-hint-action:focus-visible/);
   assert.match(css, /\.drop-hint-action:disabled\s*\{[^}]*cursor:\s*not-allowed/s);
   assert.match(css, /\.add-picker-option-icon\s*\{/);
+  assert.match(css, /\.add-picker-options button\s*\{[^}]*flex-direction:\s*row/s);
 });
 
 test('running share list changes synchronize transactionally instead of by effect', () => {
