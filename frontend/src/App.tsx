@@ -8,6 +8,7 @@ import './App.css';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
   appendUniquePaths,
+  clipboardErrorKey,
   createSharePathTransactionCoordinator,
   dropHintMode,
   nextAddPickerState,
@@ -308,7 +309,7 @@ const text = {
     dropHint: '拖放文件或目录到这里',
     dropHintCompact: '也可以继续拖放文件或目录到这里',
     clipboardEmpty: '剪贴板为空。',
-    clipboardUnsupported: '剪贴板中没有可分享的文件、图片或文字。',
+    clipboardPlatformUnsupported: '当前平台不支持从剪贴板导入文件或图片。请复制文字后重试。',
     clipboardBusy: '剪贴板正忙，请稍后重试。',
     clipboardImportFailed: '导入剪贴板失败。',
     remove: '移除',
@@ -510,7 +511,7 @@ const text = {
     dropHint: 'Drop files or folders here',
     dropHintCompact: 'You can also drop more files or folders here',
     clipboardEmpty: 'The clipboard is empty.',
-    clipboardUnsupported: 'The clipboard has no shareable files, image, or text.',
+    clipboardPlatformUnsupported: 'This platform does not support importing clipboard files or images. Copy text and try again.',
     clipboardBusy: 'The clipboard is busy. Try again shortly.',
     clipboardImportFailed: 'Failed to import clipboard content.',
     remove: 'Remove',
@@ -2371,14 +2372,13 @@ function App() {
     if (message.includes('password is too weak')) {
       return t.weakPassword;
     }
-    if (message.includes('clipboard is empty')) {
-      return t.clipboardEmpty;
-    }
-    if (message.includes('native clipboard is unsupported')) {
-      return t.clipboardUnsupported;
-    }
-    if (message.includes('clipboard is busy')) {
-      return t.clipboardBusy;
+    switch (clipboardErrorKey(message)) {
+      case 'empty':
+        return t.clipboardEmpty;
+      case 'platformUnsupported':
+        return t.clipboardPlatformUnsupported;
+      case 'busy':
+        return t.clipboardBusy;
     }
     return message;
   }

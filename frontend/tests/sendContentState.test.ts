@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {
   appendUniquePaths,
+  clipboardErrorKey,
   createSharePathTransactionCoordinator,
   dropHintMode,
   nextAddPickerState,
@@ -53,6 +54,19 @@ test('picker transitions between closed, chooser, and authored text states', () 
 test('drop hint is empty without paths and compact with paths', () => {
   assert.equal(dropHintMode([]), 'empty');
   assert.equal(dropHintMode(['a']), 'compact');
+});
+
+test('clipboard errors distinguish empty content from unsupported platform formats', () => {
+  assert.equal(clipboardErrorKey('clipboard is empty'), 'empty');
+  assert.equal(clipboardErrorKey('Error: native clipboard is unsupported'), 'platformUnsupported');
+  assert.equal(clipboardErrorKey('clipboard format is unsupported'), 'platformUnsupported');
+  assert.equal(clipboardErrorKey('clipboard is busy'), 'busy');
+  assert.equal(clipboardErrorKey('other clipboard failure'), null);
+
+  const app = readFileSync('src/App.tsx', 'utf8');
+  assert.match(app, /clipboardPlatformUnsupported: '当前平台不支持从剪贴板导入文件或图片。请复制文字后重试。'/);
+  assert.match(app, /clipboardPlatformUnsupported: 'This platform does not support importing clipboard files or images\. Copy text and try again\.'/);
+  assert.match(app, /case 'platformUnsupported':\s*return t\.clipboardPlatformUnsupported/);
 });
 
 test('send content picker exposes all choices and persistent list controls', () => {

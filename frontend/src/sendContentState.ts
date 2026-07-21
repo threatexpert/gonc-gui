@@ -30,6 +30,21 @@ export const textCanSubmit = (text: string) => text.length > 0;
 
 export const dropHintMode = (paths: string[]) => paths.length === 0 ? 'empty' : 'compact';
 
+export type ClipboardErrorKey = 'empty' | 'platformUnsupported' | 'busy';
+
+export function clipboardErrorKey(message: string): ClipboardErrorKey | null {
+  if (message.includes('clipboard is empty')) {
+    return 'empty';
+  }
+  if (message.includes('native clipboard is unsupported') || message.includes('clipboard format is unsupported')) {
+    return 'platformUnsupported';
+  }
+  if (message.includes('clipboard is busy')) {
+    return 'busy';
+  }
+  return null;
+}
+
 export type SharePathMutation = {
   propose: (current: string[]) => string[];
   generatedOnFailure?: string[];
