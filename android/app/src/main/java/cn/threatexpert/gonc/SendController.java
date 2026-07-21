@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -33,6 +34,7 @@ final class SendController {
     private ModuleHost host;
     private final List<ShareItem> shareItems = new ArrayList<>();
     private final TransferMetrics metrics = new TransferMetrics();
+    private final SendThumbnailLoader thumbnailLoader;
 
     private boolean useUdp;
     private boolean passwordVisible;
@@ -42,9 +44,11 @@ final class SendController {
     private String status = "Idle";
     private GoncBridge.Session session;
     private long runId;
+    private long renderGeneration;
 
     SendController(ModuleHost host) {
         this.host = host;
+        this.thumbnailLoader = new SendThumbnailLoader(host.context());
     }
 
     /** Rebind to the current host after an Activity recreation (config change). */
@@ -147,6 +151,7 @@ final class SendController {
     View panel() {
         UiKit u = host.ui();
         LinearLayout card = u.card();
+        long generation = ++renderGeneration;
 
         card.addView(contentHeader(), u.blockParams(0));
         if (shareItems.isEmpty()) {
@@ -158,7 +163,7 @@ final class SendController {
             card.addView(empty, u.blockParams());
         } else {
             for (ShareItem item : shareItems) {
-                card.addView(fileRow(item));
+                card.addView(fileRow(item, generation));
             }
             TextView continueAdd = u.text(string(R.string.send_continue_add), 13,
                     Color.rgb(40, 112, 216), Typeface.BOLD);
@@ -206,17 +211,37 @@ final class SendController {
         return header;
     }
 
-    private View fileRow(ShareItem item) {
+    private View fileRow(ShareItem item, long generation) {
         UiKit u = host.ui();
         LinearLayout row = u.row();
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(u.dp(12), u.dp(9), u.dp(12), u.dp(9));
         row.setBackground(u.rounded(Color.rgb(251, 253, 255), u.dp(7), Color.rgb(226, 232, 240), 1));
 
+        FrameLayout preview = new FrameLayout(host.context());
         ImageView icon = new ImageView(host.context());
         icon.setImageResource(iconFor(item));
         icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        row.addView(icon, new LinearLayout.LayoutParams(u.dp(48), u.dp(48)));
+        String uriKey = item.uri().toString();
+        icon.setTag(uriKey);
+        preview.addView(icon, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        if (SendThumbnailLoader.isVideo(item.mimeType())) {
+            ImageView play = new ImageView(host.context());
+            play.setImageResource(R.drawable.ic_send_play);
+            play.setBackground(u.rounded(Color.argb(120, 15, 23, 42), u.dp(12), 0, 0));
+            FrameLayout.LayoutParams playParams = new FrameLayout.LayoutParams(u.dp(24), u.dp(24));
+            playParams.gravity = Gravity.CENTER;
+            preview.addView(play, playParams);
+        }
+        row.addView(preview, new LinearLayout.LayoutParams(u.dp(48), u.dp(48)));
+        thumbnailLoader.load(item, u.dp(48), generation, bitmap -> {
+            if (SendThumbnailLoader.isCurrent(generation, renderGeneration)
+                    && uriKey.equals(icon.getTag())) {
+                icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                icon.setImageBitmap(bitmap);
+            }
+        });
 
         LinearLayout labels = u.column();
         labels.setPadding(u.dp(10), 0, u.dp(8), 0);
@@ -546,6 +571,8 @@ final class SendController {
     }
 
     void shutdown() {
+        renderGeneration++;
+        thumbnailLoader.clear();
         GoncBridge.Session current = session;
         session = null;
         sendQrHasConnected = TransferInlineQrState.newSendRunLatch();
@@ -561,6 +588,8 @@ final class SendController {
     }
 
     void resetForFreshLaunch() {
+        renderGeneration++;
+        thumbnailLoader.clear();
         for (ShareItem item : new ArrayList<>(shareItems)) {
             deleteOwned(item);
         }

@@ -79,6 +79,17 @@ public class AndroidSendListContractTest {
         }
     }
 
+    @Test
+    public void mediaRowsLoadThumbnailsAndVideoRowsAddPlayOverlay() throws Exception {
+        String send = source("SendController.java");
+
+        assertTrue(send.contains("SendThumbnailLoader"));
+        assertTrue(send.contains("thumbnailLoader.load"));
+        assertTrue(send.contains("SendThumbnailLoader.isCurrent"));
+        assertTrue(send.contains("R.drawable.ic_send_play"));
+        assertTrue(send.contains("FrameLayout"));
+    }
+
     private static String source(String fileName) throws Exception {
         return read("src/main/java/cn/threatexpert/gonc/" + fileName);
     }
