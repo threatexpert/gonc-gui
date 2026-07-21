@@ -18,6 +18,9 @@
     <string name="passphrase_config">口令配置</string>
     <string name="add_files">添加文件</string>
     <string name="add_folder">添加目录</string>
+    <string name="toast_send_clipboard_unsupported">剪贴板中没有可添加的文字或图片</string>
+    <string name="toast_send_content_create_failed">无法添加此内容</string>
+    <string name="toast_send_media_partial_failed">已添加可用媒体，另有 %1$d 项无法读取</string>
     <string name="remove">移除</string>
     <string name="clear">清空</string>
     <string name="source">关于</string>

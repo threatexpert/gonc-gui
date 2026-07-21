@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.Manifest;
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -24,6 +25,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.text.Editable;
@@ -54,6 +56,9 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -80,6 +85,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private static final int REQUEST_STORAGE_PERMISSION = 1006;
     private static final int REQUEST_VPN_PERMISSION = 1007;
     private static final int REQUEST_NOTIFICATION_PERMISSION = 1008;
+    private static final int REQUEST_OPEN_SEND_MEDIA = 1009;
     private boolean notificationPermissionRequested;
     private static final int MAX_ACTIVITY_LOGS = 500;
     private static final int MAX_VISIBLE_ACTIVITY_LOGS = 80;
@@ -260,8 +266,12 @@ public final class MainActivity extends Activity implements ModuleHost {
             return;
         }
         if (requestCode == REQUEST_OPEN_DOCUMENT && resultCode == RESULT_OK && data != null) {
-            List<Uri> uris = collectUris(data);
+            List<Uri> uris = collectPickerUris(data);
             addUris(uris, data);
+            applyModule(MODULE_SEND, true);
+            render();
+        } else if (requestCode == REQUEST_OPEN_SEND_MEDIA && resultCode == RESULT_OK && data != null) {
+            addMediaUris(collectPickerUris(data), data);
             applyModule(MODULE_SEND, true);
             render();
         } else if (requestCode == REQUEST_OPEN_SEND_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
@@ -837,6 +847,23 @@ public final class MainActivity extends Activity implements ModuleHost {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(intent, REQUEST_OPEN_SEND_TREE);
+    }
+
+    private void openSendMediaPicker() {
+        Intent intent;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            intent.setType("*/*");
+            intent.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, MediaStore.getPickImagesMaxLimit());
+        } else {
+            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        }
+        startActivityForResult(intent, REQUEST_OPEN_SEND_MEDIA);
     }
 
     private void openSaveLocationPicker() {
@@ -1664,6 +1691,87 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     @Override
+    public void pickSendMedia() {
+        openSendMediaPicker();
+    }
+
+    @Override
+    public void importSendClipboard() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null || !clipboard.hasPrimaryClip()) {
+            toast(R.string.toast_send_clipboard_unsupported);
+            return;
+        }
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            toast(R.string.toast_send_clipboard_unsupported);
+            return;
+        }
+
+        Uri clipboardImageUri = null;
+        String clipboardImageMime = null;
+        ClipDescription description = clipboard.getPrimaryClipDescription();
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            Uri uri = clip.getItemAt(i).getUri();
+            if (uri == null) {
+                continue;
+            }
+            String mimeType = getContentResolver().getType(uri);
+            if (mimeType != null && mimeType.startsWith("image/")) {
+                clipboardImageUri = uri;
+                clipboardImageMime = mimeType;
+                break;
+            }
+            if (mimeType == null && clip.getItemCount() == 1
+                    && description != null && description.hasMimeType("image/*")) {
+                clipboardImageUri = uri;
+                clipboardImageMime = firstImageMime(description);
+                break;
+            }
+        }
+
+        if (clipboardImageUri != null) {
+            try {
+                InputStream input = getContentResolver().openInputStream(clipboardImageUri);
+                if (input == null) {
+                    throw new IOException("clipboard image cannot be opened");
+                }
+                String extension = GeneratedSendFiles.extensionForMime(clipboardImageMime);
+                File file = GeneratedSendFiles.copyImage(
+                        generatedSendRoot(), "clipboard-image", extension, input);
+                appendGeneratedFile(file,
+                        clipboardImageMime == null ? "image/*" : clipboardImageMime);
+                return;
+            } catch (IOException | RuntimeException error) {
+                appendLog("error", "Clipboard image import failed: " + error.getMessage());
+                toast(R.string.toast_send_content_create_failed);
+                return;
+            }
+        }
+
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            ClipData.Item item = clip.getItemAt(i);
+            if (item.getUri() != null) {
+                continue;
+            }
+            CharSequence coerced = item.coerceToText(this);
+            if (coerced != null && coerced.length() > 0) {
+                addGeneratedText("clipboard-text", coerced.toString());
+                return;
+            }
+        }
+        toast(R.string.toast_send_clipboard_unsupported);
+    }
+
+    @Override
+    public void addAuthoredSendText(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        addGeneratedText("text", text);
+    }
+
+    @Override
     public void pickSaveLocation() {
         openSaveLocationPicker();
     }
@@ -1786,6 +1894,18 @@ public final class MainActivity extends Activity implements ModuleHost {
         return new ArrayList<>(result.values());
     }
 
+    private List<Uri> collectPickerUris(Intent data) {
+        Map<String, Uri> result = new LinkedHashMap<>();
+        putUri(result, data.getData());
+        ClipData clips = data.getClipData();
+        if (clips != null) {
+            for (int i = 0; i < clips.getItemCount(); i++) {
+                putUri(result, clips.getItemAt(i).getUri());
+            }
+        }
+        return new ArrayList<>(result.values());
+    }
+
     private void putUri(Map<String, Uri> result, Uri uri) {
         if (uri != null) {
             result.put(uri.toString(), uri);
@@ -1799,6 +1919,74 @@ public final class MainActivity extends Activity implements ModuleHost {
             items.add(loadShareItem(uri));
         }
         sendController.addFiles(items);
+    }
+
+    private void addMediaUris(List<Uri> uris, Intent sourceIntent) {
+        List<ShareItem> items = new ArrayList<>();
+        int failed = 0;
+        for (Uri uri : uris) {
+            try {
+                String mimeType = getContentResolver().getType(uri);
+                if (mimeType == null
+                        || (!mimeType.startsWith("image/") && !mimeType.startsWith("video/"))) {
+                    failed++;
+                    continue;
+                }
+                try (InputStream input = getContentResolver().openInputStream(uri)) {
+                    if (input == null) {
+                        failed++;
+                        continue;
+                    }
+                }
+                takeReadPermission(uri, sourceIntent);
+                items.add(loadShareItem(uri));
+            } catch (IOException | RuntimeException error) {
+                failed++;
+            }
+        }
+        if (!items.isEmpty()) {
+            sendController.addFiles(items);
+        }
+        if (failed > 0) {
+            Toast.makeText(this, getString(R.string.toast_send_media_partial_failed, failed),
+                    Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void addGeneratedText(String source, String text) {
+        File file = null;
+        try {
+            file = GeneratedSendFiles.createText(generatedSendRoot(), source, text);
+            appendGeneratedFile(file, "text/plain");
+        } catch (IOException | RuntimeException error) {
+            if (file != null) {
+                GeneratedSendFiles.deleteOwned(generatedSendRoot(), file);
+            }
+            appendLog("error", "Generated send text failed: " + error.getMessage());
+            toast(R.string.toast_send_content_create_failed);
+        }
+    }
+
+    private void appendGeneratedFile(File file, String mimeType) {
+        ShareItem item = new ShareItem(Uri.fromFile(file), file.getName(), file.length(), mimeType,
+                false, false, file.lastModified(), file);
+        sendController.addFiles(Collections.singletonList(item));
+        applyModule(MODULE_SEND, true);
+        render();
+    }
+
+    private File generatedSendRoot() {
+        return new File(getCacheDir(), "generated-send");
+    }
+
+    private static String firstImageMime(ClipDescription description) {
+        for (int i = 0; i < description.getMimeTypeCount(); i++) {
+            String mimeType = description.getMimeType(i);
+            if (mimeType != null && mimeType.startsWith("image/")) {
+                return mimeType;
+            }
+        }
+        return "image/*";
     }
 
     private void addTreeUri(Uri uri, Intent sourceIntent) {

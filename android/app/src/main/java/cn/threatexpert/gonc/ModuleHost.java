@@ -39,6 +39,12 @@ interface ModuleHost {
 
     void pickSendFolder();
 
+    void pickSendMedia();
+
+    void importSendClipboard();
+
+    void addAuthoredSendText(String text);
+
     /** Open the system folder picker for the receive save location; result flows back via ReceiveController.setSaveLocation. */
     void pickSaveLocation();
 

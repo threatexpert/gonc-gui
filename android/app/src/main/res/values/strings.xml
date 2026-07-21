@@ -17,6 +17,9 @@
     <string name="passphrase_config">Passphrase settings</string>
     <string name="add_files">Add files</string>
     <string name="add_folder">Add folder</string>
+    <string name="toast_send_clipboard_unsupported">Clipboard has no text or image to add</string>
+    <string name="toast_send_content_create_failed">Could not add this content</string>
+    <string name="toast_send_media_partial_failed">Added available media; %1$d item(s) could not be read</string>
     <string name="remove">Remove</string>
     <string name="clear">Clear</string>
     <string name="source">About</string>
