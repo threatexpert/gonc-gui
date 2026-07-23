@@ -54,6 +54,7 @@ import {
   SaveVPNProfiles,
   SelectFiles,
   SelectFolder,
+  SetUILanguage,
   StartHTTPDownload,
   StartTransfer,
   Status,
@@ -883,6 +884,10 @@ function App() {
   ));
   const scanPasswordMode = useRef<Mode>('send');
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
+
+  useEffect(() => {
+    SetUILanguage(lang);
+  }, [lang]);
 
   useEffect(() => () => passwordRevealCoordinator.dispose(), []);
 

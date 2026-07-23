@@ -33,6 +33,7 @@ type App struct {
 	ctx context.Context
 
 	mu                    sync.Mutex
+	uiLanguage            string
 	sendRunner            *goncrunner.Runner
 	receiveRunner         *goncrunner.Runner
 	vpnServerRunner       *goncrunner.Runner
@@ -120,6 +121,7 @@ type VPNProfileStore = vpnprofile.Store
 func NewApp(startupSharePaths []string) *App {
 	shareContent := sharecontent.NewManager()
 	return &App{
+		uiLanguage:            "en",
 		sendRunner:            goncrunner.New(),
 		receiveRunner:         goncrunner.New(),
 		vpnServerRunner:       goncrunner.New(),
@@ -138,6 +140,77 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.cleanup(ctx)
+}
+
+func (a *App) SetUILanguage(language string) {
+	if language != "zh" {
+		language = "en"
+	}
+	a.mu.Lock()
+	a.uiLanguage = language
+	a.mu.Unlock()
+}
+
+func (a *App) currentUILanguage() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.uiLanguage
+}
+
+type closeDialogFunc func(context.Context, wailsruntime.MessageDialogOptions) (string, error)
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	return preventCloseForStatus(ctx, a.Status(), a.currentUILanguage(), wailsruntime.MessageDialog)
+}
+
+func preventCloseForStatus(ctx context.Context, status AppStatus, language string, show closeDialogFunc) bool {
+	var modules []string
+	if language == "zh" {
+		if status.SendRunning {
+			modules = append(modules, "文件发送")
+		}
+		if status.ReceiveRunning {
+			modules = append(modules, "文件接收")
+		}
+		if status.VPNServerRunning {
+			modules = append(modules, "VPN 服务端")
+		}
+		if status.VPNClientRunning {
+			modules = append(modules, "VPN 客户端")
+		}
+	} else {
+		if status.SendRunning {
+			modules = append(modules, "File sending")
+		}
+		if status.ReceiveRunning {
+			modules = append(modules, "File receiving")
+		}
+		if status.VPNServerRunning {
+			modules = append(modules, "VPN server")
+		}
+		if status.VPNClientRunning {
+			modules = append(modules, "VPN client")
+		}
+	}
+	if len(modules) == 0 {
+		return false
+	}
+
+	title := "Confirm exit"
+	message := "The following modules are running:\n\n• " + strings.Join(modules, "\n• ") + "\n\nExiting will stop them. Are you sure you want to exit?"
+	if language == "zh" {
+		title = "确认退出"
+		message = "以下功能模块正在运行：\n\n• " + strings.Join(modules, "\n• ") + "\n\n退出将停止这些模块，确定退出吗？"
+	}
+	answer, err := show(ctx, wailsruntime.MessageDialogOptions{
+		Type:          wailsruntime.QuestionDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{"Yes", "No"},
+		DefaultButton: "No",
+		CancelButton:  "No",
+	})
+	return err != nil || answer != "Yes"
 }
 
 func (a *App) SelectFiles() ([]string, error) {
