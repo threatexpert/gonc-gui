@@ -49,6 +49,102 @@ func TestParseUpstream(t *testing.T) {
 	}
 }
 
+func TestUpstreamPlanSingleDNSStaysSingleAttempt(t *testing.T) {
+	server := &Server{upstreams: make([]socksAddr, 1)}
+	got := server.upstreamPlan(time.Now())
+	want := []upstreamAttempt{{index: 0}}
+	assertAttempts(t, got, want)
+}
+
+func TestUpstreamPlanUsesPrimaryThenFallbacks(t *testing.T) {
+	server := &Server{upstreams: make([]socksAddr, 4)}
+	got := server.upstreamPlan(time.Now())
+	want := []upstreamAttempt{
+		{index: 0},
+		{index: 1, delay: 2 * time.Second},
+		{index: 2, delay: 4 * time.Second},
+		{index: 0, delay: 6 * time.Second},
+		{index: 1, delay: 6 * time.Second},
+		{index: 2, delay: 6 * time.Second},
+		{index: 3, delay: 6 * time.Second},
+		{index: 0, delay: 9 * time.Second},
+		{index: 1, delay: 9 * time.Second},
+		{index: 2, delay: 9 * time.Second},
+		{index: 3, delay: 9 * time.Second},
+	}
+	assertAttempts(t, got, want)
+}
+
+func TestUpstreamPlanKeepsPrimaryBeforeFailureThreshold(t *testing.T) {
+	now := time.Now()
+	server := &Server{upstreams: make([]socksAddr, 3)}
+	server.noteUpstreamResponse(0, 1, now, now.Add(3*time.Second))
+	server.noteUpstreamResponse(0, 1, now.Add(4*time.Second), now.Add(7*time.Second))
+
+	got := server.upstreamPlan(now.Add(8 * time.Second))
+	if got[0].index != 0 {
+		t.Fatalf("first upstream before threshold = %d, want 0", got[0].index)
+	}
+}
+
+func TestUpstreamPlanUsesHealthyFallbackAfterFailureThreshold(t *testing.T) {
+	now := time.Now()
+	server := &Server{upstreams: make([]socksAddr, 3)}
+	for i := 0; i < primaryFailureThreshold; i++ {
+		started := now.Add(time.Duration(i) * 4 * time.Second)
+		server.noteUpstreamResponse(0, 1, started, started.Add(3*time.Second))
+	}
+
+	got := server.upstreamPlan(now.Add(13 * time.Second))
+	want := []upstreamAttempt{
+		{index: 1},
+		{index: 2, delay: 2 * time.Second},
+		{index: 0, delay: 4 * time.Second},
+		{index: 0, delay: 6 * time.Second},
+		{index: 1, delay: 6 * time.Second},
+		{index: 2, delay: 6 * time.Second},
+		{index: 0, delay: 9 * time.Second},
+		{index: 1, delay: 9 * time.Second},
+		{index: 2, delay: 9 * time.Second},
+	}
+	assertAttempts(t, got, want)
+}
+
+func TestUpstreamPlanProbesPrimaryAndRestoresIt(t *testing.T) {
+	now := time.Now()
+	server := &Server{upstreams: make([]socksAddr, 3)}
+	var lastFailure time.Time
+	for i := 0; i < primaryFailureThreshold; i++ {
+		started := now.Add(time.Duration(i) * 4 * time.Second)
+		lastFailure = started.Add(3 * time.Second)
+		server.noteUpstreamResponse(0, 1, started, lastFailure)
+	}
+
+	got := server.upstreamPlan(lastFailure.Add(primaryRetryInterval + time.Second))
+	if got[0].index != 0 {
+		t.Fatalf("first probe upstream = %d, want 0", got[0].index)
+	}
+
+	started := lastFailure.Add(primaryRetryInterval + time.Second)
+	server.noteUpstreamResponse(0, 0, started, started.Add(time.Second))
+	got = server.upstreamPlan(started.Add(2 * time.Second))
+	if got[0].index != 0 {
+		t.Fatalf("first upstream after restore = %d, want 0", got[0].index)
+	}
+}
+
+func assertAttempts(t *testing.T, got []upstreamAttempt, want []upstreamAttempt) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("attempt count = %d, want %d; got %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("attempt %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestMonitorAssociationRebuildsAfterControlClose(t *testing.T) {
 	endpoint, count, cleanup := startTestSocks5UDPServer(t)
 	defer cleanup()

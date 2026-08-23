@@ -17,13 +17,17 @@ import (
 )
 
 const (
-	defaultDNSPort       = 53
-	udpBufferSize        = 64 * 1024
-	associationTimeout   = 8 * time.Second
-	listenRetryTimeout   = 5 * time.Second
-	listenRetryInterval  = 100 * time.Millisecond
-	requestTimeout       = 8 * time.Second
-	pendingSweepInterval = 3 * time.Second
+	defaultDNSPort          = 53
+	udpBufferSize           = 64 * 1024
+	associationTimeout      = 8 * time.Second
+	listenRetryTimeout      = 5 * time.Second
+	listenRetryInterval     = 100 * time.Millisecond
+	requestTimeout          = 8 * time.Second
+	multiRequestTimeout     = 10 * time.Second
+	pendingSweepInterval    = 3 * time.Second
+	primaryResponseWindow   = 2 * time.Second
+	primaryFailureThreshold = 3
+	primaryRetryInterval    = 30 * time.Second
 )
 
 type Server struct {
@@ -35,18 +39,34 @@ type Server struct {
 	wg   sync.WaitGroup
 	once sync.Once
 
-	assocMu   sync.RWMutex
-	assoc     *udpAssociation
-	reconnect sync.Mutex
-	mu        sync.Mutex
-	pending   map[uint16]pendingRequest
-	nextUp    int
+	assocMu       sync.RWMutex
+	assoc         *udpAssociation
+	reconnect     sync.Mutex
+	mu            sync.Mutex
+	pending       map[uint16]pendingRequest
+	activeUp      int
+	probeAt       time.Time
+	primaryMisses int
 }
 
 type pendingRequest struct {
-	client *net.UDPAddr
-	id     uint16
-	expire time.Time
+	group    *pendingGroup
+	upstream int
+}
+
+type pendingGroup struct {
+	client        *net.UDPAddr
+	id            uint16
+	started       time.Time
+	expire        time.Time
+	firstUpstream int
+	proxyIDs      []uint16
+	completed     bool
+}
+
+type upstreamAttempt struct {
+	index int
+	delay time.Duration
 }
 
 type socksAddr struct {
@@ -182,21 +202,12 @@ func (s *Server) serveClients() {
 		if n < 2 || client == nil {
 			continue
 		}
-		assoc := s.ensureAssociation()
-		if assoc == nil {
-			continue
-		}
 		packet := append([]byte(nil), buf[:n]...)
-		upstream := s.nextUpstream()
-		proxyID, ok := s.remember(client, binary.BigEndian.Uint16(packet[:2]))
-		if !ok {
+		if len(s.upstreams) == 1 {
+			s.forwardSingle(client, packet)
 			continue
 		}
-		binary.BigEndian.PutUint16(packet[:2], proxyID)
-		if err := assoc.WriteTo(upstream, packet); err != nil {
-			s.forget(proxyID)
-			s.rebuildAssociation(assoc)
-		}
+		go s.forwardWithFallback(client, packet)
 	}
 }
 
@@ -224,7 +235,7 @@ func (s *Server) serveResponses() {
 			continue
 		}
 		proxyID := binary.BigEndian.Uint16(payload[:2])
-		req, ok := s.take(proxyID)
+		req, ok := s.take(proxyID, time.Now())
 		if !ok {
 			continue
 		}
@@ -264,9 +275,13 @@ func (s *Server) sweepPending() {
 		case now := <-ticker.C:
 			expired := false
 			s.mu.Lock()
-			for id, req := range s.pending {
-				if now.After(req.expire) {
-					delete(s.pending, id)
+			for _, req := range s.pending {
+				group := req.group
+				if group != nil && !group.completed && now.After(group.expire) {
+					group.completed = true
+					for _, id := range group.proxyIDs {
+						delete(s.pending, id)
+					}
 					expired = true
 				}
 			}
@@ -335,34 +350,128 @@ func (s *Server) rebuildAssociation(trigger *udpAssociation) bool {
 
 func (s *Server) clearPending() {
 	s.mu.Lock()
-	for id := range s.pending {
+	for id, req := range s.pending {
+		if req.group != nil {
+			req.group.completed = true
+		}
 		delete(s.pending, id)
 	}
 	s.mu.Unlock()
 }
 
-func (s *Server) nextUpstream() socksAddr {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	upstream := s.upstreams[s.nextUp%len(s.upstreams)]
-	s.nextUp++
-	return upstream
+func (s *Server) forwardSingle(client *net.UDPAddr, packet []byte) {
+	assoc := s.ensureAssociation()
+	if assoc == nil {
+		return
+	}
+	now := time.Now()
+	group := s.newPendingGroup(client, binary.BigEndian.Uint16(packet[:2]), 0, now, requestTimeout)
+	s.sendAttempt(assoc, group, 0, packet)
 }
 
-func (s *Server) remember(client *net.UDPAddr, originalID uint16) (uint16, bool) {
-	deadline := time.Now().Add(requestTimeout)
+func (s *Server) forwardWithFallback(client *net.UDPAddr, packet []byte) {
+	started := time.Now()
+	attempts := s.upstreamPlan(started)
+	if len(attempts) == 0 {
+		return
+	}
+	group := s.newPendingGroup(client, binary.BigEndian.Uint16(packet[:2]), attempts[0].index, started, multiRequestTimeout)
+	for _, attempt := range attempts {
+		if wait := time.Until(started.Add(attempt.delay)); wait > 0 {
+			if s.sleepOrDone(wait) {
+				return
+			}
+		}
+		if !s.groupOpen(group) {
+			return
+		}
+		assoc := s.ensureAssociation()
+		if assoc == nil {
+			continue
+		}
+		s.sendAttempt(assoc, group, attempt.index, packet)
+	}
+}
+
+func (s *Server) sendAttempt(assoc *udpAssociation, group *pendingGroup, upstreamIndex int, packet []byte) {
+	proxyID, ok := s.remember(group, upstreamIndex)
+	if !ok {
+		return
+	}
+	attempt := append([]byte(nil), packet...)
+	binary.BigEndian.PutUint16(attempt[:2], proxyID)
+	if err := assoc.WriteTo(s.upstreams[upstreamIndex], attempt); err != nil {
+		s.forget(proxyID)
+		s.rebuildAssociation(assoc)
+	}
+}
+
+func (s *Server) upstreamPlan(now time.Time) []upstreamAttempt {
+	total := len(s.upstreams)
+	if total == 0 {
+		return nil
+	}
+	first := 0
+	if total > 1 {
+		s.mu.Lock()
+		if s.activeUp > 0 && now.Before(s.probeAt) {
+			first = s.activeUp
+		}
+		s.mu.Unlock()
+	}
+	if total == 1 {
+		return []upstreamAttempt{{index: first}}
+	}
+	second := (first + 1) % total
+	third := (first + 2) % total
+	attempts := []upstreamAttempt{{index: first}}
+	if second != first {
+		attempts = append(attempts, upstreamAttempt{index: second, delay: 2 * time.Second})
+	}
+	if total > 2 && third != first && third != second {
+		attempts = append(attempts, upstreamAttempt{index: third, delay: 4 * time.Second})
+	}
+	for _, delay := range []time.Duration{6 * time.Second, 9 * time.Second} {
+		for index := range s.upstreams {
+			attempts = append(attempts, upstreamAttempt{index: index, delay: delay})
+		}
+	}
+	return attempts
+}
+
+func (s *Server) newPendingGroup(client *net.UDPAddr, originalID uint16, firstUpstream int, started time.Time, timeout time.Duration) *pendingGroup {
+	return &pendingGroup{
+		client:        client,
+		id:            originalID,
+		started:       started,
+		expire:        started.Add(timeout),
+		firstUpstream: firstUpstream,
+	}
+}
+
+func (s *Server) groupOpen(group *pendingGroup) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !group.completed
+}
+
+func (s *Server) remember(group *pendingGroup, upstreamIndex int) (uint16, bool) {
 	for i := 0; i < 32; i++ {
 		id, err := randomUint16()
 		if err != nil {
 			return 0, false
 		}
 		s.mu.Lock()
+		if group.completed {
+			s.mu.Unlock()
+			return 0, false
+		}
 		if _, exists := s.pending[id]; !exists {
 			s.pending[id] = pendingRequest{
-				client: client,
-				id:     originalID,
-				expire: deadline,
+				group:    group,
+				upstream: upstreamIndex,
 			}
+			group.proxyIDs = append(group.proxyIDs, id)
 			s.mu.Unlock()
 			return id, true
 		}
@@ -371,14 +480,60 @@ func (s *Server) remember(client *net.UDPAddr, originalID uint16) (uint16, bool)
 	return 0, false
 }
 
-func (s *Server) take(id uint16) (pendingRequest, bool) {
+func (s *Server) take(id uint16, now time.Time) (pendingGroup, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	req, ok := s.pending[id]
-	if ok {
-		delete(s.pending, id)
+	if !ok || req.group == nil || req.group.completed {
+		return pendingGroup{}, false
 	}
-	return req, ok
+	group := req.group
+	group.completed = true
+	for _, proxyID := range group.proxyIDs {
+		delete(s.pending, proxyID)
+	}
+	if len(s.upstreams) > 1 {
+		s.noteUpstreamResponseLocked(group.firstUpstream, req.upstream, group.started, now)
+	}
+	return *group, true
+}
+
+func (s *Server) noteUpstreamResponseLocked(first int, winner int, started time.Time, now time.Time) {
+	if first == 0 {
+		primaryOnTime := !now.After(started.Add(primaryResponseWindow))
+		if winner == 0 && primaryOnTime {
+			s.activeUp = 0
+			s.probeAt = time.Time{}
+			s.primaryMisses = 0
+			return
+		}
+		s.primaryMisses++
+		if winner != 0 && s.primaryMisses >= primaryFailureThreshold {
+			s.activeUp = winner
+			s.probeAt = now.Add(primaryRetryInterval)
+			return
+		}
+		if s.activeUp > 0 {
+			s.probeAt = now.Add(primaryRetryInterval)
+		}
+		return
+	}
+	if winner == 0 {
+		s.activeUp = 0
+		s.probeAt = time.Time{}
+		s.primaryMisses = 0
+		return
+	}
+	if winner != first {
+		s.activeUp = winner
+		s.probeAt = now.Add(primaryRetryInterval)
+	}
+}
+
+func (s *Server) noteUpstreamResponse(first int, winner int, started time.Time, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noteUpstreamResponseLocked(first, winner, started, now)
 }
 
 func (s *Server) forget(id uint16) {
