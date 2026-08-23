@@ -282,6 +282,7 @@ const text = {
     vpnProfileNewName: '新配置',
     vpnProfileNew: '新增',
     vpnProfileDelete: '删除',
+    vpnProfileDeleteConfirm: '确定删除 VPN 配置“{name}”吗？此操作不可撤销。',
     vpnProfileImport: '截图导入',
     vpnProfileExport: '导出二维码',
     vpnProfileName: '名称',
@@ -488,6 +489,7 @@ const text = {
     vpnProfileNewName: 'New profile',
     vpnProfileNew: 'New',
     vpnProfileDelete: 'Delete',
+    vpnProfileDeleteConfirm: 'Delete VPN profile "{name}"? This cannot be undone.',
     vpnProfileImport: 'Screenshot Import',
     vpnProfileExport: 'Export QR',
     vpnProfileName: 'Name',
@@ -2059,6 +2061,10 @@ function App() {
 
   function deleteVpnProfile() {
     const current = normalizeVpnProfiles(vpnProfiles, t);
+    const deleting = current[clampIndex(selectedVpnProfile, current.length)];
+    if (!window.confirm(t.vpnProfileDeleteConfirm.replace('{name}', deleting.name || t.vpnProfileDefaultName))) {
+      return;
+    }
     let next = current.filter((_profile, index) => index !== selectedVpnProfile);
     if (next.length === 0) {
       next = [defaultVpnProfile(t.vpnProfileDefaultName)];
