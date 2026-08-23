@@ -145,12 +145,17 @@ func (s *Session) configure(trace func(string)) error {
 	}
 	traceVPNStep(trace, "configure interface metric", step)
 	step = time.Now()
+	dnsProxyReady := true
 	if err := s.startDNSProxy(trace); err != nil {
-		return err
+		if s.config.BlockDNSLeak {
+			return err
+		}
+		dnsProxyReady = false
+		traceVPNMessage(trace, "System VPN warning: DNS proxy unavailable; falling back to direct DNS servers: "+err.Error())
 	}
 	traceVPNStep(trace, "start DNS proxy", step)
 	step = time.Now()
-	if err := s.configureDNS(); err != nil {
+	if err := s.configureDNS(dnsProxyReady); err != nil {
 		return err
 	}
 	traceVPNStep(trace, "configure DNS", step)
@@ -320,11 +325,25 @@ func removeDNSLeakFirewallRule(name string) error {
 	return nil
 }
 
-func (s *Session) configureDNS() error {
-	if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dnsProxyIPv4, "primary", "validate=no"); err != nil {
-		return fmt.Errorf("configure VPN DNS proxy: %w", err)
+func (s *Session) configureDNS(useProxy bool) error {
+	if useProxy {
+		if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dnsProxyIPv4, "primary", "validate=no"); err != nil {
+			return fmt.Errorf("configure VPN DNS proxy: %w", err)
+		}
+		_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
+		return nil
 	}
-	_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
+	ipv4, ipv6 := directDNSServers(s.config.DNSServers, s.config.EnableIPv6)
+	if err := configureWindowsDNSServers("ipv4", ipv4); err != nil {
+		return fmt.Errorf("configure VPN direct IPv4 DNS: %w", err)
+	}
+	if s.config.EnableIPv6 && len(ipv6) > 0 {
+		if err := configureWindowsDNSServers("ipv6", ipv6); err != nil {
+			return fmt.Errorf("configure VPN direct IPv6 DNS: %w", err)
+		}
+	} else {
+		_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
+	}
 	return nil
 }
 
@@ -335,6 +354,67 @@ func (s *Session) startDNSProxy(trace func(string)) error {
 	}
 	s.dnsProxy = proxy
 	return nil
+}
+
+func configureWindowsDNSServers(family string, servers []string) error {
+	if len(servers) == 0 {
+		return run("netsh", "interface", family, "delete", "dnsservers", "name="+interfaceName, "all")
+	}
+	if err := run("netsh", "interface", family, "set", "dnsservers", "name="+interfaceName, "static", servers[0], "primary", "validate=no"); err != nil {
+		return err
+	}
+	for index, server := range servers[1:] {
+		if err := run("netsh", "interface", family, "add", "dnsservers", "name="+interfaceName, "address="+server, "index="+fmt.Sprint(index+2), "validate=no"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func directDNSServers(values []string, enableIPv6 bool) ([]string, []string) {
+	var ipv4 []string
+	var ipv6 []string
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		addr, ok := directDNSServer(value)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[addr.String()]; exists {
+			continue
+		}
+		seen[addr.String()] = struct{}{}
+		if addr.Is4() {
+			ipv4 = append(ipv4, addr.String())
+			continue
+		}
+		if enableIPv6 {
+			ipv6 = append(ipv6, addr.String())
+		}
+	}
+	if len(ipv4) == 0 {
+		ipv4 = append(ipv4, "8.8.8.8")
+	}
+	if enableIPv6 && len(ipv6) == 0 {
+		ipv6 = append(ipv6, "2001:4860:4860::8888")
+	}
+	return ipv4, ipv6
+}
+
+func directDNSServer(value string) (netip.Addr, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return netip.Addr{}, false
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	addr, err := netip.ParseAddr(value)
+	if err != nil || !addr.IsValid() || addr.IsUnspecified() {
+		return netip.Addr{}, false
+	}
+	return addr, true
 }
 
 func (s *Session) configureBypassRoutes() error {

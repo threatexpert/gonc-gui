@@ -534,7 +534,6 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	}
 	emit(sink, "log", "info", fmt.Sprintf("Repair plan for %s: kind=%s, local=%s remote=%s, keep %s, download %s in %d range request(s), dirty %s in %d range(s), truncate %s",
 		file.Path, plan.Kind, formatBytes(localSize), formatBytes(manifest.Size), formatBytes(keptBytes), formatBytes(plan.TransferBytes), len(plan.Ranges), formatBytes(plan.DirtyBytes), plan.DirtyRangeCount, formatBytes(truncateBytes)))
-	d.setFileProgress(file.Path, keptBytes)
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return false, 0, err
@@ -544,6 +543,7 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 		return false, 0, err
 	}
 	defer out.Close()
+	d.setFileProgress(file.Path, keptBytes)
 
 	for _, repairRange := range plan.Ranges {
 		if err := d.downloadRange(ctx, client, downloadURL, out, file.Path, repairRange, sink); err != nil {

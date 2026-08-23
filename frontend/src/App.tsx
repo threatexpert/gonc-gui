@@ -123,6 +123,12 @@ type DownloadEvent = {
   bytesPerSecond?: number;
 };
 
+type DownloadWarning = {
+  message: string;
+  until: number;
+  pulseKey: number;
+};
+
 type RemoteFile = {
   name: string;
   is_dir: boolean;
@@ -381,6 +387,8 @@ const text = {
     localFileUnavailable: '本地文件不可用：',
     noSelection: '请先勾选要下载的文件或目录。',
     downloadFailed: '下载失败：',
+    downloadWarning: '有告警',
+    downloadWarningTitle: '下载遇到告警，点击查看日志',
     noList: '尚未读取目录',
     remoteListAutoLoadFailed: '自动读取文件列表失败：',
     files: '个文件',
@@ -585,6 +593,8 @@ const text = {
     localFileUnavailable: 'Local file unavailable:',
     noSelection: 'Select files or folders to download first.',
     downloadFailed: 'Download failed:',
+    downloadWarning: 'Warning',
+    downloadWarningTitle: 'Download warning. Click to view logs',
     noList: 'No list loaded',
     remoteListAutoLoadFailed: 'Automatic file list load failed:',
     files: 'files',
@@ -828,6 +838,7 @@ function App() {
   const [excludedPaths, setExcludedPaths] = useState<Set<string>>(new Set());
   const [downloadError, setDownloadError] = useState('');
   const [downloadProgress, setDownloadProgress] = useState<DownloadEvent | null>(null);
+  const [downloadWarning, setDownloadWarning] = useState<DownloadWarning | null>(null);
   const [downloadMode, setDownloadMode] = useState<DownloadMode>('resume');
   const [receivedLocalFiles, setReceivedLocalFiles] = useState<Map<string, ReceivedLocalState>>(new Map());
   const [receivedDownloadActiveState, setReceivedDownloadActiveState] = useState(false);
@@ -877,6 +888,10 @@ function App() {
   const activeReceiveTransferRun = useRef(0);
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
+  const diagnosticsRef = useRef<HTMLDetailsElement | null>(null);
+  const logPaneRef = useRef<HTMLElement | null>(null);
+  const logsRef = useRef<HTMLDivElement | null>(null);
+  const downloadWarningPulse = useRef(0);
   const [nowTick, setNowTick] = useState(Date.now());
   const [passwordRevealCoordinator] = useState(() => createPassphraseRevealCoordinator(
     (callback, delay) => window.setTimeout(callback, delay),
@@ -982,6 +997,7 @@ function App() {
   const revealFileLabel = runtimePlatform === 'windows'
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
+  const activeDownloadWarning = downloadWarning && downloadWarning.until > nowTick ? downloadWarning : null;
 
   useEffect(() => {
     const previous = previousSendQrPassphrase.current;
@@ -1222,9 +1238,13 @@ function App() {
         SetTaskbarProgress(event.doneBytes || 0, event.totalBytes || 0).catch(() => undefined);
       } else {
         setLogs((current) => [...current.slice(-399), event]);
+        if (isDownloadRetryWarning(event)) {
+          triggerDownloadWarning(event.message);
+        }
       }
       if (event.type === 'status') {
         if (terminal) {
+          setDownloadWarning(null);
           if (event.level === 'error') {
             setDownloadError(`${t.downloadFailed} ${localizeError(event.message)}`);
           }
@@ -1290,6 +1310,29 @@ function App() {
       pickerPendingRef.current = false;
       setPickerPending(false);
     }
+  }
+
+  function triggerDownloadWarning(message: string) {
+    downloadWarningPulse.current += 1;
+    setDownloadWarning({
+      message: message || t.downloadWarningTitle,
+      until: Date.now() + 5000,
+      pulseKey: downloadWarningPulse.current,
+    });
+  }
+
+  function showDownloadWarningLog() {
+    if (diagnosticsRef.current) {
+      diagnosticsRef.current.open = true;
+    }
+    window.setTimeout(() => {
+      logPaneRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'});
+      const logs = logsRef.current;
+      if (logs) {
+        logs.scrollTop = logs.scrollHeight;
+        logs.focus({preventScroll: true});
+      }
+    }, 40);
   }
 
   async function addFolder() {
@@ -1432,6 +1475,7 @@ function App() {
     const taskId = receivedDownloadTaskId.current;
     receivedDownloadActive.current = true;
     setReceivedDownloadActiveState(true);
+    setDownloadWarning(null);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
     receivedTerminalOwner.current = null;
@@ -1445,6 +1489,7 @@ function App() {
     }
     receivedDownloadActive.current = false;
     setReceivedDownloadActiveState(false);
+    setDownloadWarning(null);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
   }
@@ -1454,6 +1499,7 @@ function App() {
     receivedDownloadTaskId.current += 1;
     receivedDownloadActive.current = false;
     setReceivedDownloadActiveState(false);
+    setDownloadWarning(null);
     receivedCompletionRefreshPendingRef.current = false;
     setReceivedCompletionRefreshPending(false);
     receivedTerminalOwner.current = null;
@@ -2084,6 +2130,7 @@ function App() {
 
   async function stopDownload() {
     setError('');
+    setDownloadWarning(null);
     const taskId = receivedDownloadTaskId.current;
     try {
       await StopHTTPDownload();
@@ -3006,6 +3053,21 @@ function App() {
                     {(downloadProgress.totalDirs || 0) > 0 && ` - ${t.dir} ${downloadProgress.doneDirs || 0}/${downloadProgress.totalDirs}`}
                     {' - '}{formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
                     {' - '}{formatRate(freshSpeed(downloadProgress.time, downloadProgress.bytesPerSecond, nowTick))}
+                    {activeDownloadWarning && (
+                      <>
+                        {' '}
+                        <button
+                          type="button"
+                          className="download-warning-chip"
+                          key={activeDownloadWarning.pulseKey}
+                          aria-label={t.downloadWarning}
+                          title={`${t.downloadWarningTitle}\n${activeDownloadWarning.message}`}
+                          onClick={showDownloadWarningLog}
+                        >
+                          !
+                        </button>
+                      </>
+                    )}
                   </div>
                   <progress max={downloadProgress.totalBytes || 1} value={downloadProgress.doneBytes || 0} />
                 </div>
@@ -3055,7 +3117,7 @@ function App() {
             </section>
           )}
 
-          <details className="diagnostics">
+          <details className="diagnostics" ref={diagnosticsRef}>
             <summary>{t.diagnostics}</summary>
             <section className="status-grid">
               <Metric label={t.p2pStatus} value={activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
@@ -3067,7 +3129,7 @@ function App() {
               {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
               {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
             </section>
-            <section className="log-pane">
+            <section className="log-pane" ref={logPaneRef}>
             <div className="log-header">
               <h3>{t.activity}</h3>
               <div className="button-row">
@@ -3075,7 +3137,7 @@ function App() {
                 <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
               </div>
             </div>
-            <div className="logs">
+            <div className="logs" ref={logsRef} tabIndex={-1}>
               {logs.length === 0 ? (
                 <p className="muted">{t.logHint}</p>
               ) : logs.map((log, index) => (
@@ -3688,7 +3750,11 @@ function formatPercent(done: number, total: number) {
   if (!total) {
     return '0.0%';
   }
-  return `${Math.min(100, (done / total) * 100).toFixed(1)}%`;
+  const percent = Math.min(100, (done / total) * 100);
+  if (done < total && percent >= 99.95) {
+    return '99.9%';
+  }
+  return `${percent.toFixed(1)}%`;
 }
 
 function freshSpeed(time: string | undefined, value: number | undefined, now: number) {
@@ -3700,6 +3766,10 @@ function freshSpeed(time: string | undefined, value: number | undefined, now: nu
     return 0;
   }
   return value;
+}
+
+function isDownloadRetryWarning(event: DownloadEvent) {
+  return event.type === 'log' && event.level === 'warn' && event.message.toLowerCase().includes('retrying');
 }
 
 export default App;
