@@ -39,6 +39,7 @@ type Request struct {
 	SaveDir         string
 	DownloadSubPath string
 	UseUDP          bool
+	P2PWithLAN      bool
 	Upstream        string
 	DNSForward      string
 	DNSServers      string
@@ -141,7 +142,7 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	case ModeReceive:
 		session, err = goncembed.StartP2PReceiveWithOptions(req.Password, fileTransferP2POptions(req.UseUDP), cb)
 	case ModeVPNServer:
-		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, req.ExtraArgs, cb)
+		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, vpnExtraArgs(req), cb)
 	case ModeVPNClient:
 		vpnStart, err := startVPNClient(parent, req, cb, sink)
 		if err != nil {
@@ -306,7 +307,7 @@ func buildArgs(req Request) ([]string, error) {
 			mux += " -dns " + dnsForward
 		}
 		args = append(args, "-e", mux)
-		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
+		if extraArgs := vpnExtraArgs(req); extraArgs != "" {
 			args = append(args, splitExtraArgs(extraArgs)...)
 		}
 	case ModeVPNClient:
@@ -315,7 +316,7 @@ func buildArgs(req Request) ([]string, error) {
 			return nil, err
 		}
 		args = append(args, "-link", linkConfig)
-		if extraArgs := strings.TrimSpace(req.ExtraArgs); extraArgs != "" {
+		if extraArgs := vpnExtraArgs(req); extraArgs != "" {
 			args = append(args, splitExtraArgs(extraArgs)...)
 		}
 	}
@@ -325,6 +326,14 @@ func buildArgs(req Request) ([]string, error) {
 type vpnClientStart struct {
 	session *goncembed.Session
 	helper  *vpnhelper.Client
+}
+
+func vpnExtraArgs(req Request) string {
+	args := strings.TrimSpace(req.ExtraArgs)
+	if req.P2PWithLAN {
+		args = strings.TrimSpace(args + " -p2p-with-lan")
+	}
+	return args
 }
 
 func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink) (*vpnClientStart, error) {
@@ -379,7 +388,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		default:
 		}
 	}
-	session, err := goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, req.ExtraArgs, cb)
+	session, err := goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, vpnExtraArgs(req), cb)
 	if err != nil {
 		if helper != nil {
 			_ = helper.Close()

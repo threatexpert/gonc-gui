@@ -21,6 +21,7 @@ type Profile struct {
 	Name         string `json:"name"`
 	Passphrase   string `json:"passphrase"`
 	UseUDP       bool   `json:"useUdp"`
+	P2PWithLAN   bool   `json:"p2pWithLan"`
 	RouteIPv6    bool   `json:"routeIpv6"`
 	DNSServers   string `json:"dnsServers"`
 	RouteCIDRs   string `json:"routeCidrs"`

@@ -169,6 +169,7 @@ type VPNProfile = {
   name: string;
   passphrase: string;
   useUdp: boolean;
+  p2pWithLan: boolean;
   routeIpv6: boolean;
   dnsServers: string;
   routeCidrs: string;
@@ -371,7 +372,9 @@ const text = {
     routeMetricPlaceholder: '默认 1',
     routeMetricHint: '仅 Windows VPN 使用。留空或无效值使用默认 1。',
     dnsLeakProtection: '防 DNS 泄漏',
-    dnsLeakProtectionHint: '仅 Windows VPN 使用。连接期间阻止系统 DNS Client 服务用非 VPN 本地地址访问 TCP/UDP 53，停止 VPN 后会删除规则。',
+    p2pWithLan: '同时启用局域网发现',
+    p2pWithLanHint: '同时通过公网 P2P 和局域网发现对端。',
+    dnsLeakProtectionHint: '该特性仅在 Windows 生效。连接期间会阻止系统服务 Dnscache 走本地网络，通常使用全局路由模式时才需要。',
     remoteFiles: '对方分享的文件',
     selectAll: '全选',
     invertSelection: '反选',
@@ -578,7 +581,9 @@ const text = {
     routeMetricPlaceholder: 'Default 1',
     routeMetricHint: 'Windows VPN only. Blank or invalid values use the default 1.',
     dnsLeakProtection: 'DNS leak protection',
-    dnsLeakProtectionHint: 'Windows VPN only. Blocks the system DNS Client service from accessing TCP/UDP 53 from non-VPN local addresses and removes the rules after VPN stops.',
+    p2pWithLan: 'Enable LAN discovery alongside P2P',
+    p2pWithLanHint: 'Discover peers through both public P2P and the local network.',
+    dnsLeakProtectionHint: 'Windows only. While connected, blocks the Dnscache system service from using the local network. Usually needed only in global routing mode.',
     remoteFiles: 'Peer Shared Files',
     selectAll: 'Select All',
     invertSelection: 'Invert',
@@ -804,11 +809,13 @@ function App() {
   const [currentRemotePath, setCurrentRemotePath] = useState('/');
   const [useUDP, setUseUDP] = useState(false);
   const [vpnServerUseUDP, setVpnServerUseUDP] = useState(false);
+  const [vpnServerP2PWithLAN, setVpnServerP2PWithLAN] = useState(false);
   const [vpnServerAdvanced, setVpnServerAdvanced] = useState(false);
   const [vpnServerUpstream, setVpnServerUpstream] = useState('');
   const [vpnServerDNSForward, setVpnServerDNSForward] = useState('');
   const [vpnServerExtraArgs, setVpnServerExtraArgs] = useState('');
   const [vpnClientUseUDP, setVpnClientUseUDP] = useState(false);
+  const [vpnClientP2PWithLAN, setVpnClientP2PWithLAN] = useState(false);
   const [vpnClientAdvanced, setVpnClientAdvanced] = useState(false);
   const [vpnClientEnableIPv6, setVpnClientEnableIPv6] = useState(false);
   const [vpnClientTunnelOnly, setVpnClientTunnelOnly] = useState(false);
@@ -1642,7 +1649,7 @@ function App() {
 
   async function showVpnProfileQr() {
     const profile = normalizeVpnProfile(vpnProfiles[selectedVpnProfile] || currentVpnProfileFromState(t), t);
-    const payload = JSON.stringify({type: vpnProfileQrType, profile});
+    const payload = JSON.stringify({type: vpnProfileQrType, version: 1, profile});
     setError('');
     try {
       setQrPassword(profile.name || t.vpnProfileDefaultName);
@@ -1834,6 +1841,7 @@ function App() {
         saveDir,
         downloadSubPath: currentRemotePath,
         useUDP: mode === 'vpnServer' ? vpnServerUseUDP : (mode === 'vpnClient' ? vpnClientUseUDP : useUDP),
+        p2pWithLan: mode === 'vpnServer' ? vpnServerP2PWithLAN : (mode === 'vpnClient' && vpnClientP2PWithLAN),
         upstream: vpnServerUpstream,
         dnsForward: vpnServerDNSForward,
         dnsServers: vpnClientDNSServers,
@@ -1972,6 +1980,7 @@ function App() {
   function applyVpnProfile(profile: VPNProfile) {
     setVpnClientPassword(profile.passphrase || '');
     setVpnClientUseUDP(Boolean(profile.useUdp));
+    setVpnClientP2PWithLAN(Boolean(profile.p2pWithLan));
     setVpnClientEnableIPv6(Boolean(profile.routeIpv6));
     setVpnClientTunnelOnly(Boolean(profile.tunnelOnly));
     setVpnClientDNSServers(profile.dnsServers || defaultVpnDNS);
@@ -2018,6 +2027,9 @@ function App() {
         break;
       case 'useUdp':
         setVpnClientUseUDP(Boolean(value));
+        break;
+      case 'p2pWithLan':
+        setVpnClientP2PWithLAN(Boolean(value));
         break;
       case 'routeIpv6':
         setVpnClientEnableIPv6(Boolean(value));
@@ -2796,6 +2808,14 @@ function App() {
                       />
                       <span>{t.useUDP}</span>
                     </label>
+                    <div className="field">
+                      <label className="check">
+                        <input type="checkbox" checked={vpnClientP2PWithLAN} disabled={vpnClientRunning}
+                          onChange={(event) => setVpnProfileField('p2pWithLan', event.target.checked)} />
+                        <span>{t.p2pWithLan}</span>
+                      </label>
+                      <div className="field-hint"><p>{t.p2pWithLanHint}</p></div>
+                    </div>
                     <label className="check">
                       <input
                         type="checkbox"
@@ -2864,24 +2884,22 @@ function App() {
                         <div className="field-hint"><p>{t.routeMetricHint}</p></div>
                       </div>
                     )}
-                    {isWindows && (
-                      <div className="field inline-field">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={vpnClientBlockDNSLeak}
-                            disabled={vpnClientRunning || vpnClientTunnelOnly}
-                            onChange={(event) => {
-                              const checked = event.target.checked;
-                              setVpnClientBlockDNSLeak(checked);
-                              updateCurrentVpnProfile({blockDnsLeak: checked});
-                            }}
-                          />
-                          <span>{t.dnsLeakProtection}</span>
-                        </label>
-                        <div className="field-hint"><p>{t.dnsLeakProtectionHint}</p></div>
-                      </div>
-                    )}
+                    <div className="field inline-field">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={vpnClientBlockDNSLeak}
+                          disabled={vpnClientRunning || vpnClientTunnelOnly}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setVpnClientBlockDNSLeak(checked);
+                            updateCurrentVpnProfile({blockDnsLeak: checked});
+                          }}
+                        />
+                        <span>{t.dnsLeakProtection}</span>
+                      </label>
+                      <div className="field-hint"><p>{t.dnsLeakProtectionHint}</p></div>
+                    </div>
                     <div className="field">
                       <label>{t.vpnDnsServers}</label>
                       <textarea
@@ -2949,6 +2967,14 @@ function App() {
                       />
                       <span>{t.useUDP}</span>
                     </label>
+                    <div className="field">
+                      <label className="check">
+                        <input type="checkbox" checked={vpnServerP2PWithLAN} disabled={vpnServerRunning}
+                          onChange={(event) => setVpnServerP2PWithLAN(event.target.checked)} />
+                        <span>{t.p2pWithLan}</span>
+                      </label>
+                      <div className="field-hint"><p>{t.p2pWithLanHint}</p></div>
+                    </div>
                     <div className="field">
                       <label>{t.upstreamProxy}</label>
                       <input
@@ -3299,6 +3325,7 @@ function defaultVpnProfile(name: string): VPNProfile {
     name: name || 'Default',
     passphrase: '',
     useUdp: false,
+    p2pWithLan: false,
     routeIpv6: false,
     dnsServers: defaultVpnDNS,
     routeCidrs: defaultVpnRoutes,
@@ -3320,6 +3347,7 @@ function normalizeVpnProfile(profile: Partial<VPNProfile>, t: typeof text.zh): V
     name: String(profile.name || t.vpnProfileDefaultName).trim() || t.vpnProfileDefaultName,
     passphrase: String(profile.passphrase || '').trim(),
     useUdp: Boolean(profile.useUdp),
+    p2pWithLan: Boolean(profile.p2pWithLan),
     routeIpv6: Boolean(profile.routeIpv6),
     dnsServers: normalizeLines(String(profile.dnsServers || defaultVpnDNS)) || defaultVpnDNS,
     routeCidrs: normalizeLines(String(profile.routeCidrs || defaultVpnRoutes)) || defaultVpnRoutes,

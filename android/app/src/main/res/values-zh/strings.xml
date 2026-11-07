@@ -110,6 +110,10 @@
     <string name="vpn_active_profile">配置：%1$s</string>
     <string name="vpn_p2p_status_line">P2P：%1$s</string>
     <string name="vpn_dns_servers">DNS</string>
+    <string name="vpn_p2p_with_lan">同时启用局域网发现</string>
+    <string name="vpn_p2p_with_lan_hint">同时通过公网 P2P 和局域网发现对端。</string>
+    <string name="vpn_dns_leak_protection">防 DNS 泄漏</string>
+    <string name="vpn_dns_leak_protection_hint">该特性仅在 Windows 生效。连接期间会阻止系统服务 Dnscache 走本地网络，通常使用全局路由模式时才需要。</string>
     <string name="vpn_dns_hint">每行一个 DNS 服务器；留空会使用 Google DNS。</string>
     <string name="vpn_route_cidrs">路由 CIDR</string>
     <string name="vpn_route_cidrs_hint">每行一个 CIDR；留空会使用全局路由。</string>

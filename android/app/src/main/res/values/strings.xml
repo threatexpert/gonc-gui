@@ -110,6 +110,10 @@
     <string name="vpn_active_profile">Profile: %1$s</string>
     <string name="vpn_p2p_status_line">P2P: %1$s</string>
     <string name="vpn_dns_servers">DNS</string>
+    <string name="vpn_p2p_with_lan">Enable LAN discovery alongside P2P</string>
+    <string name="vpn_p2p_with_lan_hint">Discover peers through both public P2P and the local network.</string>
+    <string name="vpn_dns_leak_protection">DNS leak protection</string>
+    <string name="vpn_dns_leak_protection_hint">Windows only. While connected, blocks the Dnscache system service from using the local network. Usually needed only in global routing mode.</string>
     <string name="vpn_dns_hint">One DNS server per line. Leave blank to use Google DNS.</string>
     <string name="vpn_route_cidrs">Route CIDR</string>
     <string name="vpn_route_cidrs_hint">One CIDR per line. Leave blank to use global routing.</string>

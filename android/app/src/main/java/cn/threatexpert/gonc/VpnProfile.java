@@ -15,6 +15,7 @@ final class VpnProfile {
     String name;
     String passphrase;
     boolean useUdp;
+    boolean p2pWithLan;
     boolean routeIpv6;
     String dnsServers;
     String routeCidrs;
@@ -25,12 +26,15 @@ final class VpnProfile {
     String extraArgs;
     /** When true, "Connect" only sets up the SOCKS5 tunnel and does not start the system VPN. */
     boolean tunnelOnly;
+    /** Preserved for Windows clients; Android does not enforce this option. */
+    boolean blockDnsLeak;
 
     static VpnProfile defaults(String name) {
         VpnProfile profile = new VpnProfile();
         profile.name = name == null ? "" : name;
         profile.passphrase = "";
         profile.useUdp = false;
+        profile.p2pWithLan = false;
         profile.routeIpv6 = false;
         profile.dnsServers = DEFAULT_VPN_DNS;
         profile.routeCidrs = DEFAULT_VPN_ROUTES;
@@ -38,6 +42,7 @@ final class VpnProfile {
         profile.mtu = DEFAULT_MTU;
         profile.extraArgs = "";
         profile.tunnelOnly = false;
+        profile.blockDnsLeak = false;
         return profile;
     }
 
@@ -46,6 +51,7 @@ final class VpnProfile {
         profile.name = object.optString("name", profile.name);
         profile.passphrase = object.optString("passphrase", "");
         profile.useUdp = object.optBoolean("useUdp", false);
+        profile.p2pWithLan = object.optBoolean("p2pWithLan", false);
         profile.routeIpv6 = object.optBoolean("routeIpv6", false);
         profile.dnsServers = object.optString("dnsServers", DEFAULT_VPN_DNS);
         profile.routeCidrs = object.optString("routeCidrs", DEFAULT_VPN_ROUTES);
@@ -54,6 +60,7 @@ final class VpnProfile {
         profile.mtu = normalizeMtu(object.optInt("mtu", DEFAULT_MTU));
         profile.extraArgs = object.optString("extraArgs", "");
         profile.tunnelOnly = object.optBoolean("tunnelOnly", false);
+        profile.blockDnsLeak = object.optBoolean("blockDnsLeak", false);
         return profile;
     }
 
@@ -63,6 +70,7 @@ final class VpnProfile {
             object.put("name", name == null ? "" : name);
             object.put("passphrase", passphrase == null ? "" : passphrase);
             object.put("useUdp", useUdp);
+            object.put("p2pWithLan", p2pWithLan);
             object.put("routeIpv6", routeIpv6);
             object.put("dnsServers", dnsServers == null ? "" : dnsServers);
             object.put("routeCidrs", routeCidrs == null ? "" : routeCidrs);
@@ -70,6 +78,7 @@ final class VpnProfile {
             object.put("mtu", normalizeMtu(mtu));
             object.put("extraArgs", extraArgs == null ? "" : extraArgs);
             object.put("tunnelOnly", tunnelOnly);
+            object.put("blockDnsLeak", blockDnsLeak);
         } catch (JSONException ignored) {
         }
         return object;

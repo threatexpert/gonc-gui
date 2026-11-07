@@ -39,6 +39,7 @@ final class VpnServerController {
     private final HistoryStore dnsHistory = new HistoryStore(KEY_SERVER_DNS_HISTORY);
 
     private boolean useUdp;
+    private boolean p2pWithLan;
     private boolean advancedExpanded;
     private String upstream = "";
     private String dnsForward = "";
@@ -167,6 +168,7 @@ final class VpnServerController {
     /** Reset transient state for a fresh launch. */
     void resetForFreshLaunch() {
         useUdp = false;
+        p2pWithLan = false;
         advancedExpanded = false;
         upstream = "";
         dnsForward = "";
@@ -316,6 +318,22 @@ final class VpnServerController {
         TextView hint = u.text(string(R.string.use_udp_protocol_hint), 12, u.muted(), Typeface.NORMAL);
         hint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(hint);
+        CheckBox lanDiscovery = new CheckBox(host.context());
+        lanDiscovery.setText(string(R.string.vpn_p2p_with_lan));
+        lanDiscovery.setTextColor(Color.rgb(64, 81, 105));
+        lanDiscovery.setTextSize(14);
+        lanDiscovery.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        lanDiscovery.setChecked(p2pWithLan);
+        u.setControlEnabled(lanDiscovery, session == null);
+        lanDiscovery.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (session == null) {
+                p2pWithLan = isChecked;
+            }
+        });
+        box.addView(lanDiscovery);
+        TextView lanHint = u.text(string(R.string.vpn_p2p_with_lan_hint), 12, u.muted(), Typeface.NORMAL);
+        lanHint.setPadding(u.dp(4), 0, 0, 0);
+        box.addView(lanHint);
         return box;
     }
 
@@ -524,7 +542,7 @@ final class VpnServerController {
         status = "Preparing";
         host.log("info", "Start VPN server requested");
         long id = ++runId;
-        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, upstream.trim(), dnsForward.trim(), extraArgs, callback(id));
+        session = host.bridge().startP2PLinkAgent(host.context(), passphrase, useUdp, p2pWithLan, upstream.trim(), dnsForward.trim(), extraArgs, callback(id));
         host.refreshForegroundService();
         host.requestRender();
     }

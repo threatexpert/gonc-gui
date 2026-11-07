@@ -167,6 +167,7 @@ export namespace main {
 	    saveDir: string;
 	    downloadSubPath: string;
 	    useUDP: boolean;
+	    p2pWithLan: boolean;
 	    upstream: string;
 	    dnsForward: string;
 	    dnsServers: string;
@@ -192,6 +193,7 @@ export namespace main {
 	        this.saveDir = source["saveDir"];
 	        this.downloadSubPath = source["downloadSubPath"];
 	        this.useUDP = source["useUDP"];
+	        this.p2pWithLan = source["p2pWithLan"];
 	        this.upstream = source["upstream"];
 	        this.dnsForward = source["dnsForward"];
 	        this.dnsServers = source["dnsServers"];
@@ -233,6 +235,7 @@ export namespace vpnprofile {
 	    name: string;
 	    passphrase: string;
 	    useUdp: boolean;
+	    p2pWithLan: boolean;
 	    routeIpv6: boolean;
 	    dnsServers: string;
 	    routeCidrs: string;
@@ -252,6 +255,7 @@ export namespace vpnprofile {
 	        this.name = source["name"];
 	        this.passphrase = source["passphrase"];
 	        this.useUdp = source["useUdp"];
+	        this.p2pWithLan = source["p2pWithLan"];
 	        this.routeIpv6 = source["routeIpv6"];
 	        this.dnsServers = source["dnsServers"];
 	        this.routeCidrs = source["routeCidrs"];

@@ -32,16 +32,19 @@ final class VpnQrPayload {
             if (!(decoded instanceof JSONObject) || tokens.nextClean() != 0) return result(Kind.INVALID);
             JSONObject root = (JSONObject) decoded;
             if (!TYPE.equals(root.opt("type"))) return result(Kind.INVALID);
-            Object version = root.opt("version");
-            if (!(version instanceof Integer) && !(version instanceof Long)) return result(Kind.INVALID);
-            if (((Number) version).longValue() != 1) return result(Kind.UNSUPPORTED_VERSION);
+            // Earlier desktop exports omitted version; their profile format is version 1.
+            if (root.has("version")) {
+                Object version = root.opt("version");
+                if (!(version instanceof Integer) && !(version instanceof Long)) return result(Kind.INVALID);
+                if (((Number) version).longValue() != 1) return result(Kind.UNSUPPORTED_VERSION);
+            }
             JSONObject profile = root.optJSONObject("profile");
             if (profile == null || !(profile.opt("passphrase") instanceof String)
                     || profile.getString("passphrase").trim().isEmpty()) return result(Kind.INVALID);
             for (String key : new String[]{"name", "dnsServers", "routeCidrs", "linkConfig", "socks5Address", "extraArgs"}) {
                 if (profile.has(key) && !(profile.opt(key) instanceof String)) return result(Kind.INVALID);
             }
-            for (String key : new String[]{"useUdp", "routeIpv6", "tunnelOnly"}) {
+            for (String key : new String[]{"useUdp", "routeIpv6", "tunnelOnly", "blockDnsLeak", "p2pWithLan"}) {
                 if (profile.has(key) && !(profile.opt(key) instanceof Boolean)) return result(Kind.INVALID);
             }
             if (profile.has("mtu")) {

@@ -438,6 +438,24 @@ final class VpnClientController {
         });
         box.addView(udp);
 
+        CheckBox lanDiscovery = new CheckBox(host.context());
+        lanDiscovery.setText(string(R.string.vpn_p2p_with_lan));
+        lanDiscovery.setTextColor(Color.rgb(64, 81, 105));
+        lanDiscovery.setTextSize(14);
+        lanDiscovery.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        lanDiscovery.setChecked(currentProfile().p2pWithLan);
+        u.setControlEnabled(lanDiscovery, !running);
+        lanDiscovery.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (!GoncVpnState.isRunning()) {
+                currentProfile().p2pWithLan = isChecked;
+                saveProfiles();
+            }
+        });
+        box.addView(lanDiscovery);
+        TextView lanHint = u.text(string(R.string.vpn_p2p_with_lan_hint), 12, u.muted(), Typeface.NORMAL);
+        lanHint.setPadding(u.dp(4), 0, 0, 0);
+        box.addView(lanHint);
+
         CheckBox ipv6 = new CheckBox(host.context());
         ipv6.setText(string(R.string.vpn_route_ipv6));
         ipv6.setTextColor(Color.rgb(64, 81, 105));
@@ -474,6 +492,24 @@ final class VpnClientController {
         TextView tunnelOnlyHint = u.text(string(R.string.vpn_tunnel_only_hint), 12, u.muted(), Typeface.NORMAL);
         tunnelOnlyHint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(tunnelOnlyHint);
+
+        CheckBox blockDnsLeak = new CheckBox(host.context());
+        blockDnsLeak.setText(string(R.string.vpn_dns_leak_protection));
+        blockDnsLeak.setTextColor(Color.rgb(64, 81, 105));
+        blockDnsLeak.setTextSize(14);
+        blockDnsLeak.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        blockDnsLeak.setChecked(currentProfile().blockDnsLeak);
+        u.setControlEnabled(blockDnsLeak, !running);
+        blockDnsLeak.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            if (!GoncVpnState.isRunning()) {
+                currentProfile().blockDnsLeak = isChecked;
+                saveProfiles();
+            }
+        });
+        box.addView(blockDnsLeak);
+        TextView dnsLeakHint = u.text(string(R.string.vpn_dns_leak_protection_hint), 12, u.muted(), Typeface.NORMAL);
+        dnsLeakHint.setPadding(u.dp(4), 0, 0, 0);
+        box.addView(dnsLeakHint);
         return box;
     }
 

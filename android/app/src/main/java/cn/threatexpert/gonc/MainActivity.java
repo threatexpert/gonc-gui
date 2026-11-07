@@ -1001,6 +1001,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         intent.setAction(GoncVpnService.ACTION_START);
         intent.putExtra(GoncVpnService.EXTRA_PASSWORD, profile.passphrase.trim());
         intent.putExtra(GoncVpnService.EXTRA_USE_UDP, profile.useUdp);
+        intent.putExtra(GoncVpnService.EXTRA_P2P_WITH_LAN, profile.p2pWithLan);
         intent.putExtra(GoncVpnService.EXTRA_ENABLE_IPV6, profile.routeIpv6);
         intent.putExtra(GoncVpnService.EXTRA_DNS_SERVERS, profile.dnsServers);
         intent.putExtra(GoncVpnService.EXTRA_ROUTE_CIDRS, profile.routeCidrs);

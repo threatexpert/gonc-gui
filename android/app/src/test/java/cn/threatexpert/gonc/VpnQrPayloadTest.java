@@ -35,6 +35,28 @@ public class VpnQrPayloadTest {
         assertNull(parsed.passphrase);
     }
 
+    @Test public void exportedProfilePreservesWindowsDnsLeakPreference() throws Exception {
+        VpnProfile profile = VpnProfile.defaults("Test");
+        profile.passphrase = "Abc12345";
+        assertFalse(profile.toJson().getBoolean("blockDnsLeak"));
+        profile.blockDnsLeak = true;
+        JSONObject root = config().put("profile", profile.toJson());
+        VpnQrPayload parsed = VpnQrPayload.parse(root.toString());
+        assertEquals(VpnQrPayload.Kind.PROFILE, parsed.kind);
+        assertTrue(parsed.profile.getBoolean("blockDnsLeak"));
+        assertEquals(1, root.getInt("version"));
+    }
+
+    @Test public void exportedProfilePreservesOptInLanDiscovery() throws Exception {
+        VpnProfile profile = VpnProfile.defaults("Test");
+        profile.passphrase = "Abc12345";
+        assertFalse(profile.toJson().getBoolean("p2pWithLan"));
+        profile.p2pWithLan = true;
+        VpnQrPayload parsed = VpnQrPayload.parse(config().put("profile", profile.toJson()).toString());
+        assertEquals(VpnQrPayload.Kind.PROFILE, parsed.kind);
+        assertTrue(parsed.profile.getBoolean("p2pWithLan"));
+    }
+
     @Test public void emptyInputIsRejected() {
         invalid(null);
         invalid("   ");
@@ -58,12 +80,35 @@ public class VpnQrPayloadTest {
         assertNull(parsed.passphrase);
     }
 
-    @Test public void missingOrInvalidVersionIsRejected() throws Exception {
+    @Test public void legacyDesktopProfileWithoutVersionIsAccepted() throws Exception {
         JSONObject root = config();
         root.remove("version");
-        invalid(root.toString());
+        JSONObject profile = root.getJSONObject("profile");
+        profile.put("dnsServers", "8.8.8.8\n1.1.1.1");
+        profile.put("routeCidrs", "0.0.0.0/1\n128.0.0.0/1\n::/0");
+        profile.put("routeMetric", 1);
+        profile.put("blockDnsLeak", true);
+        profile.put("p2pWithLan", true);
+        VpnQrPayload parsed = VpnQrPayload.parse(root.toString());
+        assertEquals(VpnQrPayload.Kind.PROFILE, parsed.kind);
+        assertEquals("Abc12345", parsed.profile.getString("passphrase"));
+        assertTrue(parsed.profile.getBoolean("blockDnsLeak"));
+        assertTrue(parsed.profile.getBoolean("p2pWithLan"));
+    }
+
+    @Test public void invalidExplicitVersionIsRejected() throws Exception {
         invalid(config().put("version", "1").toString());
         invalid(config().put("version", 1.5).toString());
+        invalid(config().put("version", JSONObject.NULL).toString());
+    }
+
+    @Test public void legacyProfileStillRequiresValidFields() throws Exception {
+        JSONObject root = config();
+        root.remove("version");
+        root.getJSONObject("profile").put("passphrase", " ");
+        invalid(root.toString());
+        root.getJSONObject("profile").put("passphrase", "Abc12345").put("mtu", "1400");
+        invalid(root.toString());
     }
 
     @Test public void missingProfileOrPassphraseIsRejected() throws Exception {
@@ -77,7 +122,7 @@ public class VpnQrPayloadTest {
     }
 
     @Test public void wrongOptionalFieldTypesAreRejected() throws Exception {
-        for (String key : new String[]{"name", "dnsServers", "routeCidrs", "linkConfig", "socks5Address", "extraArgs", "useUdp", "routeIpv6", "tunnelOnly", "mtu"}) {
+        for (String key : new String[]{"name", "dnsServers", "routeCidrs", "linkConfig", "socks5Address", "extraArgs", "useUdp", "routeIpv6", "tunnelOnly", "blockDnsLeak", "p2pWithLan", "mtu"}) {
             JSONObject root = config();
             root.getJSONObject("profile").put(key, new JSONObject());
             invalid(root.toString());

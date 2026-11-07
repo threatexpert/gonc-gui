@@ -28,6 +28,7 @@ public final class GoncVpnService extends VpnService {
     static final String ACTION_STOP = "cn.threatexpert.gonc.STOP_VPN";
     static final String EXTRA_PASSWORD = "password";
     static final String EXTRA_USE_UDP = "use_udp";
+    static final String EXTRA_P2P_WITH_LAN = "p2p_with_lan";
     static final String EXTRA_ENABLE_IPV6 = "enable_ipv6";
     static final String EXTRA_DNS_SERVERS = "dns_servers";
     static final String EXTRA_ROUTE_CIDRS = "route_cidrs";
@@ -46,6 +47,7 @@ public final class GoncVpnService extends VpnService {
     private final Object lock = new Object();
     private ParcelFileDescriptor vpnInterface;
     private mobilegonc.Session goncSession;
+    private Runnable releaseMulticast;
     private boolean tun2socksRunning;
     private boolean stopRequested;
     private boolean stopWorkerRunning;
@@ -79,6 +81,7 @@ public final class GoncVpnService extends VpnService {
             }
             String password = intent.getStringExtra(EXTRA_PASSWORD);
             boolean useUdp = intent.getBooleanExtra(EXTRA_USE_UDP, false);
+            boolean p2pWithLan = intent.getBooleanExtra(EXTRA_P2P_WITH_LAN, false);
             boolean enableIpv6 = intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
             String dnsServers = intent.getStringExtra(EXTRA_DNS_SERVERS);
             String routeCidrs = intent.getStringExtra(EXTRA_ROUTE_CIDRS);
@@ -86,13 +89,13 @@ public final class GoncVpnService extends VpnService {
             int mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU);
             String extraArgs = intent.getStringExtra(EXTRA_EXTRA_ARGS);
             boolean tunnelOnly = intent.getBooleanExtra(EXTRA_TUNNEL_ONLY, false);
-            startVpn(password, useUdp, enableIpv6, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
+            startVpn(password, useUdp, p2pWithLan, enableIpv6, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
             return START_STICKY;
         }
         return START_NOT_STICKY;
     }
 
-    private void startVpn(String password, boolean useUdp, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
+    private void startVpn(String password, boolean useUdp, boolean p2pWithLan, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
         synchronized (lock) {
             if (goncSession != null || vpnInterface != null || tun2socksRunning) {
                 log("warn", "VPN is already running");
@@ -120,7 +123,12 @@ public final class GoncVpnService extends VpnService {
                 }
                 GoncCrashReporter.stage(this, "start gonc tunnel");
                 TunnelReadySignal tunnelReady = new TunnelReadySignal();
-                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink, extraArgs == null ? "" : extraArgs, vpnCallback(tunnelReady, tunnelOnly));
+                synchronized (lock) {
+                    if (stopRequested) return;
+                    releaseMulticast = VpnDiscovery.acquireMulticast(this, p2pWithLan, message -> log("warn", message));
+                }
+                mobilegonc.Session session = Mobilegonc.startP2PTunnel(password, useUdp, effectiveLink,
+                        VpnDiscovery.extraArgs(extraArgs, p2pWithLan), vpnCallback(tunnelReady, tunnelOnly));
                 boolean stopSessionNow = false;
                 synchronized (lock) {
                     if (stopRequested) {
@@ -656,6 +664,10 @@ public final class GoncVpnService extends VpnService {
             }
             stopRequested = true;
             nothingToStop = !hasActiveResourcesLocked();
+            if (releaseMulticast != null) {
+                releaseMulticast.run();
+                releaseMulticast = null;
+            }
             if (!nothingToStop) {
                 stopWorkerRunning = true;
             }

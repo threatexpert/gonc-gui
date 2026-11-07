@@ -149,6 +149,38 @@ func TestFileTransferP2POptionsAlwaysEnableLAN(t *testing.T) {
 	}
 }
 
+func TestVPNLANDiscoveryIsOptIn(t *testing.T) {
+	for _, mode := range []Mode{ModeVPNServer, ModeVPNClient} {
+		for _, enabled := range []bool{false, true} {
+			req := Request{
+				Mode: mode, Password: "pass1234", LinkConfig: "3080",
+				P2PWithLAN: enabled, ExtraArgs: `-plain -x "socks5://with space"`,
+			}
+			args, err := buildArgs(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, arg := range args {
+				if arg == "-p2p-with-lan" {
+					count++
+				}
+			}
+			if (count == 1) != enabled || count > 1 {
+				t.Fatalf("%s enabled=%v: LAN flag count=%d", mode, enabled, count)
+			}
+			extra := splitExtraArgs(vpnExtraArgs(req))
+			want := []string{"-plain", "-x", "socks5://with space"}
+			if enabled {
+				want = append(want, "-p2p-with-lan")
+			}
+			if !reflect.DeepEqual(extra, want) {
+				t.Fatalf("%s enabled=%v: extra args=%v, want %v", mode, enabled, extra, want)
+			}
+		}
+	}
+}
+
 func TestValidateRequestRejectsEmbeddedDaemonMode(t *testing.T) {
 	for _, mode := range []Mode{ModeVPNServer, ModeVPNClient} {
 		t.Run(string(mode), func(t *testing.T) {

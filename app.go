@@ -57,6 +57,7 @@ type TransferRequest struct {
 	SaveDir         string   `json:"saveDir"`
 	DownloadSubPath string   `json:"downloadSubPath"`
 	UseUDP          bool     `json:"useUDP"`
+	P2PWithLAN      bool     `json:"p2pWithLan"`
 	Upstream        string   `json:"upstream"`
 	DNSForward      string   `json:"dnsForward"`
 	DNSServers      string   `json:"dnsServers"`
@@ -408,6 +409,7 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		SaveDir:         req.SaveDir,
 		DownloadSubPath: req.DownloadSubPath,
 		UseUDP:          req.UseUDP,
+		P2PWithLAN:      req.P2PWithLAN,
 		Upstream:        req.Upstream,
 		DNSForward:      req.DNSForward,
 		DNSServers:      req.DNSServers,
