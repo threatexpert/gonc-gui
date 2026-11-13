@@ -3263,7 +3263,7 @@ function App() {
             </div>
             {passphraseField}
           </div>
-          <SettingsSection title={t.sectionConnection} summary={`${vpnClientUseUDP ? 'UDP' : t.protocolAuto}${vpnClientP2PWithLAN ? ' · LAN' : ''}`} defaultOpen>
+          <SettingsSection title={t.sectionConnection} summary={`${vpnClientUseUDP ? 'UDP' : t.protocolAuto}${vpnClientP2PWithLAN ? ' · LAN' : ''}`}>
             <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnClientUseUDP} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('useUdp', checked)} />
             <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnClientP2PWithLAN} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('p2pWithLan', checked)} />
           </SettingsSection>
