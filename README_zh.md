@@ -213,7 +213,46 @@ gomobile 生成的 `mobilegonc.aar`，它来自相邻的 `gonetcat` 仓库。
 android\update-mobilegonc-aar.bat
 ```
 
-创建发布包：
+### 在 Windows 上构建
+
+前置条件（与 GitHub 发布工作流使用的工具一致）：
+
+- Go，版本见 `go.mod`
+- Node.js 及 npm（发布工作流使用 Node.js 24）
+- Wails CLI v2.12.0
+- Microsoft Edge WebView2 Runtime（运行应用时需要）
+
+安装 Wails CLI，并确保 `GOBIN`（默认为 `GOPATH\bin`）已加入 `PATH`：
+
+```text
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+```
+
+在项目根目录执行构建：
+
+```text
+.\build.bat
+```
+
+该脚本会设置 `GOPROXY=https://goproxy.cn,direct`，安装前端依赖，执行
+`wails build -platform windows/amd64`，并复制所需的 Wintun DLL。传入
+`arm64` 参数可构建 Windows arm64 版本。输出文件：
+
+```text
+build\bin\gonc-gui.exe
+build\bin\wintun.dll
+```
+
+分发时请将 `wintun.dll` 与 `gonc-gui.exe` 放在同一目录。
+
+直接执行 `go build` 与上述构建并不等价：它不会执行 Wails 的前端构建，也不会
+生成 Windows 资源。`wails build` 过程中，Wails 会临时生成包含应用图标和
+Windows 清单的 `gonc-gui-res.syso`，链接后再将其删除，因此仓库中找不到
+`.syso` 文件属于正常现象，也不需要另外安装 `rsrc` 或 `windres`。直接
+`go build`（还需要 `desktop,production` 构建标签和已构建好的
+`frontend\dist`）生成的 exe 没有图标和清单，可用于诊断，但不能作为发布构建。
+
+创建发布包（在 `dist\` 中生成 Windows amd64、arm64 压缩包及 Android APK）：
 
 ```text
 release.bat

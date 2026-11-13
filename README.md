@@ -234,7 +234,50 @@ Rebuild the Android Go bridge after changing `..\gonetcat`:
 android\update-mobilegonc-aar.bat
 ```
 
-Create release packages:
+### Build on Windows
+
+Prerequisites (the same tools the GitHub release workflow uses):
+
+- Go, at the version in `go.mod`
+- Node.js with npm (the release workflow uses Node.js 24)
+- Wails CLI v2.12.0
+- Microsoft Edge WebView2 Runtime, to run the app
+
+Install the Wails CLI, and make sure `GOBIN` (by default `GOPATH\bin`) is on
+`PATH`:
+
+```text
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+```
+
+From the project root, build:
+
+```text
+.\build.bat
+```
+
+The script sets `GOPROXY=https://goproxy.cn,direct`, installs the frontend
+dependencies, runs `wails build -platform windows/amd64`, and copies the
+required Wintun DLL. Pass `arm64` to build for Windows arm64. Outputs:
+
+```text
+build\bin\gonc-gui.exe
+build\bin\wintun.dll
+```
+
+Keep `wintun.dll` next to `gonc-gui.exe` when you distribute it.
+
+Plain `go build` is not equivalent to this build. It does not run the Wails
+frontend build or generate the Windows resources. During `wails build`, Wails
+writes a temporary `gonc-gui-res.syso` with the app icon and Windows manifest,
+links it in, and deletes it afterwards, so finding no `.syso` in the repository
+is normal, and separate `rsrc` or `windres` tools are not needed. A plain
+`go build` (which also needs the `desktop,production` tags and an
+already-built `frontend\dist`) produces an exe without the icon and manifest:
+fine for diagnostics, but not a release build.
+
+Create release packages (Windows amd64 and arm64 zips plus the Android APK,
+in `dist\`):
 
 ```text
 release.bat
