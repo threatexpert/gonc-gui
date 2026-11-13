@@ -5,6 +5,9 @@
   --surface: #ffffff;
   --surface-2: #f2f4f7;
   --surface-3: #e7eaef;
+  --settings-body-bg: #f2f4f7;
+  --settings-body-muted: #5b6577;
+  --settings-body-control: #cdd3dc;
   --sidebar: #eceff3;
   --border: #e1e5eb;
   --border-strong: #cdd3dc;
@@ -35,6 +38,9 @@
     --surface: #171a1f;
     --surface-2: #1e2127;
     --surface-3: #282c34;
+    --settings-body-bg: #2c323c;
+    --settings-body-muted: #b7bfcc;
+    --settings-body-control: #535d6d;
     --sidebar: #0c0e11;
     --border: #2a2e36;
     --border-strong: #3b404a;
@@ -63,6 +69,9 @@
   --surface: #171a1f;
   --surface-2: #1e2127;
   --surface-3: #282c34;
+  --settings-body-bg: #2c323c;
+  --settings-body-muted: #b7bfcc;
+  --settings-body-control: #535d6d;
   --sidebar: #0c0e11;
   --border: #2a2e36;
   --border-strong: #3b404a;
@@ -722,9 +731,17 @@ input[type="checkbox"] {
 }
 
 .settings-body {
+  --text-muted: var(--settings-body-muted);
+  --text-faint: var(--settings-body-muted);
+  --border-strong: var(--settings-body-control);
   display: grid;
   gap: 12px;
   padding: 0 16px 16px;
+  background: var(--settings-body-bg);
+}
+
+.settings-body .switch span {
+  background: var(--settings-body-control);
 }
 
 /* ---------- passphrase ---------- */
