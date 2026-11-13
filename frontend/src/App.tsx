@@ -8,6 +8,7 @@ import './App.css';
 import {Icon, type IconName} from './Icon';
 import {SendContentOptionIcon} from './SendContentOptionIcon';
 import {TransferInlineQr} from './TransferInlineQr';
+import {ConnectionDetails} from './ConnectionDetails';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -437,6 +438,7 @@ const text = {
     navTunnel: 'VPN 隧道',
     sendSubtitle: '直接把文件、文件夹或文字分享给另一台设备，无需账号，不经云端中转。',
     receiveSubtitle: '输入发送方的口令建立连接，然后选择要下载的内容。',
+    receiveConnectedSubtitle: '选择要接收的文件，保存位置可随时调整。',
     shareContent: '分享内容',
     add: '添加',
     items: '项',
@@ -460,6 +462,11 @@ const text = {
     udpHelpBlocked: '如果所在网络屏蔽 UDP（如部分公司或公共 Wi-Fi），请保持关闭。',
     udpHelpSymmetric: '如果双方都位于对称型 NAT 之后，两种方式都无法直连，需要自备 SOCKS5 中继（见 README）。',
     session: '会话',
+    shareConnections: '分享连接',
+    vpnConnections: 'VPN 客户端',
+    sessionSentTotal: '本次累计发送',
+    onlineConnections: '当前在线连接',
+    noActiveConnections: '暂无在线连接',
     keepWindowOpen: '请保持本窗口开启，直到对方接收完成。',
     clients: '客户端',
     vpnServerKeepOpen: '保持运行，客户端即可随时连接。',
@@ -694,6 +701,7 @@ const text = {
     navTunnel: 'Tunnel',
     sendSubtitle: 'Share files, folders or text directly with another device. No account, no cloud upload.',
     receiveSubtitle: 'Connect with the sender\'s passphrase, then pick what to download.',
+    receiveConnectedSubtitle: 'Choose files to receive. You can change the save location at any time.',
     shareContent: 'Content to share',
     add: 'Add',
     items: 'items',
@@ -717,6 +725,11 @@ const text = {
     udpHelpBlocked: 'Keep it off on networks that block UDP, such as some office or public Wi-Fi.',
     udpHelpSymmetric: 'If both sides are behind symmetric NAT, neither option connects directly; use your own SOCKS5 relay (see the README).',
     session: 'Session',
+    shareConnections: 'Sharing connections',
+    vpnConnections: 'VPN clients',
+    sessionSentTotal: 'Sent this session',
+    onlineConnections: 'Currently online',
+    noActiveConnections: 'No active connections',
     keepWindowOpen: 'Keep this window open until the receiver finishes.',
     clients: 'Clients',
     vpnServerKeepOpen: 'Keep it running so clients can connect at any time.',
@@ -1149,6 +1162,8 @@ function App() {
     : (mode === 'vpnServer' ? freshSpeed(vpnServerTraffic?.time, vpnServerTraffic?.outBps, nowTick) : (mode === 'vpnClient' ? Math.max(freshSpeed(vpnClientTraffic?.time, vpnClientTraffic?.inBps, nowTick), freshSpeed(vpnClientTraffic?.time, vpnClientTraffic?.outBps, nowTick)) : activeSpeed));
   const sendTotalBytes = sendTraffic?.outBytes || 0;
   const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
+  // Stay compact through reconnects, until this receiving session is stopped.
+  const receiveSessionCompact = receiveRunning && (receiveQrHasConnected || remoteList !== null);
   const vpnClientStatus = receiveConnectionStatus(vpnClientP2PReport, vpnClientRunning, false, t);
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
   const vpnServerStatus = multiClientActivityStatus(latestVpnServerReport, vpnServerSessions, vpnServerRunning, t);
@@ -1160,6 +1175,12 @@ function App() {
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
   const activeDownloadWarning = downloadWarning && downloadWarning.until > nowTick ? downloadWarning : null;
+
+  useEffect(() => {
+    if (mode === 'receive' && receiveSessionCompact) {
+      mainRef.current?.scrollTo({top: 0});
+    }
+  }, [mode, receiveSessionCompact]);
 
   useEffect(() => {
     const previous = previousSendQrPassphrase.current;
@@ -2723,7 +2744,7 @@ function App() {
   const securityHint = mode === 'send' ? t.senderPasswordHint : (mode === 'receive' ? t.receiverPasswordHint : '');
   const currentStatus = mode === 'send' ? sendStatus : (mode === 'receive' ? receiveStatus : (mode === 'vpnServer' ? vpnServerStatus : vpnClientStatus));
   const pageTitle = mode === 'send' ? t.sendTitle : (mode === 'receive' ? t.receiveTitle : (mode === 'vpnServer' ? t.vpnServerTitle : t.vpnClient));
-  const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? t.receiveSubtitle : (mode === 'vpnServer' ? t.vpnServerPasswordHint : t.vpnClientPasswordHint));
+  const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? (receiveSessionCompact ? t.receiveConnectedSubtitle : t.receiveSubtitle) : (mode === 'vpnServer' ? t.vpnServerPasswordHint : t.vpnClientPasswordHint));
   const stopLabel = mode === 'send' ? t.stopShare : (mode === 'vpnServer' ? t.stopVpnServer : t.disconnect);
   const startIcon: IconName = mode === 'send' ? 'send' : (mode === 'receive' ? 'link' : (mode === 'vpnServer' ? 'server' : 'shield'));
   const startHint = currentRunning || canStart || startPending
@@ -2736,8 +2757,9 @@ function App() {
     vpnServer: vpnServerRunning ? vpnServerStatus.tone : null,
   };
   const multiSessions = mode === 'send' ? p2pSessions : vpnServerSessions;
-  const multiStatus = mode === 'send' ? sendStatus : vpnServerStatus;
-  const multiConnectedCount = mode === 'send' ? connectedCount : vpnServerConnectedCount;
+  const activeConnections = currentRunning
+    ? multiSessions.filter((report) => report.topic && normalizeP2PStatus(report.status) === 'connected')
+    : [];
   const vpnProfileList = normalizeVpnProfiles(vpnProfiles, t);
   const currentVpnProfileName = vpnProfiles[selectedVpnProfile]?.name || t.vpnProfileDefaultName;
   const remoteFileCount = visibleEntries.filter((item) => !item.is_dir).length;
@@ -2924,39 +2946,9 @@ function App() {
     );
   }
 
-  const sessionCard = currentRunning && (mode === 'send' || mode === 'vpnServer') && (
-    <section className="card">
-      <div className="card-head">
-        <h2>{mode === 'send' ? t.session : t.clients}</h2>
-        <span className="card-count">{t.connectedShort} {multiConnectedCount}</span>
-      </div>
-      <div className="card-body session-body">
-        <div className={`session-state ${multiStatus.tone}`}>
-          <span className="session-icon"><Icon name={multiStatus.tone === 'connected' ? 'check' : 'users'} /></span>
-          <div className="session-text">
-            <strong>{multiStatus.label}</strong>
-            <small>{mode === 'send' ? t.keepWindowOpen : t.vpnServerKeepOpen}</small>
-          </div>
-          <div className="session-metrics">
-            <span>{formatRate(transferSpeed)}</span>
-            {mode === 'send' && <small>{t.sentTotal} {formatBytes(sendTotalBytes)}</small>}
-          </div>
-        </div>
-        {multiSessions.filter((report) => report.topic && report.status === 'connected').map((report) => (
-          <div className="peer-row" key={p2pSessionKey(report)}>
-            <span className="dot connected" aria-hidden="true" />
-            <code title={report.peer || undefined}>{report.peer || '-'}</code>
-            {report.network && <span className="chip">{report.network}</span>}
-            {routeLabel(report.mode || '', t) !== '-' && <span className="chip ok">{routeLabel(report.mode || '', t)}</span>}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-
   const sendPage = (
     <>
-      <section className="card">
+      <section className="card share-content-card">
         <div className="card-head">
           <h2>{t.shareContent}</h2>
           {sharePaths.length > 0 && <span className="card-count">{sharePaths.length} {t.items}</span>}
@@ -3012,29 +3004,40 @@ function App() {
         </div>
       </section>
       {setupCard()}
-      {sessionCard}
     </>
+  );
+
+  const saveDirectoryField = (
+    <div className="field">
+      <label htmlFor="save-dir-input">{t.saveDir}</label>
+      <div className="input-group">
+        <input id="save-dir-input" value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
+        <button type="button" className="icon-button" onClick={chooseSaveDir} aria-label={t.choose} title={t.choose}><Icon name="folder" /></button>
+        <button type="button" className="icon-button" onClick={openSaveDir} aria-label={t.openFolder} title={t.openFolder}><Icon name="folderOpen" /></button>
+      </div>
+    </div>
   );
 
   const receivePage = (
     <>
-      {setupCard(
-        <div className="field">
-          <label htmlFor="save-dir-input">{t.saveDir}</label>
-          <div className="input-group">
-            <input id="save-dir-input" value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
-            <button type="button" className="icon-button" onClick={chooseSaveDir} aria-label={t.choose} title={t.choose}><Icon name="folder" /></button>
-            <button type="button" className="icon-button" onClick={openSaveDir} aria-label={t.openFolder} title={t.openFolder}><Icon name="folderOpen" /></button>
+      {receiveSessionCompact ? (
+        <section className="card receive-session-bar" aria-label={t.connections}>
+          <div className="receive-session-info">
+            <span className={`connection-chip ${receiveStatus.tone}`} role="status">
+              <span className={`dot ${receiveStatus.tone}`} />{receiveStatus.label}
+            </span>
+            {receiveP2PReport?.peer && <code className="receive-peer" title={receiveP2PReport.peer}>{receiveP2PReport.peer}</code>}
           </div>
-        </div>
-      )}
+          {runButton('compact')}
+        </section>
+      ) : setupCard(saveDirectoryField)}
       <section className="card remote-pane">
         <div className="card-head">
           <h2>{t.remoteFiles}</h2>
-          <span className={`connection-chip ${receiveStatus.tone}`}>
+          {!receiveSessionCompact && <span className={`connection-chip ${receiveStatus.tone}`}>
             <span className={`dot ${receiveStatus.tone}`} />
             {receiveStatus.label}
-          </span>
+          </span>}
           <div className="card-actions">
             <div className="compact-switch" role="group" aria-label={t.downloadMode} title={t.downloadMode}>
               <button type="button" className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
@@ -3045,6 +3048,7 @@ function App() {
             </button>
           </div>
         </div>
+        {receiveSessionCompact && <div className="receive-save-dir">{saveDirectoryField}</div>}
         {remoteList && (
           <div className="remote-toolbar">
             <nav className="remote-breadcrumb" aria-label={t.currentDir}>
@@ -3385,7 +3389,6 @@ function App() {
   const vpnServerPage = (
     <>
       {setupCard()}
-      {sessionCard}
       <section className="card">
         <div className="card-head"><h2>{t.options}</h2></div>
         <div className="card-body form-stack">
@@ -3477,7 +3480,7 @@ function App() {
       </aside>
 
       <main className="main" ref={mainRef}>
-        <div className="page">
+        <div className={`page${mode === 'send' ? ' page--send' : mode === 'receive' && receiveSessionCompact ? ' page--receive-connected' : ''}`}>
           <header className="page-head">
             <h1>{pageTitle}</h1>
             <p>{pageSubtitle}</p>
@@ -3538,7 +3541,26 @@ function App() {
         {(mode === 'send' || mode === 'vpnServer') && (
           <>
             <span className="status-divider" />
-            <span className="status-segment"><Icon name="users" />{t.connectedShort} {multiConnectedCount}</span>
+            <ConnectionDetails
+              key={mode}
+              title={mode === 'send' ? t.shareConnections : t.vpnConnections}
+              connectedLabel={t.connectedShort}
+              closeLabel={t.close}
+              emptyLabel={t.noActiveConnections}
+              onlineLabel={t.onlineConnections}
+              metrics={[
+                ...(mode === 'send' ? [{label: t.sessionSentTotal, value: formatBytes(sendTotalBytes)}] : []),
+                {label: t.speed, value: formatRate(transferSpeed)},
+              ]}
+              peers={activeConnections.map((report) => {
+                const route = routeLabel(report.mode || '', t);
+                return {
+                  id: p2pSessionKey(report),
+                  address: report.peer || '-',
+                  description: [report.network, route !== '-' ? route : ''].filter(Boolean).join(' · '),
+                };
+              })}
+            />
           </>
         )}
         <span className="status-divider" />
