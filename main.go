@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
@@ -37,6 +40,9 @@ func main() {
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,
 		},
+		Windows: &windows.Options{
+			WebviewUserDataPath: webviewUserDataPath(),
+		},
 		OnStartup:     app.startup,
 		OnBeforeClose: app.beforeClose,
 		OnShutdown:    app.shutdown,
@@ -48,6 +54,35 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+// webviewUserDataPath gives each install location its own WebView2 profile.
+// WebView2 refuses to open a profile folder that another process opened with
+// different settings, so copies of different versions sharing the default
+// %APPDATA%\gonc-gui.exe folder could not run side by side. An empty result
+// falls back to the Wails default.
+func webviewUserDataPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	path := webviewUserDataPathFor(configDir, exe)
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return ""
+	}
+	return path
+}
+
+func webviewUserDataPathFor(configDir, exe string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(exe))))
+	return filepath.Join(configDir, "Gonc", "gonc-gui", "webview", hex.EncodeToString(sum[:6]))
 }
 
 func collectStartupSharePaths(args []string) []string {
