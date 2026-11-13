@@ -1,12 +1,14 @@
 html {
-  background: #f4f7fb;
-  color: #152033;
+  background: var(--bg, #f5f6f8);
+  color: var(--text, #121826);
 }
 
 body {
   margin: 0;
-  color: #152033;
-  font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg, #f5f6f8);
+  color: var(--text, #121826);
+  font: 13.5px/1.45 "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 #root {

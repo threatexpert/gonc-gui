@@ -1,10 +1,11 @@
-﻿import {useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent} from 'react';
+﻿import {Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import QRCode from 'qrcode';
 import type {KeyboardEvent as ReactKeyboardEvent} from 'react';
 import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader';
 import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url';
 import appIconUrl from './assets/images/appicon.png';
 import './App.css';
+import {Icon, type IconName} from './Icon';
 import {SendContentOptionIcon} from './SendContentOptionIcon';
 import {TransferInlineQr} from './TransferInlineQr';
 import {
@@ -68,6 +69,7 @@ import {BrowserOpenURL, ClipboardGetText, Environment, EventsOff, EventsOn, OnFi
 
 type Mode = PassphraseMode;
 type Lang = 'zh' | 'en';
+type Theme = 'light' | 'dark';
 type DownloadMode = 'resume' | 'overwrite';
 
 type UpdateErrorCode = 'network' | 'manifest' | 'platform';
@@ -336,7 +338,7 @@ const text = {
     openFolder: '打开目录',
     currentDir: '当前目录',
     parent: '上级目录',
-    useUDP: '使用 UDP 协议',
+    useUDP: '使用 UDP',
     advancedSettings: '高级设置',
     hideAdvancedSettings: '收起高级设置',
     upstreamProxy: '上游代理节点',
@@ -431,6 +433,54 @@ const text = {
     vpnStartedBody: '系统 VPN 路由和 DNS 已配置完成。',
     shareUpdateFailed: '更新分享列表失败。',
     weakPassword: '口令强度不足。请使用至少 8 位，并同时包含字母和数字的口令。',
+    navTransfer: '文件传输',
+    navTunnel: 'VPN 隧道',
+    sendSubtitle: '直接把文件、文件夹或文字分享给另一台设备，无需账号，不经云端中转。',
+    receiveSubtitle: '输入发送方的口令建立连接，然后选择要下载的内容。',
+    shareContent: '分享内容',
+    add: '添加',
+    items: '项',
+    passphraseShareNote: '只通过可信渠道把口令告诉对方，任何持有口令的人都能连接。',
+    howSecure: '安全原理',
+    showLess: '收起',
+    showPassphrase: '显示口令',
+    hidePassphrase: '隐藏口令',
+    dropHintKinds: '支持文件、文件夹、文字和剪贴板内容',
+    stopShare: '停止分享',
+    disconnect: '断开连接',
+    stopVpnServer: '停止 VPN 服务端',
+    addContentFirst: '请先添加要分享的内容',
+    enterPassphraseFirst: '请先输入口令',
+    udpHint: '关闭时自动选择协议，通常先尝试 TCP，再回退到 UDP；开启后强制只使用 UDP。',
+    protocolAuto: '自动（TCP/UDP）',
+    udpHintShort: '如果和对方不在同一局域网，建议开启 UDP 优化跨网络传输。',
+    udpMoreDetails: '详细说明',
+    udpHelpLan: '同一局域网：保持关闭。Gonc 会自动选择协议，通常先尝试 TCP，再尝试 UDP。',
+    udpHelpWan: '不同网络：建议开启。开启后只使用 UDP（KCP），针对跨网络传输做了优化，并跳过 TCP 尝试。部分 NAT 组合（端口受限锥形 NAT（类型 3）与类型 3 或对称型 NAT（类型 4））只能通过 UDP 连通。',
+    udpHelpBlocked: '如果所在网络屏蔽 UDP（如部分公司或公共 Wi-Fi），请保持关闭。',
+    udpHelpSymmetric: '如果双方都位于对称型 NAT 之后，两种方式都无法直连，需要自备 SOCKS5 中继（见 README）。',
+    session: '会话',
+    keepWindowOpen: '请保持本窗口开启，直到对方接收完成。',
+    clients: '客户端',
+    vpnServerKeepOpen: '保持运行，客户端即可随时连接。',
+    name: '名称',
+    size: '大小',
+    emptyFolder: '此目录为空',
+    notConnectedTitle: '尚未连接',
+    localAvailable: '本机已有',
+    vpnProfiles: '配置列表',
+    systemVpn: 'VPN',
+    sectionConnection: '连接',
+    sectionRouting: '路由',
+    sectionDns: 'DNS',
+    sectionAdvanced: '高级',
+    options: '选项',
+    deployElsewhere: '在其他设备上部署',
+    deployHint: '在路由器、NAS 或 VPS 上用命令行版 gonc 运行以下命令，即可作为 VPN 服务端供客户端连接。',
+    copyCommand: '复制命令',
+    commandCopied: '命令已复制',
+    themeToDark: '切换到深色模式',
+    themeToLight: '切换到浅色模式',
   },
   en: {
     brand: 'Gonc',
@@ -545,7 +595,7 @@ const text = {
     openFolder: 'Open Folder',
     currentDir: 'Current directory',
     parent: 'Parent directory',
-    useUDP: 'Use UDP protocol',
+    useUDP: 'Use UDP',
     advancedSettings: 'Advanced Settings',
     hideAdvancedSettings: 'Hide Advanced Settings',
     upstreamProxy: 'Upstream Proxy',
@@ -640,8 +690,67 @@ const text = {
     vpnStartedBody: 'System VPN routes and DNS are ready.',
     shareUpdateFailed: 'Failed to update shared list.',
     weakPassword: 'Passphrase is too weak. Use at least 8 characters with both letters and digits.',
+    navTransfer: 'Transfer',
+    navTunnel: 'Tunnel',
+    sendSubtitle: 'Share files, folders or text directly with another device. No account, no cloud upload.',
+    receiveSubtitle: 'Connect with the sender\'s passphrase, then pick what to download.',
+    shareContent: 'Content to share',
+    add: 'Add',
+    items: 'items',
+    passphraseShareNote: 'Share it only with the other device over a channel you trust. Anyone with this passphrase can connect.',
+    howSecure: 'How is this secure?',
+    showLess: 'Show less',
+    showPassphrase: 'Show passphrase',
+    hidePassphrase: 'Hide passphrase',
+    dropHintKinds: 'Files, folders, text and clipboard content',
+    stopShare: 'Stop Sharing',
+    disconnect: 'Disconnect',
+    stopVpnServer: 'Stop VPN Server',
+    addContentFirst: 'Add something to share first',
+    enterPassphraseFirst: 'Enter a passphrase first',
+    udpHint: 'Off: the protocol is chosen automatically, usually trying TCP first and then falling back to UDP. On: only UDP is used.',
+    protocolAuto: 'Auto (TCP/UDP)',
+    udpHintShort: 'If the peer is not on the same LAN, enable UDP to optimize cross-network transfer.',
+    udpMoreDetails: 'More details',
+    udpHelpLan: 'Same LAN: leave it off. Gonc chooses the protocol automatically, usually trying TCP first and then UDP.',
+    udpHelpWan: 'Different networks: turn it on. Gonc then uses only UDP (with KCP), which is optimized for cross-network transfer and skips the TCP attempts. Some NAT pairs, such as port-restricted cone NAT (type 3) with type 3 or symmetric NAT (type 4), only connect over UDP.',
+    udpHelpBlocked: 'Keep it off on networks that block UDP, such as some office or public Wi-Fi.',
+    udpHelpSymmetric: 'If both sides are behind symmetric NAT, neither option connects directly; use your own SOCKS5 relay (see the README).',
+    session: 'Session',
+    keepWindowOpen: 'Keep this window open until the receiver finishes.',
+    clients: 'Clients',
+    vpnServerKeepOpen: 'Keep it running so clients can connect at any time.',
+    name: 'Name',
+    size: 'Size',
+    emptyFolder: 'This folder is empty',
+    notConnectedTitle: 'Not connected yet',
+    localAvailable: 'On this PC',
+    vpnProfiles: 'Profiles',
+    systemVpn: 'VPN',
+    sectionConnection: 'Connection',
+    sectionRouting: 'Routing',
+    sectionDns: 'DNS',
+    sectionAdvanced: 'Advanced',
+    options: 'Options',
+    deployElsewhere: 'Deploy on another device',
+    deployHint: 'Run this with the command-line gonc on a router, NAS or VPS to turn it into a VPN server your clients can connect to.',
+    copyCommand: 'Copy command',
+    commandCopied: 'Command copied',
+    themeToDark: 'Switch to dark theme',
+    themeToLight: 'Switch to light theme',
   }
 };
+
+const themeStorageKey = 'gonc.theme';
+
+function storedTheme(): Theme | null {
+  try {
+    const value = window.localStorage.getItem(themeStorageKey);
+    return value === 'light' || value === 'dark' ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 function detectLang(): Lang {
   const lang = navigator.language.toLowerCase();
@@ -810,13 +919,11 @@ function App() {
   const [useUDP, setUseUDP] = useState(false);
   const [vpnServerUseUDP, setVpnServerUseUDP] = useState(false);
   const [vpnServerP2PWithLAN, setVpnServerP2PWithLAN] = useState(false);
-  const [vpnServerAdvanced, setVpnServerAdvanced] = useState(false);
   const [vpnServerUpstream, setVpnServerUpstream] = useState('');
   const [vpnServerDNSForward, setVpnServerDNSForward] = useState('');
   const [vpnServerExtraArgs, setVpnServerExtraArgs] = useState('');
   const [vpnClientUseUDP, setVpnClientUseUDP] = useState(false);
   const [vpnClientP2PWithLAN, setVpnClientP2PWithLAN] = useState(false);
-  const [vpnClientAdvanced, setVpnClientAdvanced] = useState(false);
   const [vpnClientEnableIPv6, setVpnClientEnableIPv6] = useState(false);
   const [vpnClientTunnelOnly, setVpnClientTunnelOnly] = useState(false);
   const [vpnClientDNSServers, setVpnClientDNSServers] = useState('');
@@ -870,6 +977,11 @@ function App() {
   const [scanRect, setScanRect] = useState<{x: number; y: number; w: number; h: number} | null>(null);
   const [isAdministrator, setIsAdministrator] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
+  const [securityInfoOpen, setSecurityInfoOpen] = useState(false);
+  const [udpHelpOpen, setUdpHelpOpen] = useState(false);
+  const [theme, setTheme] = useState<Theme | null>(storedTheme);
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [updateState, setUpdateState] = useState<UpdateState>({kind: 'idle'});
   const aboutButtonRef = useRef<HTMLButtonElement | null>(null);
   const aboutDialogRef = useRef<HTMLElement | null>(null);
@@ -897,9 +1009,8 @@ function App() {
   const activeReceiveTransferRun = useRef(0);
   const receivedStatusDownloadingRef = useRef(status.downloading);
   const receivedLocalFilesRef = useRef(receivedLocalFiles);
-  const diagnosticsRef = useRef<HTMLDetailsElement | null>(null);
-  const logPaneRef = useRef<HTMLElement | null>(null);
   const logsRef = useRef<HTMLDivElement | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
   const downloadWarningPulse = useRef(0);
   const [nowTick, setNowTick] = useState(Date.now());
   const [passwordRevealCoordinator] = useState(() => createPassphraseRevealCoordinator(
@@ -914,6 +1025,48 @@ function App() {
   }, [lang]);
 
   useEffect(() => () => passwordRevealCoordinator.dispose(), []);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) {
+      return;
+    }
+    const update = () => setSystemDark(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme) {
+      root.dataset.theme = theme;
+    } else {
+      delete root.dataset.theme;
+    }
+    try {
+      if (theme) {
+        window.localStorage.setItem(themeStorageKey, theme);
+      } else {
+        window.localStorage.removeItem(themeStorageKey);
+      }
+    } catch {
+      // Theme preference is a convenience; ignore unavailable storage.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({top: 0});
+  }, [mode]);
+
+  useEffect(() => {
+    if (!logOpen) {
+      return;
+    }
+    const logs = logsRef.current;
+    if (logs) {
+      logs.scrollTop = logs.scrollHeight;
+    }
+  }, [logOpen, logs.length]);
 
   useEffect(() => {
     if (!aboutOpen) {
@@ -1331,11 +1484,8 @@ function App() {
   }
 
   function showDownloadWarningLog() {
-    if (diagnosticsRef.current) {
-      diagnosticsRef.current.open = true;
-    }
+    setLogOpen(true);
     window.setTimeout(() => {
-      logPaneRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'});
       const logs = logsRef.current;
       if (logs) {
         logs.scrollTop = logs.scrollHeight;
@@ -1859,10 +2009,6 @@ function App() {
       transferStarted = true;
       if (mode === 'receive') {
         resetReceivedDownloadStateForNewConnection();
-      } else if (mode === 'vpnServer') {
-        setVpnServerAdvanced(false);
-      } else if (mode === 'vpnClient') {
-        setVpnClientAdvanced(false);
       }
       await refreshStatus();
     } catch (err) {
@@ -2572,11 +2718,101 @@ function App() {
     }
   }
 
+  const effectiveTheme: Theme = theme || (systemDark ? 'dark' : 'light');
+  const passphraseToggleLabel = passwordVisibility[mode] ? t.hidePassphrase : t.showPassphrase;
+  const securityHint = mode === 'send' ? t.senderPasswordHint : (mode === 'receive' ? t.receiverPasswordHint : '');
+  const currentStatus = mode === 'send' ? sendStatus : (mode === 'receive' ? receiveStatus : (mode === 'vpnServer' ? vpnServerStatus : vpnClientStatus));
+  const pageTitle = mode === 'send' ? t.sendTitle : (mode === 'receive' ? t.receiveTitle : (mode === 'vpnServer' ? t.vpnServerTitle : t.vpnClient));
+  const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? t.receiveSubtitle : (mode === 'vpnServer' ? t.vpnServerPasswordHint : t.vpnClientPasswordHint));
+  const stopLabel = mode === 'send' ? t.stopShare : (mode === 'vpnServer' ? t.stopVpnServer : t.disconnect);
+  const startIcon: IconName = mode === 'send' ? 'send' : (mode === 'receive' ? 'link' : (mode === 'vpnServer' ? 'server' : 'shield'));
+  const startHint = currentRunning || canStart || startPending
+    ? ''
+    : (mode === 'send' && sharePaths.length === 0 ? t.addContentFirst : (!activePassword.trim() ? t.enterPassphraseFirst : ''));
+  const navTone: Record<Mode, StatusTone | null> = {
+    send: sendRunning ? sendStatus.tone : null,
+    receive: receiveRunning ? receiveStatus.tone : null,
+    vpnClient: vpnClientRunning ? vpnClientStatus.tone : null,
+    vpnServer: vpnServerRunning ? vpnServerStatus.tone : null,
+  };
+  const multiSessions = mode === 'send' ? p2pSessions : vpnServerSessions;
+  const multiStatus = mode === 'send' ? sendStatus : vpnServerStatus;
+  const multiConnectedCount = mode === 'send' ? connectedCount : vpnServerConnectedCount;
+  const vpnProfileList = normalizeVpnProfiles(vpnProfiles, t);
+  const currentVpnProfileName = vpnProfiles[selectedVpnProfile]?.name || t.vpnProfileDefaultName;
+  const remoteFileCount = visibleEntries.filter((item) => !item.is_dir).length;
+  const remoteDirCount = visibleEntries.filter((item) => item.is_dir).length;
+
+  function togglePassphraseVisibility() {
+    setPasswordVisibility((current) => withPassphraseVisibility(current, mode, !current[mode]));
+  }
+
+  async function copyDeployCommand() {
+    await navigator.clipboard.writeText('gonc -p2p <passphrase> -linkagent');
+    appendLog('status', 'info', t.commandCopied);
+  }
+
+  function toolButton(icon: IconName, label: string, onClick: () => void, disabled = false) {
+    return (
+      <button type="button" className="tool-button" disabled={disabled} onClick={onClick}>
+        <Icon name={icon} />
+        <span>{label}</span>
+      </button>
+    );
+  }
+
+  function navItem(target: Mode, icon: IconName, label: string) {
+    const tone = navTone[target];
+    return (
+      <button
+        type="button"
+        className={`nav-item${mode === target ? ' active' : ''}`}
+        aria-current={mode === target ? 'page' : undefined}
+        onClick={() => setMode(target)}
+      >
+        <Icon name={icon} />
+        <span className="nav-label">{label}</span>
+        {tone && <span className={`nav-dot ${tone}`} aria-hidden="true" />}
+      </button>
+    );
+  }
+
+  const passphraseTools = mode === 'send' ? (
+    <>
+      {!sendRunning && toolButton('regenerate', t.generate, generatePassword)}
+      {toolButton('copy', t.copy, copyPassword, !sendPassword)}
+      {!sendRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+    </>
+  ) : mode === 'receive' ? (
+    <>
+      {!receiveRunning && toolButton('regenerate', t.generate, generateReceivePassword)}
+      {!receiveRunning && toolButton('paste', t.paste, pastePassword)}
+      {!receiveRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+    </>
+  ) : mode === 'vpnServer' ? (
+    <>
+      {!vpnServerRunning && toolButton('regenerate', t.generate, generateVpnServerPassword)}
+      {!vpnServerRunning && toolButton('paste', t.paste, pastePassword)}
+      {toolButton('copy', t.copy, copyPassword, !vpnServerPassword)}
+      {!vpnServerRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+      {toolButton('qr', t.qr, showPasswordQr, !vpnServerPassword)}
+    </>
+  ) : (
+    <>
+      {!vpnClientRunning && toolButton('regenerate', t.generate, generateVpnClientPassword)}
+      {!vpnClientRunning && toolButton('paste', t.paste, pastePassword)}
+      {toolButton('copy', t.copy, copyPassword, !vpnClientPassword)}
+      {!vpnClientRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+      {toolButton('qr', t.qr, showPasswordQr, !vpnClientPassword)}
+    </>
+  );
+
   const passphraseField = (
     <div className="field">
-      <label>{mode === 'send' ? t.senderPassphrase : t.passphrase}</label>
-      <div className="inline password-line">
+      <label htmlFor="passphrase-input">{t.passphrase}</label>
+      <div className={`key-field${currentRunning ? ' locked' : ''}`}>
         <input
+          id="passphrase-input"
           type={passwordVisibility[mode] ? 'text' : 'password'}
           value={activePassword}
           onChange={(event) => {
@@ -2592,597 +2828,728 @@ function App() {
           }}
           placeholder={t.passPlaceholder}
           disabled={currentRunning}
+          spellCheck={false}
+          autoComplete="off"
         />
-        {mode === 'send' ? (
-          <>
-            {!sendRunning && <button className="secondary" onClick={generatePassword}>{t.generate}</button>}
-            <button className="secondary" disabled={!sendPassword} onClick={copyPassword}>{t.copy}</button>
-            {!sendRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-          </>
-        ) : mode === 'receive' ? (
-          <>
-            {!receiveRunning && <button className="secondary" onClick={generateReceivePassword}>{t.generate}</button>}
-            {!receiveRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-            {!receiveRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-          </>
-        ) : mode === 'vpnServer' ? (
-          <>
-            {!vpnServerRunning && <button className="secondary" onClick={generateVpnServerPassword}>{t.generate}</button>}
-            {!vpnServerRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-            <button className="secondary" disabled={!vpnServerPassword} onClick={copyPassword}>{t.copy}</button>
-            {!vpnServerRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-            <button className="secondary" disabled={!vpnServerPassword} onClick={showPasswordQr}>{t.qr}</button>
-          </>
-        ) : (
-          <>
-            {!vpnClientRunning && <button className="secondary" onClick={generateVpnClientPassword}>{t.generate}</button>}
-            {!vpnClientRunning && <button className="secondary" onClick={pastePassword}>{t.paste}</button>}
-            <button className="secondary" disabled={!vpnClientPassword} onClick={copyPassword}>{t.copy}</button>
-            {!vpnClientRunning && <button className="secondary" disabled={scanBusy} onClick={() => startScreenScan()}>{t.scan}</button>}
-            <button className="secondary" disabled={!vpnClientPassword} onClick={showPasswordQr}>{t.qr}</button>
-          </>
-        )}
+        <button type="button" className="icon-button" onClick={togglePassphraseVisibility} aria-label={passphraseToggleLabel} title={passphraseToggleLabel}>
+          <Icon name={passwordVisibility[mode] ? 'eyeOff' : 'eye'} />
+        </button>
       </div>
-      {mode === 'send' ? (
-        <div className="field-hint">
-          <p>{t.senderPasswordHint}</p>
-        </div>
-      ) : mode === 'receive' ? (
-        <div className="field-hint">
-          <p>{t.receiverPasswordHint}</p>
-        </div>
-      ) : mode === 'vpnServer' ? (
-        <div className="field-hint">
-          <p>{t.vpnServerPasswordHint}</p>
-        </div>
-      ) : (
-        <div className="field-hint">
-          <p>{t.vpnClientPasswordHint}</p>
-        </div>
-      )}
+      <div className="key-tools">{passphraseTools}</div>
+      <p className="trust-note">
+        <Icon name="lock" />
+        <span>
+          {t.passphraseShareNote}
+          {securityHint && (
+            <>
+              {' '}
+              <button type="button" className="link-button" aria-expanded={securityInfoOpen} onClick={() => setSecurityInfoOpen((value) => !value)}>
+                {securityInfoOpen ? t.showLess : t.howSecure}
+              </button>
+            </>
+          )}
+        </span>
+      </p>
+      {securityHint && securityInfoOpen && <p className="field-hint security-detail">{securityHint}</p>}
     </div>
   );
 
-  return (
-    <main className="shell">
-      <section className="workspace">
-        <header className="app-header">
-          <div className="brand">
-            <img className="brand-mark" src={appIconUrl} alt="" aria-hidden="true" />
-            <div>
-              <div className="brand-title">
-                <h1>{t.brand}</h1>
-                <span>{appVersion}</span>
-                <button ref={aboutButtonRef} className="about-entry" onClick={openAbout}>{t.about}</button>
-              </div>
-              <p>{t.subtitle}</p>
-            </div>
-          </div>
-          <div className="header-actions">
-            {(mode === 'send' || mode === 'vpnServer' || mode === 'vpnClient') && (
-              <div className={`status-block ${statusTone}`}>
-                <span className={`dot ${statusTone}`} />
-                <span>{mode === 'send' ? sendStatus.label : (mode === 'vpnServer' ? vpnServerStatus.label : vpnClientStatus.label)}</span>
-                {mode !== 'vpnClient' && (
-                  <>
-                    <span className="status-divider" />
-                    <span>{t.connectedShort} {mode === 'send' ? connectedCount : vpnServerConnectedCount}</span>
-                  </>
-                )}
-                <span className="status-divider" />
-                <span>{formatRate(transferSpeed)}</span>
-              </div>
-            )}
-          </div>
-        </header>
+  function runButton(extraClass = '') {
+    return currentRunning ? (
+      <button type="button" className={`danger big-action ${extraClass}`.trim()} onClick={stop}>{stopLabel}</button>
+    ) : (
+      <button type="button" className={`primary big-action ${extraClass}`.trim()} disabled={!canStart} onClick={start}>
+        <span className="big-action-label"><Icon name={startIcon} />{primaryLabel}</span>
+        {showVpnAdminPrompt && <span className="button-subtext">{t.vpnConnectAdminPrompt}</span>}
+      </button>
+    );
+  }
 
-        <div className="mode-switch" role="tablist" aria-label="Transfer mode">
-          <button className={mode === 'send' ? 'active' : ''} onClick={() => setMode('send')}>{t.send}</button>
-          <button className={mode === 'receive' ? 'active' : ''} onClick={() => setMode('receive')}>{t.receive}</button>
-          <button className={mode === 'vpnClient' ? 'active' : ''} onClick={() => setMode('vpnClient')}>{t.vpnClient}</button>
-          <button className={mode === 'vpnServer' ? 'active' : ''} onClick={() => setMode('vpnServer')}>{t.vpnServer}</button>
+  const actionBar = (
+    <>
+      <div className="action-bar">
+        {isFileTransferMode(mode) && (
+          <Toggle
+            label={t.useUDP}
+            hint={(
+              <>
+                {t.udpHintShort}{' '}
+                <button type="button" className="link-button" aria-expanded={udpHelpOpen} onClick={() => setUdpHelpOpen((value) => !value)}>
+                  {udpHelpOpen ? t.showLess : t.udpMoreDetails}
+                </button>
+              </>
+            )}
+            checked={useUDP}
+            disabled={currentRunning}
+            onChange={setUseUDP}
+          />
+        )}
+        <div className="action-main">
+          {runButton()}
+          {startHint && <span className="action-hint">{startHint}</span>}
         </div>
+      </div>
+      {isFileTransferMode(mode) && udpHelpOpen && (
+        <ul className="udp-help">
+          <li>{t.udpHelpLan}</li>
+          <li>{t.udpHelpWan}</li>
+          <li>{t.udpHelpBlocked}</li>
+          <li>{t.udpHelpSymmetric}</li>
+        </ul>
+      )}
+    </>
+  );
 
-        <section className="main-pane">
-          {error && <div className="alert">{error}</div>}
-
-          <section className="flow-panel">
-            {mode === 'send' ? (
-              <>
-                <div className="field">
-                  <div className="field-heading">
-                    <label>{t.sharedList}</label>
-                    <div className="share-list-tools">
-                      <span>{sharePaths.length} {t.files}</span>
-                      <button className="clear-share-paths" disabled={sharePaths.length === 0 || shareMutationPending || pickerPending || startPending} onClick={clearSharePaths}>× {t.clearSharePaths}</button>
-                    </div>
-                  </div>
-                  <div className="drop-zone">
-                    <div ref={pathListRef} className="path-list">
-                      {sharePaths.map((path) => (
-                        <div className="path-row" key={path}>
-                          <span>{path}</span>
-                          <div className="path-row-actions">
-                            <button className="reveal-received-file reveal-share-path" onClick={() => revealSharePath(path)} aria-label={revealFileLabel} title={revealFileLabel}>
-                              <span className="reveal-folder-icon" aria-hidden="true" />
-                            </button>
-                            <button disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>×</button>
-                          </div>
-                        </div>
-                      ))}
-                      <button
-                        ref={addPickerButtonRef}
-                        type="button"
-                        className={`drop-hint-action ${dropHintMode(sharePaths)}`}
-                        disabled={shareMutationPending || pickerPending || startPending}
-                        onClick={openAddPicker}
-                      >
-                        {t.dropHint}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) : mode === 'receive' ? (
-              <>
-                <div className="field">
-                  <label>{t.saveDir}</label>
-                  <div className="inline">
-                    <input value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
-                    <button className="secondary" onClick={chooseSaveDir}>{t.choose}</button>
-                    <button className="secondary" onClick={openSaveDir}>{t.openFolder}</button>
-                  </div>
-                </div>
-              </>
-            ) : null}
-
-            {mode === 'vpnClient' && (
-              <>
-                <div className="field">
-                  <label>{t.vpnProfile}</label>
-                  <div className="inline profile-line">
-                    <select
-                      value={selectedVpnProfile}
-                      disabled={vpnClientRunning}
-                      onChange={(event) => selectVpnProfile(Number(event.target.value))}
-                    >
-                      {normalizeVpnProfiles(vpnProfiles, t).map((profile, index) => (
-                        <option value={index} key={`${profile.name}-${index}`}>{profile.name}</option>
-                      ))}
-                    </select>
-                    <button className="secondary" disabled={vpnClientRunning} onClick={addVpnProfile}>{t.vpnProfileNew}</button>
-                    <button className="secondary" disabled={vpnClientRunning} onClick={() => startScreenScan('vpnProfile')}>{t.vpnProfileImport}</button>
-                    <button className="secondary" disabled={vpnProfiles.length === 0} onClick={showVpnProfileQr}>{t.vpnProfileExport}</button>
-                    <button className="secondary" disabled={vpnClientRunning} onClick={deleteVpnProfile}>{t.vpnProfileDelete}</button>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {isFileTransferMode(mode) ? (
-              <div className="transfer-setup-grid">
-                <div className="transfer-setup-fields">
-                  {passphraseField}
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={useUDP}
-                      disabled={currentRunning}
-                      onChange={(event) => setUseUDP(event.target.checked)}
-                    />
-                    <span>{t.useUDP}</span>
-                  </label>
-                </div>
-                <div className="transfer-inline-qr-column">
-                  <TransferInlineQr
-                    passphrase={activePassword}
-                    masked={inlineQrShouldMask(mode, sendQrHasConnected, receiveQrHasConnected)}
-                    onActivate={showPasswordQr}
-                    onError={(message) => setError(localizeError(message))}
-                  />
-                </div>
-              </div>
-            ) : passphraseField}
-
-            {mode === 'vpnClient' && (
-              <section className="advanced-panel">
-                <button className="secondary advanced-toggle" disabled={vpnClientRunning} onClick={() => setVpnClientAdvanced((value) => !value)}>
-                  {vpnClientAdvanced ? t.hideAdvancedSettings : t.advancedSettings}
-                </button>
-                {vpnClientAdvanced && (
-                  <div className="advanced-fields">
-                    <div className="field">
-                      <label>{t.vpnProfileName}</label>
-                      <input
-                        value={vpnProfiles[selectedVpnProfile]?.name || ''}
-                        disabled={vpnClientRunning}
-                        onChange={(event) => setVpnProfileField('name', event.target.value)}
-                      />
-                    </div>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={vpnClientUseUDP}
-                        disabled={vpnClientRunning}
-                        onChange={(event) => setVpnProfileField('useUdp', event.target.checked)}
-                      />
-                      <span>{t.useUDP}</span>
-                    </label>
-                    <div className="field">
-                      <label className="check">
-                        <input type="checkbox" checked={vpnClientP2PWithLAN} disabled={vpnClientRunning}
-                          onChange={(event) => setVpnProfileField('p2pWithLan', event.target.checked)} />
-                        <span>{t.p2pWithLan}</span>
-                      </label>
-                      <div className="field-hint"><p>{t.p2pWithLanHint}</p></div>
-                    </div>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={vpnClientEnableIPv6}
-                        disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnProfileField('routeIpv6', event.target.checked)}
-                      />
-                      <span>{t.routeIpv6}</span>
-                    </label>
-                    <div className="field">
-                      <label className="check">
-                        <input
-                          type="checkbox"
-                          checked={vpnClientTunnelOnly}
-                          disabled={vpnClientRunning}
-                          onChange={(event) => setVpnProfileField('tunnelOnly', event.target.checked)}
-                        />
-                        <span>{t.tunnelOnly}</span>
-                      </label>
-                      <div className="field-hint"><p>{t.tunnelOnlyHint}</p></div>
-                    </div>
-                    <div className="field">
-                      <label>{t.linkConfig}</label>
-                      <input
-                        value={vpnClientLinkConfig}
-                        disabled={vpnClientRunning}
-                        onChange={(event) => setVpnProfileField('linkConfig', event.target.value)}
-                        placeholder={t.linkConfigPlaceholder}
-                      />
-                    </div>
-                    <div className="field">
-                      <label>{t.mtu}</label>
-                      <input
-                        type="number"
-                        min="576"
-                        max="9000"
-                        step="1"
-                        value={vpnClientMTU}
-                        disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setVpnClientMTU(value);
-                          updateCurrentVpnProfile({mtu: normalizeVpnMTU(value)});
-                        }}
-                        placeholder={t.mtuPlaceholder}
-                      />
-                      <div className="field-hint"><p>{t.mtuHint}</p></div>
-                    </div>
-                    {isWindows && (
-                      <div className="field">
-                        <label>{t.routeMetric}</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="9999"
-                          step="1"
-                          value={vpnClientRouteMetric}
-                          disabled={vpnClientRunning || vpnClientTunnelOnly}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setVpnClientRouteMetric(value);
-                            updateCurrentVpnProfile({routeMetric: normalizeRouteMetric(value)});
-                          }}
-                          placeholder={t.routeMetricPlaceholder}
-                        />
-                        <div className="field-hint"><p>{t.routeMetricHint}</p></div>
-                      </div>
-                    )}
-                    <div className="field inline-field">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={vpnClientBlockDNSLeak}
-                          disabled={vpnClientRunning || vpnClientTunnelOnly}
-                          onChange={(event) => {
-                            const checked = event.target.checked;
-                            setVpnClientBlockDNSLeak(checked);
-                            updateCurrentVpnProfile({blockDnsLeak: checked});
-                          }}
-                        />
-                        <span>{t.dnsLeakProtection}</span>
-                      </label>
-                      <div className="field-hint"><p>{t.dnsLeakProtectionHint}</p></div>
-                    </div>
-                    <div className="field">
-                      <label>{t.vpnDnsServers}</label>
-                      <textarea
-                        value={vpnClientDNSServers}
-                        disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnProfileField('dnsServers', event.target.value)}
-                        placeholder={t.vpnDnsServersPlaceholder}
-                      />
-                    </div>
-                    <div className="field">
-                      <label>{t.routeCidrs}</label>
-                      <textarea
-                        value={vpnClientRouteCIDRs}
-                        disabled={vpnClientRunning || vpnClientTunnelOnly}
-                        onChange={(event) => setVpnProfileField('routeCidrs', event.target.value)}
-                        placeholder={t.routeCidrsPlaceholder}
-                      />
-                      <div className="quiet-actions">
-                        <button
-                          type="button"
-                          className="quiet-action"
-                          disabled={vpnClientRunning || vpnClientTunnelOnly}
-                          onClick={() => setVpnProfileField('routeCidrs', defaultVpnRoutes)}
-                        >
-                          {t.routeFillGlobal}
-                        </button>
-                        <button
-                          type="button"
-                          className="quiet-action"
-                          disabled={vpnClientRunning || vpnClientTunnelOnly}
-                          onClick={() => setVpnProfileField('routeCidrs', privateLanRoutes)}
-                        >
-                          {t.routeFillPrivate}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="field">
-                      <label>{t.extraArgs}</label>
-                      <input
-                        value={vpnClientExtraArgs}
-                        disabled={vpnClientRunning}
-                        onChange={(event) => setVpnProfileField('extraArgs', event.target.value)}
-                        placeholder={t.extraArgsPlaceholder}
-                      />
-                      <div className="field-hint"><p>{t.extraArgsHint}</p></div>
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
-
-            {mode === 'vpnServer' && (
-              <section className="advanced-panel">
-                <button className="secondary advanced-toggle" disabled={vpnServerRunning} onClick={() => setVpnServerAdvanced((value) => !value)}>
-                  {vpnServerAdvanced ? t.hideAdvancedSettings : t.advancedSettings}
-                </button>
-                {vpnServerAdvanced && (
-                  <div className="advanced-fields">
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        checked={vpnServerUseUDP}
-                        disabled={vpnServerRunning}
-                        onChange={(event) => setVpnServerUseUDP(event.target.checked)}
-                      />
-                      <span>{t.useUDP}</span>
-                    </label>
-                    <div className="field">
-                      <label className="check">
-                        <input type="checkbox" checked={vpnServerP2PWithLAN} disabled={vpnServerRunning}
-                          onChange={(event) => setVpnServerP2PWithLAN(event.target.checked)} />
-                        <span>{t.p2pWithLan}</span>
-                      </label>
-                      <div className="field-hint"><p>{t.p2pWithLanHint}</p></div>
-                    </div>
-                    <div className="field">
-                      <label>{t.upstreamProxy}</label>
-                      <input
-                        value={vpnServerUpstream}
-                        disabled={vpnServerRunning}
-                        onChange={(event) => setVpnServerUpstream(event.target.value)}
-                        placeholder={t.upstreamProxyPlaceholder}
-                      />
-                      <div className="field-hint"><p>{t.upstreamProxyHint}</p></div>
-                    </div>
-                    <div className="field">
-                      <label>{t.dnsForward}</label>
-                      <input
-                        value={vpnServerDNSForward}
-                        disabled={vpnServerRunning}
-                        onChange={(event) => setVpnServerDNSForward(event.target.value)}
-                        placeholder={t.dnsForwardPlaceholder}
-                      />
-                      <div className="field-hint"><p>{t.dnsForwardHint}</p></div>
-                    </div>
-                    <div className="field">
-                      <label>{t.extraArgs}</label>
-                      <input
-                        value={vpnServerExtraArgs}
-                        disabled={vpnServerRunning}
-                        onChange={(event) => setVpnServerExtraArgs(event.target.value)}
-                        placeholder={t.extraArgsPlaceholder}
-                      />
-                      <div className="field-hint"><p>{t.extraArgsHint}</p></div>
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
-
-            <div className="primary-actions">
-              {currentRunning ? (
-                <button className="danger big-action" onClick={stop}>{t.stop}</button>
-              ) : (
-                <button className="primary big-action" disabled={!canStart} onClick={start}>
-                  <span>{primaryLabel}</span>
-                  {showVpnAdminPrompt && <span className="button-subtext">{t.vpnConnectAdminPrompt}</span>}
-                </button>
-              )}
+  function setupCard(extraFields?: ReactNode) {
+    return (
+      <section className="card setup-card">
+        <div className="card-body setup-grid">
+          <div className="setup-fields">
+            {passphraseField}
+            {extraFields}
+          </div>
+          {isFileTransferMode(mode) && (
+            <div className="transfer-inline-qr-column">
+              <TransferInlineQr
+                passphrase={activePassword}
+                masked={inlineQrShouldMask(mode, sendQrHasConnected, receiveQrHasConnected)}
+                onActivate={showPasswordQr}
+                onError={(message) => setError(localizeError(message))}
+              />
             </div>
-          </section>
-
-          {mode === 'receive' && (
-            <section className="remote-pane">
-              <div className="log-header">
-                <h3>{t.remoteFiles}</h3>
-                <div className="button-row">
-                  <span className={`connection-chip ${receiveStatus.tone}`}>
-                    <span className={`dot ${receiveStatus.tone}`} />
-                    {receiveStatus.label}
-                  </span>
-                  <div className="compact-switch" aria-label={t.downloadMode}>
-                    <button className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
-                    <button className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
-                  </div>
-                  {status.downloading ? (
-                    <button className="danger" onClick={stopDownload}>{t.stopDownload}</button>
-                  ) : (
-                    <>
-                      <button className="primary" disabled={!canDownloadAll} onClick={startDownloadAll}>
-                        {currentRemotePath === '/' ? t.receiveAll : t.receiveCurrentDir}
-                      </button>
-                      <button className="secondary" disabled={!canDownload} onClick={startDownload}>{t.downloadSelected}</button>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="remote-summary">
-                <div className="remote-breadcrumb" aria-label={t.currentDir}>
-                  {currentRemoteBreadcrumbs.map((part, index) => (
-                    <button
-                      className={index === currentRemoteBreadcrumbs.length - 1 ? 'active' : ''}
-                      disabled={index === currentRemoteBreadcrumbs.length - 1 || remoteListLoading}
-                      key={part.path}
-                      onClick={() => browseRemotePath(part.path)}
-                    >
-                      {part.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="remote-tools">
-                  <span>{remoteList ? `${visibleEntries.filter((item) => !item.is_dir).length} ${t.files}` : t.noList}</span>
-                  <span>{remoteList ? `${visibleEntries.filter((item) => item.is_dir).length} ${t.folders}` : '-'}</span>
-                  <span>
-                    {selectedPaths.size} {t.selected}
-                    {excludedPaths.size > 0 ? ` · ${excludedPaths.size} ${t.excluded}` : ''}
-                    {selectedRemoteBytes > 0 ? ` · ${formatBytes(selectedRemoteBytes)}` : ''}
-                  </span>
-                  <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={selectVisibleRemoteFiles}>{t.selectAll}</button>
-                  <button className="quiet-action" disabled={!remoteList || visibleEntries.length === 0 || status.downloading} onClick={invertVisibleRemoteFiles}>{t.invertSelection}</button>
-                  <button className="quiet-action" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles(currentRemotePath, false, true)}>{t.refresh}</button>
-                </div>
-              </div>
-              {downloadError && <div className="remote-error">{downloadError}</div>}
-              {downloadProgress && (
-                <div className="progress">
-                  <div>
-                    {formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}
-                    {' - '}{t.completed} {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
-                    {(downloadProgress.skippedFiles || 0) > 0 && ` - ${t.skipped} ${downloadProgress.skippedFiles}`}
-                    {(downloadProgress.resumedFiles || 0) > 0 && ` - ${t.resumed} ${downloadProgress.resumedFiles}`}
-                    {(downloadProgress.failedFiles || 0) > 0 && ` - ${t.failed} ${downloadProgress.failedFiles}`}
-                    {(downloadProgress.totalDirs || 0) > 0 && ` - ${t.dir} ${downloadProgress.doneDirs || 0}/${downloadProgress.totalDirs}`}
-                    {' - '}{formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
-                    {' - '}{formatRate(freshSpeed(downloadProgress.time, downloadProgress.bytesPerSecond, nowTick))}
-                    {activeDownloadWarning && (
-                      <>
-                        {' '}
-                        <button
-                          type="button"
-                          className="download-warning-chip"
-                          key={activeDownloadWarning.pulseKey}
-                          aria-label={t.downloadWarning}
-                          title={`${t.downloadWarningTitle}\n${activeDownloadWarning.message}`}
-                          onClick={showDownloadWarningLog}
-                        >
-                          !
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <progress max={downloadProgress.totalBytes || 1} value={downloadProgress.doneBytes || 0} />
-                </div>
-              )}
-              <div className="remote-list">
-                {remoteListLoading && (
-                  <div className="remote-loading">
-                    <span className="spinner-dot" aria-hidden="true" />
-                    <span>{t.refreshing}</span>
-                  </div>
-                )}
-                {!remoteList ? (
-                  <p className="muted">{t.listHint}</p>
-                ) : (
-                  <>
-                    {visibleEntries.map((file) => {
-                      const received = file.is_dir ? undefined : receivedLocalFiles.get(normalizeRemotePath(file.path));
-                      const local = received?.size === file.size ? received : undefined;
-                      return (
-                        <div className="remote-row" key={file.path}>
-                          <input
-                            type="checkbox"
-                            checked={isEffectivelySelected(file.path, selectedPaths, excludedPaths)}
-                            onChange={() => toggleSelected(file.path)}
-                          />
-                          <span className={`type-icon ${file.is_dir ? 'folder' : `file ${local ? 'local-available' : ''}`}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file}>
-                            {local && <span className="local-available-dot" aria-hidden="true" />}
-                          </span>
-                          {file.is_dir ? (
-                            <button className="folder-link" onClick={() => browseRemotePath(file.path)}>{file.name}</button>
-                          ) : (
-                            <strong className={local ? 'local-filename' : ''}>{file.name}</strong>
-                          )}
-                          <em>{formatModTime(file.mod_time)}</em>
-                          <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
-                          {local && (
-                            <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} disabled={receivedActionsUnavailable} onClick={() => revealReceivedFile(file)}>
-                              <span className="reveal-folder-icon" aria-hidden="true" />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
-            </section>
           )}
+        </div>
+        {actionBar}
+      </section>
+    );
+  }
 
-          <details className="diagnostics" ref={diagnosticsRef}>
-            <summary>{t.diagnostics}</summary>
-            <section className="status-grid">
-              <Metric label={t.p2pStatus} value={activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
-              <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
-              <Metric label={t.network} value={activeP2PReport?.network || '-'} />
-              <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
-              <Metric label={t.speed} value={formatRate(transferSpeed)} />
-              {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
-              {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
-              {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
-            </section>
-            <section className="log-pane" ref={logPaneRef}>
-            <div className="log-header">
-              <h3>{t.activity}</h3>
-              <div className="button-row">
-                <button className="ghost" disabled={logs.length === 0} onClick={copyLogs}>{t.copyLogs}</button>
-                <button className="ghost" onClick={() => setLogs([])}>{t.clear}</button>
-              </div>
-            </div>
-            <div className="logs" ref={logsRef} tabIndex={-1}>
-              {logs.length === 0 ? (
-                <p className="muted">{t.logHint}</p>
-              ) : logs.map((log, index) => (
-                <div className={`log-line ${log.level}`} key={`${log.time}-${index}`}>
-                  <time>{new Date(log.time).toLocaleTimeString()}</time>
-                  <span>{log.message}</span>
+  const sessionCard = currentRunning && (mode === 'send' || mode === 'vpnServer') && (
+    <section className="card">
+      <div className="card-head">
+        <h2>{mode === 'send' ? t.session : t.clients}</h2>
+        <span className="card-count">{t.connectedShort} {multiConnectedCount}</span>
+      </div>
+      <div className="card-body session-body">
+        <div className={`session-state ${multiStatus.tone}`}>
+          <span className="session-icon"><Icon name={multiStatus.tone === 'connected' ? 'check' : 'users'} /></span>
+          <div className="session-text">
+            <strong>{multiStatus.label}</strong>
+            <small>{mode === 'send' ? t.keepWindowOpen : t.vpnServerKeepOpen}</small>
+          </div>
+          <div className="session-metrics">
+            <span>{formatRate(transferSpeed)}</span>
+            {mode === 'send' && <small>{t.sentTotal} {formatBytes(sendTotalBytes)}</small>}
+          </div>
+        </div>
+        {multiSessions.filter((report) => report.topic && report.status === 'connected').map((report) => (
+          <div className="peer-row" key={p2pSessionKey(report)}>
+            <span className="dot connected" aria-hidden="true" />
+            <code title={report.peer || undefined}>{report.peer || '-'}</code>
+            {report.network && <span className="chip">{report.network}</span>}
+            {routeLabel(report.mode || '', t) !== '-' && <span className="chip ok">{routeLabel(report.mode || '', t)}</span>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  const sendPage = (
+    <>
+      <section className="card">
+        <div className="card-head">
+          <h2>{t.shareContent}</h2>
+          {sharePaths.length > 0 && <span className="card-count">{sharePaths.length} {t.items}</span>}
+          <div className="card-actions">
+            {sharePaths.length > 0 && (
+              <button type="button" className="ghost clear-share-paths" disabled={sharePaths.length === 0 || shareMutationPending || pickerPending || startPending} onClick={clearSharePaths}>
+                <Icon name="trash" />{t.clearSharePaths}
+              </button>
+            )}
+            <button type="button" className="secondary" disabled={shareMutationPending || pickerPending || startPending} onClick={openAddPicker}>
+              <Icon name="plus" />{t.add}
+            </button>
+          </div>
+        </div>
+        <div className="card-body">
+          <div className="drop-zone">
+            <div ref={pathListRef} className="path-list">
+              {sharePaths.map((path) => (
+                <div className="path-row" key={path}>
+                  <div className="path-text">
+                    <strong title={localBaseName(path)}>{localBaseName(path)}</strong>
+                    <span title={path}>{path}</span>
+                  </div>
+                  <div className="path-row-actions">
+                    <button className="reveal-received-file reveal-share-path" onClick={() => revealSharePath(path)} aria-label={revealFileLabel} title={revealFileLabel}>
+                      <span className="reveal-folder-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
+                    </button>
+                    <button className="remove-share-path" disabled={shareMutationPending || pickerPending || startPending} onClick={() => removeSharePath(path)} aria-label={`${t.remove} ${path}`} title={t.remove}>
+                      <Icon name="close" />
+                    </button>
+                  </div>
                 </div>
               ))}
+              <button
+                ref={addPickerButtonRef}
+                type="button"
+                className={`drop-hint-action ${dropHintMode(sharePaths)}`}
+                disabled={shareMutationPending || pickerPending || startPending}
+                onClick={openAddPicker}
+              >
+                {sharePaths.length === 0 ? (
+                  <>
+                    <span className="drop-hint-icon"><Icon name="send" /></span>
+                    <strong>{t.dropHint}</strong>
+                    <span>{t.dropHintKinds}</span>
+                  </>
+                ) : (
+                  <span className="drop-hint-compact"><Icon name="plus" />{t.dropHint}</span>
+                )}
+              </button>
             </div>
-            </section>
-          </details>
-        </section>
+          </div>
+        </div>
       </section>
+      {setupCard()}
+      {sessionCard}
+    </>
+  );
+
+  const receivePage = (
+    <>
+      {setupCard(
+        <div className="field">
+          <label htmlFor="save-dir-input">{t.saveDir}</label>
+          <div className="input-group">
+            <input id="save-dir-input" value={saveDir} onChange={(event) => setSaveDir(event.target.value)} placeholder={t.savePlaceholder} />
+            <button type="button" className="icon-button" onClick={chooseSaveDir} aria-label={t.choose} title={t.choose}><Icon name="folder" /></button>
+            <button type="button" className="icon-button" onClick={openSaveDir} aria-label={t.openFolder} title={t.openFolder}><Icon name="folderOpen" /></button>
+          </div>
+        </div>
+      )}
+      <section className="card remote-pane">
+        <div className="card-head">
+          <h2>{t.remoteFiles}</h2>
+          <span className={`connection-chip ${receiveStatus.tone}`}>
+            <span className={`dot ${receiveStatus.tone}`} />
+            {receiveStatus.label}
+          </span>
+          <div className="card-actions">
+            <div className="compact-switch" role="group" aria-label={t.downloadMode} title={t.downloadMode}>
+              <button type="button" className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
+              <button type="button" className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
+            </div>
+            <button type="button" className="icon-button" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles(currentRemotePath, false, true)} aria-label={t.refresh} title={t.refresh}>
+              <Icon name="refresh" className={remoteListLoading ? 'spin' : ''} />
+            </button>
+          </div>
+        </div>
+        {remoteList && (
+          <div className="remote-toolbar">
+            <nav className="remote-breadcrumb" aria-label={t.currentDir}>
+              {currentRemoteBreadcrumbs.map((part, index) => (
+                <Fragment key={part.path}>
+                  {index > 0 && <Icon name="chevron" className="crumb-separator" />}
+                  <button
+                    type="button"
+                    className={index === currentRemoteBreadcrumbs.length - 1 ? 'active' : ''}
+                    disabled={index === currentRemoteBreadcrumbs.length - 1 || remoteListLoading}
+                    onClick={() => browseRemotePath(part.path)}
+                    title={part.path}
+                  >
+                    {index === 0 ? <Icon name="home" /> : part.name}
+                  </button>
+                </Fragment>
+              ))}
+            </nav>
+            <div className="remote-tools">
+              <button type="button" className="quiet-action" disabled={visibleEntries.length === 0 || status.downloading} onClick={selectVisibleRemoteFiles}><Icon name="selectAll" />{t.selectAll}</button>
+              <button type="button" className="quiet-action" disabled={visibleEntries.length === 0 || status.downloading} onClick={invertVisibleRemoteFiles}><Icon name="invert" />{t.invertSelection}</button>
+            </div>
+          </div>
+        )}
+        {downloadError && <div className="remote-error">{downloadError}</div>}
+        <div className="remote-list">
+          {remoteListLoading && (
+            <div className="remote-loading">
+              <span className="spinner-dot" aria-hidden="true" />
+              <span>{t.refreshing}</span>
+            </div>
+          )}
+          {!remoteList ? (
+            <div className="empty-state">
+              <span className="empty-icon"><Icon name="folder" /></span>
+              <strong>{receiveRunning ? receiveStatus.label : t.notConnectedTitle}</strong>
+              <p>{t.listHint}</p>
+            </div>
+          ) : visibleEntries.length === 0 ? (
+            <div className="empty-state compact"><p>{t.emptyFolder}</p></div>
+          ) : (
+            <>
+              <div className="remote-row remote-head" aria-hidden="true">
+                <span />
+                <span>{t.name}</span>
+                <span>{t.modifiedTime}</span>
+                <span>{t.size}</span>
+                <span />
+              </div>
+              {visibleEntries.map((file) => {
+                const received = file.is_dir ? undefined : receivedLocalFiles.get(normalizeRemotePath(file.path));
+                const local = received?.size === file.size ? received : undefined;
+                const selected = isEffectivelySelected(file.path, selectedPaths, excludedPaths);
+                return (
+                  <div className={`remote-row${selected ? ' selected' : ''}`} key={file.path}>
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleSelected(file.path)}
+                      aria-label={file.name}
+                    />
+                    <span className="remote-name">
+                      <span className={`type-icon ${file.is_dir ? 'folder' : 'file'}`} aria-label={file.is_dir ? t.dir : t.file} title={file.is_dir ? t.dir : t.file}>
+                        <Icon name={file.is_dir ? 'folder' : 'file'} />
+                      </span>
+                      {file.is_dir ? (
+                        <button type="button" className="folder-link" onClick={() => browseRemotePath(file.path)} title={file.name}>{file.name}</button>
+                      ) : (
+                        <strong className={local ? 'local-filename' : ''} title={file.name}>{file.name}</strong>
+                      )}
+                      {local && <span className="local-tag"><Icon name="check" />{t.localAvailable}</span>}
+                    </span>
+                    <em>{formatModTime(file.mod_time)}</em>
+                    <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
+                    <span className="remote-row-action">
+                      {local && (
+                        <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} disabled={receivedActionsUnavailable} onClick={() => revealReceivedFile(file)}>
+                          <span className="reveal-folder-icon" aria-hidden="true"><Icon name="folderOpen" /></span>
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+        {downloadProgress && (
+          <div className="progress">
+            <div className="progress-top">
+              <strong>{formatPercent(downloadProgress.doneBytes || 0, downloadProgress.totalBytes || 0)}</strong>
+              <span>
+                {t.completed} {downloadProgress.doneFiles || 0}/{downloadProgress.totalFiles || 0} {t.files}
+                {(downloadProgress.skippedFiles || 0) > 0 && ` · ${t.skipped} ${downloadProgress.skippedFiles}`}
+                {(downloadProgress.resumedFiles || 0) > 0 && ` · ${t.resumed} ${downloadProgress.resumedFiles}`}
+                {(downloadProgress.failedFiles || 0) > 0 && ` · ${t.failed} ${downloadProgress.failedFiles}`}
+                {(downloadProgress.totalDirs || 0) > 0 && ` · ${t.dir} ${downloadProgress.doneDirs || 0}/${downloadProgress.totalDirs}`}
+                {' · '}{formatBytes(downloadProgress.doneBytes || 0)} / {formatBytes(downloadProgress.totalBytes || 0)}
+              </span>
+              <span className="progress-rate">{formatRate(freshSpeed(downloadProgress.time, downloadProgress.bytesPerSecond, nowTick))}</span>
+              {activeDownloadWarning && (
+                <button
+                  type="button"
+                  className="download-warning-chip"
+                  key={activeDownloadWarning.pulseKey}
+                  aria-label={t.downloadWarning}
+                  title={`${t.downloadWarningTitle}\n${activeDownloadWarning.message}`}
+                  onClick={showDownloadWarningLog}
+                >
+                  !
+                </button>
+              )}
+            </div>
+            <progress max={downloadProgress.totalBytes || 1} value={downloadProgress.doneBytes || 0} />
+          </div>
+        )}
+        <div className="remote-footer">
+          <span className="remote-summary">
+            {remoteList ? `${remoteFileCount} ${t.files} · ${remoteDirCount} ${t.folders}` : t.noList}
+            {selectedPaths.size > 0 && (
+              <strong>
+                {' · '}{selectedPaths.size} {t.selected}
+                {excludedPaths.size > 0 ? ` · ${excludedPaths.size} ${t.excluded}` : ''}
+                {selectedRemoteBytes > 0 ? ` · ${formatBytes(selectedRemoteBytes)}` : ''}
+              </strong>
+            )}
+          </span>
+          <div className="remote-footer-actions">
+            {status.downloading ? (
+              <button type="button" className="danger" onClick={stopDownload}>{t.stopDownload}</button>
+            ) : (
+              <>
+                <button type="button" className="secondary" disabled={!canDownload} onClick={startDownload}><Icon name="receive" />{t.downloadSelected}</button>
+                <button type="button" className="primary" disabled={!canDownloadAll} onClick={startDownloadAll}>
+                  <Icon name="receive" />{currentRemotePath === '/' ? t.receiveAll : t.receiveCurrentDir}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  const vpnClientPage = (
+    <div className="vpn-layout">
+      <section className="card profile-pane">
+        <div className="card-head"><h2>{t.vpnProfiles}</h2></div>
+        <div className="profile-list">
+          {vpnProfileList.map((profile, index) => (
+            <button
+              type="button"
+              key={`${profile.name}-${index}`}
+              className={`profile-item${index === selectedVpnProfile ? ' active' : ''}`}
+              aria-pressed={index === selectedVpnProfile}
+              disabled={vpnClientRunning && index !== selectedVpnProfile}
+              onClick={() => selectVpnProfile(index)}
+            >
+              <span className="profile-avatar" aria-hidden="true">{profileInitials(profile.name)}</span>
+              <span className="profile-text">
+                <strong title={profile.name}>{profile.name}</strong>
+                <small>
+                  {index === selectedVpnProfile && vpnClientRunning
+                    ? vpnClientStatus.label
+                    : `${profile.useUdp ? 'UDP · ' : ''}${profile.tunnelOnly ? t.tunnelOnly : t.systemVpn}`}
+                </small>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="profile-actions">
+          <button type="button" className="secondary" disabled={vpnClientRunning} onClick={addVpnProfile}><Icon name="plus" />{t.vpnProfileNew}</button>
+          <button type="button" className="secondary" disabled={vpnClientRunning} onClick={() => startScreenScan('vpnProfile')}><Icon name="scan" />{t.vpnProfileImport}</button>
+        </div>
+      </section>
+
+      <div className="page-stack">
+        <section className={`card vpn-hero ${vpnClientRunning ? vpnClientStatus.tone : 'idle'}`}>
+          <div className="vpn-hero-main">
+            <span className="vpn-hero-icon"><Icon name={vpnClientRunning && vpnClientStatus.tone === 'connected' ? 'shieldCheck' : 'shield'} /></span>
+            <div className="vpn-hero-text">
+              <h2 title={currentVpnProfileName}>{currentVpnProfileName}</h2>
+              <p>{vpnClientStatus.label}</p>
+            </div>
+            <div className="vpn-hero-action">{runButton('compact')}</div>
+          </div>
+          {startHint && <p className="vpn-hero-hint">{startHint}</p>}
+          {vpnClientRunning && (
+            <div className="stats-row">
+              <Metric label={t.peer} value={vpnClientP2PReport?.peer || '-'} />
+              <Metric label={t.connectionRoute} value={routeLabel(vpnClientP2PReport?.mode || '', t)} />
+              <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />
+              <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />
+              <Metric label={t.speed} value={formatRate(transferSpeed)} />
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2>{t.vpnProfile}</h2>
+            <div className="card-actions">
+              <button type="button" className="ghost" disabled={vpnProfiles.length === 0} onClick={showVpnProfileQr}><Icon name="qr" />{t.vpnProfileExport}</button>
+              <button type="button" className="ghost danger-text" disabled={vpnClientRunning} onClick={deleteVpnProfile}><Icon name="trash" />{t.vpnProfileDelete}</button>
+            </div>
+          </div>
+          <div className="card-body form-stack">
+            <div className="field">
+              <label htmlFor="vpn-profile-name">{t.vpnProfileName}</label>
+              <input
+                id="vpn-profile-name"
+                value={vpnProfiles[selectedVpnProfile]?.name || ''}
+                disabled={vpnClientRunning}
+                onChange={(event) => setVpnProfileField('name', event.target.value)}
+              />
+            </div>
+            {passphraseField}
+          </div>
+          <SettingsSection title={t.sectionConnection} summary={`${vpnClientUseUDP ? 'UDP' : t.protocolAuto}${vpnClientP2PWithLAN ? ' · LAN' : ''}`} defaultOpen>
+            <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnClientUseUDP} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('useUdp', checked)} />
+            <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnClientP2PWithLAN} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('p2pWithLan', checked)} />
+          </SettingsSection>
+          <SettingsSection title={t.sectionRouting} summary={vpnClientTunnelOnly ? t.tunnelOnly : `${t.systemVpn}${vpnClientEnableIPv6 ? ' · IPv6' : ''}`}>
+            <Toggle label={t.tunnelOnly} hint={t.tunnelOnlyHint} checked={vpnClientTunnelOnly} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('tunnelOnly', checked)} />
+            <Toggle label={t.routeIpv6} checked={vpnClientEnableIPv6} disabled={vpnClientRunning || vpnClientTunnelOnly} onChange={(checked) => setVpnProfileField('routeIpv6', checked)} />
+            <div className="field">
+              <label htmlFor="vpn-route-cidrs">{t.routeCidrs}</label>
+              <textarea
+                id="vpn-route-cidrs"
+                value={vpnClientRouteCIDRs}
+                disabled={vpnClientRunning || vpnClientTunnelOnly}
+                onChange={(event) => setVpnProfileField('routeCidrs', event.target.value)}
+                placeholder={t.routeCidrsPlaceholder}
+              />
+              <div className="quiet-actions">
+                <button type="button" className="quiet-action" disabled={vpnClientRunning || vpnClientTunnelOnly} onClick={() => setVpnProfileField('routeCidrs', defaultVpnRoutes)}>
+                  {t.routeFillGlobal}
+                </button>
+                <button type="button" className="quiet-action" disabled={vpnClientRunning || vpnClientTunnelOnly} onClick={() => setVpnProfileField('routeCidrs', privateLanRoutes)}>
+                  {t.routeFillPrivate}
+                </button>
+              </div>
+            </div>
+            <div className="field-pair">
+              <div className="field">
+                <label htmlFor="vpn-mtu">{t.mtu}</label>
+                <input
+                  id="vpn-mtu"
+                  type="number"
+                  min="576"
+                  max="9000"
+                  step="1"
+                  value={vpnClientMTU}
+                  disabled={vpnClientRunning || vpnClientTunnelOnly}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setVpnClientMTU(value);
+                    updateCurrentVpnProfile({mtu: normalizeVpnMTU(value)});
+                  }}
+                  placeholder={t.mtuPlaceholder}
+                />
+                <p className="field-hint">{t.mtuHint}</p>
+              </div>
+              {isWindows && (
+                <div className="field">
+                  <label htmlFor="vpn-route-metric">{t.routeMetric}</label>
+                  <input
+                    id="vpn-route-metric"
+                    type="number"
+                    min="1"
+                    max="9999"
+                    step="1"
+                    value={vpnClientRouteMetric}
+                    disabled={vpnClientRunning || vpnClientTunnelOnly}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setVpnClientRouteMetric(value);
+                      updateCurrentVpnProfile({routeMetric: normalizeRouteMetric(value)});
+                    }}
+                    placeholder={t.routeMetricPlaceholder}
+                  />
+                  <p className="field-hint">{t.routeMetricHint}</p>
+                </div>
+              )}
+            </div>
+          </SettingsSection>
+          <SettingsSection title={t.sectionDns} summary={vpnClientBlockDNSLeak ? t.dnsLeakProtection : normalizeLines(vpnClientDNSServers).split('\n')[0]}>
+            <Toggle
+              label={t.dnsLeakProtection}
+              hint={t.dnsLeakProtectionHint}
+              checked={vpnClientBlockDNSLeak}
+              disabled={vpnClientRunning || vpnClientTunnelOnly}
+              onChange={(checked) => {
+                setVpnClientBlockDNSLeak(checked);
+                updateCurrentVpnProfile({blockDnsLeak: checked});
+              }}
+            />
+            <div className="field">
+              <label htmlFor="vpn-dns-servers">{t.vpnDnsServers}</label>
+              <textarea
+                id="vpn-dns-servers"
+                value={vpnClientDNSServers}
+                disabled={vpnClientRunning || vpnClientTunnelOnly}
+                onChange={(event) => setVpnProfileField('dnsServers', event.target.value)}
+                placeholder={t.vpnDnsServersPlaceholder}
+              />
+            </div>
+          </SettingsSection>
+          <SettingsSection title={t.sectionAdvanced}>
+            <div className="field">
+              <label htmlFor="vpn-link-config">{t.linkConfig}</label>
+              <input
+                id="vpn-link-config"
+                value={vpnClientLinkConfig}
+                disabled={vpnClientRunning}
+                onChange={(event) => setVpnProfileField('linkConfig', event.target.value)}
+                placeholder={t.linkConfigPlaceholder}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="vpn-extra-args">{t.extraArgs}</label>
+              <input
+                id="vpn-extra-args"
+                className="mono"
+                value={vpnClientExtraArgs}
+                disabled={vpnClientRunning}
+                onChange={(event) => setVpnProfileField('extraArgs', event.target.value)}
+                placeholder={t.extraArgsPlaceholder}
+              />
+              <p className="field-hint">{t.extraArgsHint}</p>
+            </div>
+          </SettingsSection>
+        </section>
+      </div>
+    </div>
+  );
+
+  const vpnServerPage = (
+    <>
+      {setupCard()}
+      {sessionCard}
+      <section className="card">
+        <div className="card-head"><h2>{t.options}</h2></div>
+        <div className="card-body form-stack">
+          <div className="toggle-list">
+            <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnServerUseUDP} disabled={vpnServerRunning} onChange={setVpnServerUseUDP} />
+            <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnServerP2PWithLAN} disabled={vpnServerRunning} onChange={setVpnServerP2PWithLAN} />
+          </div>
+          <div className="field">
+            <label htmlFor="vpn-upstream">{t.upstreamProxy}</label>
+            <input
+              id="vpn-upstream"
+              value={vpnServerUpstream}
+              disabled={vpnServerRunning}
+              onChange={(event) => setVpnServerUpstream(event.target.value)}
+              placeholder={t.upstreamProxyPlaceholder}
+            />
+            <p className="field-hint">{t.upstreamProxyHint}</p>
+          </div>
+          <div className="field">
+            <label htmlFor="vpn-dns-forward">{t.dnsForward}</label>
+            <input
+              id="vpn-dns-forward"
+              value={vpnServerDNSForward}
+              disabled={vpnServerRunning}
+              onChange={(event) => setVpnServerDNSForward(event.target.value)}
+              placeholder={t.dnsForwardPlaceholder}
+            />
+            <p className="field-hint">{t.dnsForwardHint}</p>
+          </div>
+          <div className="field">
+            <label htmlFor="vpn-server-extra-args">{t.extraArgs}</label>
+            <input
+              id="vpn-server-extra-args"
+              className="mono"
+              value={vpnServerExtraArgs}
+              disabled={vpnServerRunning}
+              onChange={(event) => setVpnServerExtraArgs(event.target.value)}
+              placeholder={t.extraArgsPlaceholder}
+            />
+            <p className="field-hint">{t.extraArgsHint}</p>
+          </div>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-head"><h2>{t.deployElsewhere}</h2></div>
+        <div className="card-body form-stack">
+          <p className="card-text">{t.deployHint}</p>
+          <div className="command-line">
+            <code>gonc -p2p <em>&lt;passphrase&gt;</em> -linkagent</code>
+            <button type="button" className="icon-button" onClick={copyDeployCommand} aria-label={t.copyCommand} title={t.copyCommand}><Icon name="copy" /></button>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  return (
+    <div className="shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <img className="brand-mark" src={appIconUrl} alt="" aria-hidden="true" />
+          <div className="brand-text">
+            <strong>{t.brand}</strong>
+            <button type="button" className="version-link" onClick={openAbout} title={t.about}>{appVersion}</button>
+          </div>
+        </div>
+        <nav className="nav" aria-label={t.brand}>
+          <span className="nav-group">{t.navTransfer}</span>
+          {navItem('send', 'send', t.send)}
+          {navItem('receive', 'receive', t.receive)}
+          <span className="nav-group">{t.navTunnel}</span>
+          {navItem('vpnClient', 'shield', t.vpnClient)}
+          {navItem('vpnServer', 'server', t.vpnServer)}
+        </nav>
+        <div className="sidebar-foot">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setTheme(effectiveTheme === 'dark' ? 'light' : 'dark')}
+            aria-label={effectiveTheme === 'dark' ? t.themeToLight : t.themeToDark}
+            title={effectiveTheme === 'dark' ? t.themeToLight : t.themeToDark}
+          >
+            <Icon name={effectiveTheme === 'dark' ? 'sun' : 'moon'} />
+          </button>
+          <button ref={aboutButtonRef} type="button" className="icon-button about-entry" onClick={openAbout} aria-label={t.about} title={t.about}>
+            <Icon name="info" />
+          </button>
+        </div>
+      </aside>
+
+      <main className="main" ref={mainRef}>
+        <div className="page">
+          <header className="page-head">
+            <h1>{pageTitle}</h1>
+            <p>{pageSubtitle}</p>
+          </header>
+          {error && <div className="alert" role="alert">{error}</div>}
+          <div className="page-stack">
+            {mode === 'send' ? sendPage : mode === 'receive' ? receivePage : mode === 'vpnClient' ? vpnClientPage : vpnServerPage}
+          </div>
+        </div>
+      </main>
+
+      {logOpen && (
+        <section
+          className="activity-drawer"
+          aria-label={t.activity}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setLogOpen(false);
+            }
+          }}
+        >
+          <div className="drawer-head">
+            <h3>{t.activity}</h3>
+            <div className="drawer-actions">
+              <button type="button" className="ghost" disabled={logs.length === 0} onClick={copyLogs}><Icon name="copy" />{t.copyLogs}</button>
+              <button type="button" className="ghost" onClick={() => setLogs([])}><Icon name="trash" />{t.clear}</button>
+              <button type="button" className="icon-button" onClick={() => setLogOpen(false)} aria-label={t.close} title={t.close}><Icon name="close" /></button>
+            </div>
+          </div>
+          <div className="status-grid">
+            <Metric label={t.p2pStatus} value={activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
+            <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
+            <Metric label={t.network} value={activeP2PReport?.network || '-'} />
+            <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
+            <Metric label={t.speed} value={formatRate(transferSpeed)} />
+            {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
+            {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
+            {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
+          </div>
+          <div className="logs" ref={logsRef} tabIndex={-1}>
+            {logs.length === 0 ? (
+              <p className="muted">{t.logHint}</p>
+            ) : logs.map((log, index) => (
+              <div className={`log-line ${log.level}`} key={`${log.time}-${index}`}>
+                <time>{new Date(log.time).toLocaleTimeString()}</time>
+                <span>{log.message}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <footer className="statusbar">
+        <span className="status-segment">
+          <span className={`dot ${statusTone}`} aria-hidden="true" />
+          {currentStatus.label}
+        </span>
+        {(mode === 'send' || mode === 'vpnServer') && (
+          <>
+            <span className="status-divider" />
+            <span className="status-segment"><Icon name="users" />{t.connectedShort} {multiConnectedCount}</span>
+          </>
+        )}
+        <span className="status-divider" />
+        <span className="status-segment">{formatRate(transferSpeed)}</span>
+        <span className="status-spacer" />
+        <button type="button" className={`statusbar-button${logOpen ? ' active' : ''}`} aria-expanded={logOpen} onClick={() => setLogOpen((value) => !value)}>
+          <Icon name="terminal" />
+          {t.activity}
+          {logs.length > 0 && <span className="badge">{logs.length}</span>}
+        </button>
+      </footer>
       {addPickerState !== 'closed' && (
         <div
           className="add-picker-backdrop"
@@ -3203,7 +3570,7 @@ function App() {
           >
             <div className="add-picker-heading">
               <h2 id="add-picker-title">{addPickerState === 'text' ? t.textShareTitle : t.addPickerTitle}</h2>
-              <button className="add-picker-close" disabled={pickerPending || shareMutationPending || startPending} onClick={() => closeAddPicker()} aria-label={t.close}>×</button>
+              <button className="add-picker-close" disabled={pickerPending || shareMutationPending || startPending} onClick={() => closeAddPicker()} aria-label={t.close}><Icon name="close" /></button>
             </div>
             {addPickerState === 'choose' ? (
               <div className="add-picker-options">
@@ -3294,15 +3661,64 @@ function App() {
           </section>
         </div>
       )}
-    </main>
+    </div>
   );
+}
+
+function Toggle({label, hint, checked, disabled, onChange}: {
+  label: string;
+  hint?: ReactNode;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className={`toggle-row${disabled ? ' disabled' : ''}`}>
+      <span className="toggle-text">
+        <strong>{label}</strong>
+        {hint && <small>{hint}</small>}
+      </span>
+      <span className="switch">
+        <input type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
+        <span aria-hidden="true" />
+      </span>
+    </label>
+  );
+}
+
+function SettingsSection({title, summary, defaultOpen = false, children}: {
+  title: string;
+  summary?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="settings-section" open={defaultOpen}>
+      <summary>
+        <span className="settings-title">{title}</span>
+        {summary && <small>{summary}</small>}
+        <Icon name="chevron" className="settings-chevron" />
+      </summary>
+      <div className="settings-body">{children}</div>
+    </details>
+  );
+}
+
+function localBaseName(path: string) {
+  const trimmed = path.replace(/[\\/]+$/, '');
+  const index = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  return index >= 0 ? trimmed.slice(index + 1) || trimmed : trimmed;
+}
+
+function profileInitials(name: string) {
+  return Array.from(name.trim() || '?').slice(0, 2).join('').toUpperCase();
 }
 
 function Metric({label, value}: { label: string; value: string }) {
   return (
     <div className="metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong title={value}>{value}</strong>
     </div>
   );
 }
