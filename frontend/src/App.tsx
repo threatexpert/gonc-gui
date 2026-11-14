@@ -9,6 +9,7 @@ import {Icon, type IconName} from './Icon';
 import {SendContentOptionIcon} from './SendContentOptionIcon';
 import {TransferInlineQr} from './TransferInlineQr';
 import {ConnectionDetails} from './ConnectionDetails';
+import {ProfileStrip} from './ProfileStrip';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -476,6 +477,10 @@ const text = {
     notConnectedTitle: '尚未连接',
     localAvailable: '本机已有',
     vpnProfiles: '配置列表',
+    vpnProfileReorderHint: '拖动调整顺序',
+    vpnProfileLayoutRow: '单行',
+    vpnProfileLayoutAll: '全部显示',
+    vpnProfilePage: '第 {n} 页',
     systemVpn: 'VPN',
     sectionConnection: '连接',
     sectionRouting: '路由',
@@ -739,6 +744,10 @@ const text = {
     notConnectedTitle: 'Not connected yet',
     localAvailable: 'On this PC',
     vpnProfiles: 'Profiles',
+    vpnProfileReorderHint: 'Drag to reorder',
+    vpnProfileLayoutRow: 'One row',
+    vpnProfileLayoutAll: 'Show all',
+    vpnProfilePage: 'Page {n}',
     systemVpn: 'VPN',
     sectionConnection: 'Connection',
     sectionRouting: 'Routing',
@@ -755,6 +764,15 @@ const text = {
 };
 
 const themeStorageKey = 'gonc.theme';
+const profileLayoutStorageKey = 'gonc.profileLayout';
+
+function storedProfilesShowAll() {
+  try {
+    return window.localStorage.getItem(profileLayoutStorageKey) === 'all';
+  } catch {
+    return false;
+  }
+}
 
 function storedTheme(): Theme | null {
   try {
@@ -993,6 +1011,7 @@ function App() {
   const [logOpen, setLogOpen] = useState(false);
   const [securityInfoOpen, setSecurityInfoOpen] = useState(false);
   const [udpHelpOpen, setUdpHelpOpen] = useState(false);
+  const [profilesShowAll, setProfilesShowAll] = useState(storedProfilesShowAll);
   const [theme, setTheme] = useState<Theme | null>(storedTheme);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [updateState, setUpdateState] = useState<UpdateState>({kind: 'idle'});
@@ -1066,6 +1085,14 @@ function App() {
       // Theme preference is a convenience; ignore unavailable storage.
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(profileLayoutStorageKey, profilesShowAll ? 'all' : 'row');
+    } catch {
+      // Layout preference is a convenience; ignore unavailable storage.
+    }
+  }, [profilesShowAll]);
 
   useEffect(() => {
     mainRef.current?.scrollTo({top: 0});
@@ -2238,6 +2265,20 @@ function App() {
     persistVpnProfiles(next, selected);
   }
 
+  function moveVpnProfile(from: number, to: number) {
+    const current = normalizeVpnProfiles(vpnProfiles, t);
+    if (from === to || !current[from] || to < 0 || to >= current.length) {
+      return;
+    }
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    const selected = next.indexOf(current[clampIndex(selectedVpnProfile, current.length)]);
+    setVpnProfiles(next);
+    setSelectedVpnProfile(selected);
+    persistVpnProfiles(next, selected);
+  }
+
   function deleteVpnProfile() {
     const current = normalizeVpnProfiles(vpnProfiles, t);
     const deleting = current[clampIndex(selectedVpnProfile, current.length)];
@@ -2776,9 +2817,8 @@ function App() {
 
   function toolButton(icon: IconName, label: string, onClick: () => void, disabled = false) {
     return (
-      <button type="button" className="tool-button" disabled={disabled} onClick={onClick}>
+      <button type="button" className="icon-button field-tool" disabled={disabled} onClick={onClick} aria-label={label} data-tip={label}>
         <Icon name={icon} />
-        <span>{label}</span>
       </button>
     );
   }
@@ -2853,11 +2893,11 @@ function App() {
           spellCheck={false}
           autoComplete="off"
         />
-        <button type="button" className="icon-button" onClick={togglePassphraseVisibility} aria-label={passphraseToggleLabel} title={passphraseToggleLabel}>
+        <button type="button" className="icon-button field-tool" onClick={togglePassphraseVisibility} aria-label={passphraseToggleLabel} data-tip={passphraseToggleLabel}>
           <Icon name={passwordVisibility[mode] ? 'eyeOff' : 'eye'} />
         </button>
+        <span className="key-tools">{passphraseTools}</span>
       </div>
-      <div className="key-tools">{passphraseTools}</div>
       <p className="trust-note">
         <Icon name="lock" />
         <span>
@@ -3196,33 +3236,35 @@ function App() {
   const vpnClientPage = (
     <div className="vpn-layout">
       <section className="card profile-pane">
-        <div className="card-head"><h2>{t.vpnProfiles}</h2></div>
-        <div className="profile-list">
-          {vpnProfileList.map((profile, index) => (
-            <button
-              type="button"
-              key={`${profile.name}-${index}`}
-              className={`profile-item${index === selectedVpnProfile ? ' active' : ''}`}
-              aria-pressed={index === selectedVpnProfile}
-              disabled={vpnClientRunning && index !== selectedVpnProfile}
-              onClick={() => selectVpnProfile(index)}
-            >
-              <span className="profile-avatar" aria-hidden="true">{profileInitials(profile.name)}</span>
-              <span className="profile-text">
-                <strong title={profile.name}>{profile.name}</strong>
-                <small>
-                  {index === selectedVpnProfile && vpnClientRunning
-                    ? vpnClientStatus.label
-                    : `${profile.useUdp ? 'UDP · ' : ''}${profile.tunnelOnly ? t.tunnelOnly : t.systemVpn}`}
-                </small>
-              </span>
-            </button>
-          ))}
+        <div className="card-head">
+          <h2>{t.vpnProfiles}</h2>
+          <div className="card-actions">
+            {vpnProfileList.length > 1 && (
+              <div className="view-toggle" role="group" aria-label={t.vpnProfiles}>
+                <button type="button" className="field-tool" aria-pressed={!profilesShowAll} aria-label={t.vpnProfileLayoutRow} data-tip={t.vpnProfileLayoutRow} onClick={() => setProfilesShowAll(false)}><Icon name="viewRow" /></button>
+                <button type="button" className="field-tool" aria-pressed={profilesShowAll} aria-label={t.vpnProfileLayoutAll} data-tip={t.vpnProfileLayoutAll} onClick={() => setProfilesShowAll(true)}><Icon name="viewGrid" /></button>
+              </div>
+            )}
+            <button type="button" className="ghost" disabled={vpnClientRunning} onClick={addVpnProfile}><Icon name="plus" />{t.vpnProfileNew}</button>
+            <button type="button" className="ghost" disabled={vpnClientRunning} onClick={() => startScreenScan('vpnProfile')}><Icon name="scan" />{t.vpnProfileImport}</button>
+          </div>
         </div>
-        <div className="profile-actions">
-          <button type="button" className="secondary" disabled={vpnClientRunning} onClick={addVpnProfile}><Icon name="plus" />{t.vpnProfileNew}</button>
-          <button type="button" className="secondary" disabled={vpnClientRunning} onClick={() => startScreenScan('vpnProfile')}><Icon name="scan" />{t.vpnProfileImport}</button>
-        </div>
+        <ProfileStrip
+          items={vpnProfileList.map((profile, index) => ({
+            name: profile.name,
+            initials: profileInitials(profile.name),
+            detail: index === selectedVpnProfile && vpnClientRunning
+              ? vpnClientStatus.label
+              : `${profile.useUdp ? 'UDP · ' : ''}${profile.tunnelOnly ? t.tunnelOnly : t.systemVpn}`,
+          }))}
+          selected={selectedVpnProfile}
+          locked={vpnClientRunning}
+          showAll={profilesShowAll}
+          pageLabel={t.vpnProfilePage}
+          reorderLabel={t.vpnProfileReorderHint}
+          onSelect={selectVpnProfile}
+          onMove={moveVpnProfile}
+        />
       </section>
 
       <div className="page-stack">
