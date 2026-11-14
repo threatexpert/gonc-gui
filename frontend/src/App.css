@@ -1786,16 +1786,24 @@ progress::-webkit-progress-value {
 }
 
 /* One row of profiles, paged like a home screen: swipe, wheel or dots. */
+.profile-strip-viewport {
+  overflow: hidden;
+}
+
 .profile-strip {
   position: relative;
   display: flex;
   overflow-x: auto;
   overflow-y: hidden;
-  overscroll-behavior-x: contain;
+  overscroll-behavior-x: none;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
   touch-action: pan-y;
   user-select: none;
+  /* Stretch the scrollport, not its snap targets: WebKit otherwise compensates
+     for translated snap points and cancels the drag before release. */
+  transform: translateX(var(--overscroll, 0px));
+  transition: transform var(--overscroll-duration, 0ms) cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 .profile-strip::-webkit-scrollbar {
@@ -1874,8 +1882,6 @@ progress::-webkit-progress-value {
   min-width: 0;
   padding: 3px;
   scroll-snap-align: start;
-  translate: var(--overscroll, 0px) 0;
-  transition: translate var(--overscroll-duration, 0ms) cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
 .profile-item {
@@ -2401,6 +2407,37 @@ html.profile-dragging * {
 }
 
 /* ---------- dialogs ---------- */
+
+.profile-delete-dialog {
+  box-sizing: border-box;
+  width: min(420px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.profile-delete-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.profile-delete-dialog p {
+  margin: 0 0 20px;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.profile-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
 
 .add-picker-backdrop,
 .qr-backdrop {

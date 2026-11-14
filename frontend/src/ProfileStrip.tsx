@@ -107,7 +107,7 @@ export function ProfileStrip({items, selected, locked, showAll, pageLabel, reord
 
   function currentPage() {
     const strip = stripRef.current;
-    return strip ? Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth)) : 0;
+    return strip ? Math.min(layoutRef.current.pageCount - 1, Math.max(0, Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth)))) : 0;
   }
 
   function scrollToPage(target: number, smooth = true) {
@@ -206,15 +206,20 @@ export function ProfileStrip({items, selected, locked, showAll, pageLabel, reord
   }
 
   function startScroll(press: Press, x: number) {
+    const strip = stripRef.current;
+    if (!strip) return;
     press.scrolling = true;
     suppressClickRef.current = true;
     window.clearTimeout(snapTimerRef.current);
+    // Disable snapping before the first scroll write, rather than waiting for
+    // React's render: WebKit can otherwise snap that first drag frame back.
+    strip.classList.add('free-scroll');
     setFreeScroll(true);
     if (press.pointerType === 'mouse') document.documentElement.classList.add('profile-dragging');
     moveScroll(press, x);
   }
 
-  // Past the first or last page the strip stops scrolling and the pages stretch instead.
+  // The scrollport stretches past the edge; its snap targets keep their layout positions.
   function moveScroll(press: Press, x: number) {
     const strip = stripRef.current;
     if (!strip) return;
@@ -327,7 +332,16 @@ export function ProfileStrip({items, selected, locked, showAll, pageLabel, reord
     if (!strip) return;
     let lastWheel = 0;
     const handleWheel = (event: WheelEvent) => {
-      if (layoutRef.current.showAll || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (layoutRef.current.showAll || event.ctrlKey) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+        // Do not hand an outward trackpad gesture to browser history navigation
+        // or native rubber-banding once this strip has reached either edge.
+        const max = Math.max(0, strip.scrollWidth - strip.clientWidth);
+        if ((strip.scrollLeft <= 1 && event.deltaX < 0) || (strip.scrollLeft >= max - 1 && event.deltaX > 0)) {
+          event.preventDefault();
+        }
+        return;
+      }
       const target = Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth)) + (event.deltaY > 0 ? 1 : -1);
       if (target < 0 || target >= layoutRef.current.pageCount) return;
       event.preventDefault();
@@ -409,7 +423,7 @@ export function ProfileStrip({items, selected, locked, showAll, pageLabel, reord
       pointerType: event.pointerType,
       startX: event.clientX,
       startY: event.clientY,
-      startScroll: event.currentTarget.scrollLeft,
+      startScroll: Math.min(Math.max(0, event.currentTarget.scrollLeft), Math.max(0, event.currentTarget.scrollWidth - event.currentTarget.clientWidth)),
       scrolling: false,
       offsetX: rect ? event.clientX - rect.left : 0,
       offsetY: rect ? event.clientY - rect.top : 0,
@@ -446,39 +460,38 @@ export function ProfileStrip({items, selected, locked, showAll, pageLabel, reord
 
   return (
     <div className="profile-strip-wrap">
-      <div
-        ref={stripRef}
-        className={`profile-strip${showAll ? ' show-all' : ''}${freeScroll ? ' free-scroll' : ''}`}
-        onPointerDown={handlePointerDown}
-        onScroll={(event) => {
-          const strip = event.currentTarget;
-          setPage(Math.round(strip.scrollLeft / Math.max(1, strip.clientWidth)));
-        }}
-      >
-        {pages.map((pageItems, pageIndex) => (
-          <div className="profile-page" key={pageIndex} style={{gridTemplateColumns: `repeat(${perPage}, minmax(0, 1fr))`}}>
-            {pageItems.map((index) => drag?.from === index ? (
-              <div key={index} ref={registerItem(index)} className="profile-placeholder" aria-hidden="true" />
-            ) : (
-              <button
-                type="button"
-                key={index}
-                ref={registerItem(index)}
-                data-profile-index={index}
-                className={`profile-item${index === selected ? ' active' : ''}`}
-                aria-pressed={index === selected}
-                aria-keyshortcuts={canReorder ? 'Alt+ArrowLeft Alt+ArrowRight' : undefined}
-                disabled={locked && index !== selected}
-                onClick={() => {
-                  if (!suppressClickRef.current) onSelect(index);
-                }}
-                onKeyDown={(event) => handleKeyDown(event, index)}
-              >
-                {itemContent(items[index])}
-              </button>
-            ))}
-          </div>
-        ))}
+      <div className="profile-strip-viewport">
+        <div
+          ref={stripRef}
+          className={`profile-strip${showAll ? ' show-all' : ''}${freeScroll ? ' free-scroll' : ''}`}
+          onPointerDown={handlePointerDown}
+          onScroll={() => setPage(currentPage())}
+        >
+          {pages.map((pageItems, pageIndex) => (
+            <div className="profile-page" key={pageIndex} style={{gridTemplateColumns: `repeat(${perPage}, minmax(0, 1fr))`}}>
+              {pageItems.map((index) => drag?.from === index ? (
+                <div key={index} ref={registerItem(index)} className="profile-placeholder" aria-hidden="true" />
+              ) : (
+                <button
+                  type="button"
+                  key={index}
+                  ref={registerItem(index)}
+                  data-profile-index={index}
+                  className={`profile-item${index === selected ? ' active' : ''}`}
+                  aria-pressed={index === selected}
+                  aria-keyshortcuts={canReorder ? 'Alt+ArrowLeft Alt+ArrowRight' : undefined}
+                  disabled={locked && index !== selected}
+                  onClick={() => {
+                    if (!suppressClickRef.current) onSelect(index);
+                  }}
+                  onKeyDown={(event) => handleKeyDown(event, index)}
+                >
+                  {itemContent(items[index])}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
       {pageCount > 1 && (
         <div className="profile-dots">

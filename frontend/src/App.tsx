@@ -10,6 +10,7 @@ import {SendContentOptionIcon} from './SendContentOptionIcon';
 import {TransferInlineQr} from './TransferInlineQr';
 import {ConnectionDetails} from './ConnectionDetails';
 import {ProfileStrip} from './ProfileStrip';
+import {ProfileDeleteDialog} from './ProfileDeleteDialog';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -287,6 +288,8 @@ const text = {
     vpnProfileNewName: '新配置',
     vpnProfileNew: '新增',
     vpnProfileDelete: '删除',
+    vpnProfileDeleteTitle: '删除 VPN 配置',
+    cancel: '取消',
     vpnProfileDeleteConfirm: '确定删除 VPN 配置“{name}”吗？此操作不可撤销。',
     vpnProfileImport: '截图导入',
     vpnProfileExport: '导出二维码',
@@ -554,6 +557,8 @@ const text = {
     vpnProfileNewName: 'New profile',
     vpnProfileNew: 'New',
     vpnProfileDelete: 'Delete',
+    vpnProfileDeleteTitle: 'Delete VPN profile',
+    cancel: 'Cancel',
     vpnProfileDeleteConfirm: 'Delete VPN profile "{name}"? This cannot be undone.',
     vpnProfileImport: 'Screenshot Import',
     vpnProfileExport: 'Export QR',
@@ -1012,6 +1017,8 @@ function App() {
   const [securityInfoOpen, setSecurityInfoOpen] = useState(false);
   const [udpHelpOpen, setUdpHelpOpen] = useState(false);
   const [profilesShowAll, setProfilesShowAll] = useState(storedProfilesShowAll);
+  const [profileDeleteTarget, setProfileDeleteTarget] = useState<{profiles: VPNProfile[]; index: number} | null>(null);
+  const profileDeleteButtonRef = useRef<HTMLButtonElement>(null);
   const [theme, setTheme] = useState<Theme | null>(storedTheme);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [updateState, setUpdateState] = useState<UpdateState>({kind: 'idle'});
@@ -2280,20 +2287,31 @@ function App() {
   }
 
   function deleteVpnProfile() {
+    if (vpnClientRunning) return;
     const current = normalizeVpnProfiles(vpnProfiles, t);
-    const deleting = current[clampIndex(selectedVpnProfile, current.length)];
-    if (!window.confirm(t.vpnProfileDeleteConfirm.replace('{name}', deleting.name || t.vpnProfileDefaultName))) {
+    setProfileDeleteTarget({profiles: current, index: clampIndex(selectedVpnProfile, current.length)});
+  }
+
+  async function confirmDeleteVpnProfile() {
+    if (!profileDeleteTarget || vpnClientRunning) {
+      setProfileDeleteTarget(null);
       return;
     }
-    let next = current.filter((_profile, index) => index !== selectedVpnProfile);
+    let next = profileDeleteTarget.profiles.filter((_profile, index) => index !== profileDeleteTarget.index);
     if (next.length === 0) {
       next = [defaultVpnProfile(t.vpnProfileDefaultName)];
     }
-    const selected = clampIndex(selectedVpnProfile, next.length);
+    const selected = clampIndex(profileDeleteTarget.index, next.length);
+    try {
+      // Keep the current list intact if saving fails, so the dialog can retry.
+      await SaveVPNProfiles(vpnprofile.Store.createFrom({version: 1, selected, profiles: next}));
+    } catch (error) {
+      throw new Error(localizeError(String(error)));
+    }
     setVpnProfiles(next);
     setSelectedVpnProfile(selected);
     applyVpnProfile(next[selected]);
-    persistVpnProfiles(next, selected);
+    setProfileDeleteTarget(null);
   }
 
   function importVpnProfileFromQr(value: string) {
@@ -3294,7 +3312,7 @@ function App() {
             <h2>{t.vpnProfile}</h2>
             <div className="card-actions">
               <button type="button" className="ghost" disabled={vpnProfiles.length === 0} onClick={showVpnProfileQr}><Icon name="qr" />{t.vpnProfileExport}</button>
-              <button type="button" className="ghost danger-text" disabled={vpnClientRunning} onClick={deleteVpnProfile}><Icon name="trash" />{t.vpnProfileDelete}</button>
+              <button ref={profileDeleteButtonRef} type="button" className="ghost danger-text" disabled={vpnClientRunning} onClick={deleteVpnProfile}><Icon name="trash" />{t.vpnProfileDelete}</button>
             </div>
           </div>
           <div className="card-body form-stack">
@@ -3614,6 +3632,18 @@ function App() {
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
         </button>
       </footer>
+      {profileDeleteTarget && (
+        <ProfileDeleteDialog
+          title={t.vpnProfileDeleteTitle}
+          message={t.vpnProfileDeleteConfirm.replace('{name}', profileDeleteTarget.profiles[profileDeleteTarget.index].name || t.vpnProfileDefaultName)}
+          cancelLabel={t.cancel}
+          deleteLabel={t.vpnProfileDelete}
+          pendingLabel={t.pending}
+          triggerRef={profileDeleteButtonRef}
+          onCancel={() => setProfileDeleteTarget(null)}
+          onDelete={confirmDeleteVpnProfile}
+        />
+      )}
       {addPickerState !== 'closed' && (
         <div
           className="add-picker-backdrop"
