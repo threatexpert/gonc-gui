@@ -283,6 +283,8 @@ const text = {
     receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     vpnServerPasswordHint: '作为 linkagent 服务端运行，支持多个客户端同时连接。口令相同即可连接，建议随机生成并通过安全渠道分享给 VPN 客户端。',
     vpnClientPasswordHint: '连接远端 linkagent VPN 服务端。系统 VPN 需要管理员权限，会在连接时弹出 UAC 授权。',
+    vpnClientConnectedSubtitle: '通过已建立的隧道访问对方网络。',
+    vpnClientReconnectingSubtitle: '等待连接恢复。',
     vpnProfile: '配置',
     vpnProfileDefaultName: '默认配置',
     vpnProfileNewName: '新配置',
@@ -552,6 +554,8 @@ const text = {
     receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     vpnServerPasswordHint: 'Run as a linkagent server and allow multiple VPN clients to connect. Use the same passphrase on the client; generating a random one and sharing it securely is recommended.',
     vpnClientPasswordHint: 'Connect to a remote linkagent VPN server. System VPN requires administrator permission and will show a UAC prompt when connecting.',
+    vpnClientConnectedSubtitle: 'Access the remote network through the established tunnel.',
+    vpnClientReconnectingSubtitle: 'Waiting for the connection to recover.',
     vpnProfile: 'Profile',
     vpnProfileDefaultName: 'Default',
     vpnProfileNewName: 'New profile',
@@ -984,6 +988,7 @@ function App() {
   const previousReceiveQrPassphrase = useRef(receivePassword);
   const [vpnServerP2PReports, setVpnServerP2PReports] = useState<Record<string, P2PReport>>({});
   const [vpnClientP2PReport, setVpnClientP2PReport] = useState<P2PReport | null>(null);
+  const [vpnClientHasConnected, setVpnClientHasConnected] = useState(false);
   const [remoteList, setRemoteList] = useState<RemoteList | null>(null);
   const [remoteListLoading, setRemoteListLoading] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -1199,6 +1204,8 @@ function App() {
   // Stay compact through reconnects, until this receiving session is stopped.
   const receiveSessionCompact = receiveRunning && (receiveQrHasConnected || remoteList !== null);
   const vpnClientStatus = receiveConnectionStatus(vpnClientP2PReport, vpnClientRunning, false, t);
+  // Keep the session view through reconnects; restore configuration when stopped.
+  const vpnClientSessionCompact = vpnClientRunning && (vpnClientHasConnected || vpnClientStatus.tone === 'connected');
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
   const vpnServerStatus = multiClientActivityStatus(latestVpnServerReport, vpnServerSessions, vpnServerRunning, t);
   const statusTone = mode === 'receive' ? receiveStatus.tone : (mode === 'send' ? sendStatus.tone : (mode === 'vpnServer' ? vpnServerStatus.tone : vpnClientStatus.tone));
@@ -1209,6 +1216,16 @@ function App() {
     ? t.revealReceivedFileWindows
     : (runtimePlatform === 'darwin' ? t.revealReceivedFileMac : t.revealReceivedFileOther);
   const activeDownloadWarning = downloadWarning && downloadWarning.until > nowTick ? downloadWarning : null;
+
+  useEffect(() => {
+    if (!vpnClientRunning) setVpnClientHasConnected(false);
+  }, [vpnClientRunning]);
+
+  useEffect(() => {
+    if (mode === 'vpnClient' && vpnClientSessionCompact) {
+      mainRef.current?.scrollTo({top: 0});
+    }
+  }, [mode, vpnClientSessionCompact]);
 
   useEffect(() => {
     if (mode === 'receive' && receiveSessionCompact) {
@@ -1440,6 +1457,7 @@ function App() {
       } else if (report.side === 'vpnServer') {
         setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'vpnClient') {
+        setVpnClientHasConnected((current) => latchSuccessfulConnection(current, report.status));
         setVpnClientP2PReport(report);
         handleVpnClientTunnelReport(report.status);
       }
@@ -2030,6 +2048,7 @@ function App() {
         setVpnServerP2PReports({});
         setVpnServerTraffic(null);
       } else {
+        setVpnClientHasConnected(false);
         setVpnClientP2PReport(null);
         setVpnClientTraffic(null);
         setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
@@ -2803,7 +2822,10 @@ function App() {
   const securityHint = mode === 'send' ? t.senderPasswordHint : (mode === 'receive' ? t.receiverPasswordHint : '');
   const currentStatus = mode === 'send' ? sendStatus : (mode === 'receive' ? receiveStatus : (mode === 'vpnServer' ? vpnServerStatus : vpnClientStatus));
   const pageTitle = mode === 'send' ? t.sendTitle : (mode === 'receive' ? t.receiveTitle : (mode === 'vpnServer' ? t.vpnServerTitle : t.vpnClient));
-  const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? (receiveSessionCompact ? t.receiveConnectedSubtitle : t.receiveSubtitle) : (mode === 'vpnServer' ? t.vpnServerPasswordHint : t.vpnClientPasswordHint));
+  const vpnClientSubtitle = vpnClientSessionCompact
+    ? (vpnClientStatus.tone === 'connected' ? t.vpnClientConnectedSubtitle : t.vpnClientReconnectingSubtitle)
+    : t.vpnClientPasswordHint;
+  const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? (receiveSessionCompact ? t.receiveConnectedSubtitle : t.receiveSubtitle) : (mode === 'vpnServer' ? t.vpnServerPasswordHint : vpnClientSubtitle));
   const stopLabel = mode === 'send' ? t.stopShare : (mode === 'vpnServer' ? t.stopVpnServer : t.disconnect);
   const startIcon: IconName = mode === 'send' ? 'send' : (mode === 'receive' ? 'link' : (mode === 'vpnServer' ? 'server' : 'shield'));
   const startHint = currentRunning || canStart || startPending
@@ -3253,6 +3275,7 @@ function App() {
 
   const vpnClientPage = (
     <div className="vpn-layout">
+      {!vpnClientSessionCompact && (
       <section className="card profile-pane">
         <div className="card-head">
           <h2>{t.vpnProfiles}</h2>
@@ -3284,6 +3307,7 @@ function App() {
           onMove={moveVpnProfile}
         />
       </section>
+      )}
 
       <div className="page-stack">
         <section className={`card vpn-hero ${vpnClientRunning ? vpnClientStatus.tone : 'idle'}`}>
@@ -3299,6 +3323,7 @@ function App() {
           {vpnClientRunning && (
             <div className="stats-row">
               <Metric label={t.peer} value={vpnClientP2PReport?.peer || '-'} />
+              <Metric label={t.network} value={vpnClientP2PReport?.network || '-'} />
               <Metric label={t.connectionRoute} value={routeLabel(vpnClientP2PReport?.mode || '', t)} />
               <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />
               <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />
@@ -3307,6 +3332,7 @@ function App() {
           )}
         </section>
 
+        {!vpnClientSessionCompact && (
         <section className="card">
           <div className="card-head">
             <h2>{t.vpnProfile}</h2>
@@ -3442,6 +3468,7 @@ function App() {
             </div>
           </SettingsSection>
         </section>
+        )}
       </div>
     </div>
   );
@@ -3575,7 +3602,6 @@ function App() {
             <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
             <Metric label={t.network} value={activeP2PReport?.network || '-'} />
             <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
-            <Metric label={t.speed} value={formatRate(transferSpeed)} />
             {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
             {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
             {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}

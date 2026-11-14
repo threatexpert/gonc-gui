@@ -2069,18 +2069,23 @@ html.profile-dragging * {
 
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px 18px;
+  padding: 22px;
   border-top: 1px solid var(--border);
 }
 
 .stats-row .metric {
+  min-width: 0;
   border: 0;
   border-radius: 0;
+  padding: 0;
   background: transparent;
 }
 
-.stats-row .metric + .metric {
-  border-left: 1px solid var(--border);
+.stats-row .metric strong {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .command-line {
@@ -2775,6 +2780,12 @@ html.profile-dragging * {
 }
 
 @media (max-width: 640px) {
+  .stats-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 12px;
+    padding: 16px;
+  }
+
   .page {
     padding: 18px 16px 28px;
   }
