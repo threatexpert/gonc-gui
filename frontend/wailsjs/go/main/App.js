@@ -22,6 +22,10 @@ export function CreateTextShare(arg1) {
   return window['go']['main']['App']['CreateTextShare'](arg1);
 }
 
+export function FitStartupWindow(arg1, arg2) {
+  return window['go']['main']['App']['FitStartupWindow'](arg1, arg2);
+}
+
 export function GeneratePassword() {
   return window['go']['main']['App']['GeneratePassword']();
 }

@@ -88,12 +88,13 @@ func StartElevated(ctx context.Context) (*Client, error) {
 	}
 }
 
+// Start returns the DNS servers actually configured by the helper.
 func (c *Client) Start(config vpnconfig.Config) ([]string, error) {
 	resp, err := c.call(request{Op: OpStart, Config: config})
 	if err != nil {
-		return resp.Logs, err
+		return nil, err
 	}
-	return resp.Logs, nil
+	return append([]string{}, resp.DNSServers...), nil
 }
 
 func (c *Client) Stop() error {

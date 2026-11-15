@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.inline-qr-test.json",
+  "compilerOptions": {"outDir": "node_modules/.cache/gonc-vpn-details-tests"},
+  "include": ["src/vpnDetails.ts", "tests/vpnDetails.test.ts"]
+}

@@ -54,18 +54,20 @@ type Request struct {
 }
 
 type Event struct {
-	Type     string  `json:"type"`
-	Level    string  `json:"level"`
-	Message  string  `json:"message"`
-	Time     string  `json:"time"`
-	Mode     string  `json:"mode,omitempty"`
-	LocalURL string  `json:"localUrl,omitempty"`
-	InBytes  int64   `json:"inBytes,omitempty"`
-	OutBytes int64   `json:"outBytes,omitempty"`
-	InBps    float64 `json:"inBps,omitempty"`
-	OutBps   float64 `json:"outBps,omitempty"`
-	Elapsed  string  `json:"elapsed,omitempty"`
-	PeerIPv6 string  `json:"peerIpv6,omitempty"`
+	ClientRunID int64       `json:"clientRunId,omitempty"`
+	VPNDetails  *VPNDetails `json:"vpnDetails,omitempty"`
+	Type        string      `json:"type"`
+	Level       string      `json:"level"`
+	Message     string      `json:"message"`
+	Time        string      `json:"time"`
+	Mode        string      `json:"mode,omitempty"`
+	LocalURL    string      `json:"localUrl,omitempty"`
+	InBytes     int64       `json:"inBytes,omitempty"`
+	OutBytes    int64       `json:"outBytes,omitempty"`
+	InBps       float64     `json:"inBps,omitempty"`
+	OutBps      float64     `json:"outBps,omitempty"`
+	Elapsed     string      `json:"elapsed,omitempty"`
+	PeerIPv6    string      `json:"peerIpv6,omitempty"`
 }
 
 type P2PStatusReport struct {
@@ -84,11 +86,13 @@ type Sink func(Event)
 type ReportSink func(P2PStatusReport)
 
 type Runner struct {
-	mu       sync.Mutex
-	session  *goncembed.Session
-	source   *dynamicFileSource
-	helper   *vpnhelper.Client
-	stopping bool
+	mu            sync.Mutex
+	session       *goncembed.Session
+	source        *dynamicFileSource
+	helper        *vpnhelper.Client
+	stopping      bool
+	vpnDetails    *vpnDetailsTracker
+	stopVPNRoutes func()
 }
 
 func New() *Runner {
@@ -125,12 +129,16 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 		sink:       sink,
 		reportSink: reportSink,
 	}
+	if req.Mode == ModeVPNClient {
+		cb.vpnDetails = newVPNDetailsTracker(req, sink)
+	}
 
 	var (
-		session   *goncembed.Session
-		source    *dynamicFileSource
-		vpnHelper *vpnhelper.Client
-		err       error
+		session       *goncembed.Session
+		source        *dynamicFileSource
+		vpnHelper     *vpnhelper.Client
+		stopVPNRoutes func()
+		err           error
 	)
 	switch req.Mode {
 	case ModeSend:
@@ -150,6 +158,7 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 		}
 		session = vpnStart.session
 		vpnHelper = vpnStart.helper
+		stopVPNRoutes = vpnStart.stopRoutes
 	default:
 		err = fmt.Errorf("unknown mode: %s", req.Mode)
 	}
@@ -161,6 +170,9 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	if r.session != nil {
 		r.mu.Unlock()
 		session.Stop()
+		if stopVPNRoutes != nil {
+			stopVPNRoutes()
+		}
 		if vpnHelper != nil {
 			_ = vpnHelper.Close()
 		}
@@ -169,8 +181,13 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	r.session = session
 	r.source = source
 	r.helper = vpnHelper
+	r.stopVPNRoutes = stopVPNRoutes
 	r.stopping = false
+	r.vpnDetails = cb.vpnDetails
 	r.mu.Unlock()
+	if cb.vpnDetails != nil {
+		go cb.vpnDetails.publishUntil(session.Done())
+	}
 
 	emit(sink, "status", "info", "gonc embedded session started")
 	go r.wait(parent, session, cb, sink)
@@ -197,18 +214,30 @@ func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	r.mu.Lock()
 	session := r.session
 	helper := r.helper
+	details := r.vpnDetails
+	stopVPNRoutes := r.stopVPNRoutes
 	if session != nil {
 		r.stopping = true
 		r.helper = nil
+		r.stopVPNRoutes = nil
 	}
 	r.mu.Unlock()
 	if session == nil {
 		return true, errors.New("no transfer task is running")
 	}
+	if details != nil {
+		details.beginStop()
+	}
 	session.Stop()
+	if stopVPNRoutes != nil {
+		stopVPNRoutes()
+	}
 	if helper != nil {
 		_ = helper.Stop()
 		_ = helper.Close()
+	}
+	if details != nil {
+		details.finish(time.Now())
 	}
 	if timeout <= 0 {
 		return false, nil
@@ -233,6 +262,10 @@ func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *ca
 		stopping = r.stopping
 		r.session = nil
 		r.source = nil
+		if r.stopVPNRoutes != nil {
+			r.stopVPNRoutes()
+			r.stopVPNRoutes = nil
+		}
 		if r.helper != nil {
 			_ = r.helper.Stop()
 			_ = r.helper.Close()
@@ -241,6 +274,9 @@ func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *ca
 		r.stopping = false
 	}
 	r.mu.Unlock()
+	if cb.vpnDetails != nil && !stopping {
+		cb.vpnDetails.finish(time.Now())
+	}
 
 	if stopping || (parent != nil && parent.Err() != nil) {
 		emit(sink, "status", "warn", "transfer stopped")
@@ -324,8 +360,9 @@ func buildArgs(req Request) ([]string, error) {
 }
 
 type vpnClientStart struct {
-	session *goncembed.Session
-	helper  *vpnhelper.Client
+	session    *goncembed.Session
+	helper     *vpnhelper.Client
+	stopRoutes func()
 }
 
 func vpnExtraArgs(req Request) string {
@@ -359,35 +396,9 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		emitPeerIPv6(sink, "waiting")
 	}
 
-	readyCh := make(chan string, 1)
-	tunnelLostCh := make(chan string, 8)
-	bypassUpdateCh := make(chan struct{}, 1)
-	var bypassMu sync.Mutex
-	bypassIPs := map[string]struct{}{}
-	cb.onReady = func(endpoint string) {
-		if !strings.HasPrefix(endpoint, "socks5://") {
-			return
-		}
-		select {
-		case readyCh <- endpoint:
-		default:
-		}
-	}
-	cb.onP2PReport = func(status string, peer string) {
-		if ips := extractPeerIPs(peer); len(ips) > 0 && replaceBypassIPs(&bypassMu, bypassIPs, ips) {
-			select {
-			case bypassUpdateCh <- struct{}{}:
-			default:
-			}
-		}
-		if !vpnTunnelNeedsRoutePause(status) {
-			return
-		}
-		select {
-		case tunnelLostCh <- strings.TrimSpace(status):
-		default:
-		}
-	}
+	lifecycle := newVPNTunnelLifecycle()
+	cb.onReady = lifecycle.ready
+	cb.onP2PReport = lifecycle.report
 	session, err := goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, vpnExtraArgs(req), cb)
 	if err != nil {
 		if helper != nil {
@@ -395,83 +406,88 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		}
 		return nil, err
 	}
-	go func() {
-		var vpnApplied bool
-		var currentEndpoint string
-		var currentIPv6 bool
-		applyVPN := func(endpoint string, effectiveIPv6 bool, reapply bool) bool {
-			config := vpnconfig.Config{
-				SOCKS5Endpoint: endpoint,
-				Routes:         routeLines(req.RouteCIDRs, effectiveIPv6),
-				DNSServers:     dnsLines(req.DNSServers, effectiveIPv6),
-				BypassIPs:      snapshotBypassIPs(&bypassMu, bypassIPs),
-				EnableIPv6:     effectiveIPv6,
-				MTU:            normalizeMTU(req.MTU),
-				RouteMetric:    normalizeRouteMetric(req.RouteMetric),
-				BlockDNSLeak:   req.BlockDNSLeak,
-				LogLevel:       "warn",
+	var stopRoutes func()
+	if !req.TunnelOnly {
+		ctx, cancel := context.WithCancel(parent)
+		routesDone := make(chan struct{})
+		stopRoutes = func() { cancel(); <-routesDone }
+		go func() {
+			defer close(routesDone)
+			defer cancel()
+			go func() {
+				select {
+				case <-session.Done():
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			configFor := func(s vpnTunnelSnapshot, ipv6 bool) vpnconfig.Config {
+				return vpnconfig.Config{
+					SOCKS5Endpoint: s.endpoint,
+					Routes:         routeLines(req.RouteCIDRs, ipv6),
+					DNSServers:     dnsLines(req.DNSServers, ipv6),
+					BypassIPs:      s.bypass,
+					EnableIPv6:     ipv6,
+					MTU:            normalizeMTU(req.MTU),
+					RouteMetric:    normalizeRouteMetric(req.RouteMetric),
+					BlockDNSLeak:   req.BlockDNSLeak,
+					LogLevel:       "warn",
+				}
 			}
-			if reapply {
-				emit(sink, "status", "info", "System VPN bypass updated; reapplying routes")
-				_ = helper.Stop()
-			} else if vpnApplied {
-				emit(sink, "status", "info", "SOCKS5 endpoint refreshed; reapplying system VPN")
-				_ = helper.Stop()
-			} else {
-				emit(sink, "status", "info", "SOCKS5 endpoint ready; starting system VPN")
-			}
-			_, err := helper.Start(config)
+			err := runVPNRouteLifecycle(ctx, session.Done(), lifecycle, vpnRouteActions{
+				probe: func(ctx context.Context, endpoint string) bool {
+					return resolveEffectiveIPv6(ctx, req.EnableIPv6, endpoint, sink)
+				},
+				start: func(s vpnTunnelSnapshot, ipv6 bool) ([]string, error) {
+					return helper.Start(configFor(s, ipv6))
+				},
+				stop: helper.Stop,
+				applying: func(s vpnTunnelSnapshot, ipv6 bool) {
+					cb.vpnEventMu.Lock()
+					defer cb.vpnEventMu.Unlock()
+					if !lifecycle.current(s) {
+						return
+					}
+					config := configFor(s, ipv6)
+					cb.vpnDetails.routes("applying", config.Routes, config.BypassIPs, []string{})
+					cb.vpnDetails.publish()
+					emit(sink, "status", "info", "SOCKS5 endpoint ready; applying system VPN configuration")
+				},
+				applied: func(s vpnTunnelSnapshot, ipv6 bool, dns []string) {
+					cb.vpnEventMu.Lock()
+					defer cb.vpnEventMu.Unlock()
+					if !lifecycle.current(s) {
+						return
+					}
+					config := configFor(s, ipv6)
+					cb.vpnDetails.routes("applied", config.Routes, config.BypassIPs, dns)
+					cb.vpnDetails.publish()
+					emit(sink, "status", "info", "System VPN started")
+				},
+				paused: func(status string, err error) {
+					if err != nil {
+						cb.vpnDetails.routes("error", nil, nil, nil)
+						emit(sink, "status", "warn", "System VPN pause failed: "+err.Error())
+					} else {
+						cb.vpnDetails.routes("paused", nil, nil, nil)
+						emit(sink, "status", "warn", "Tunnel status changed to "+status+"; system VPN routes paused for reconnect")
+						emit(sink, "status", "info", "System VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
+					}
+					cb.vpnDetails.publish()
+					if req.EnableIPv6 {
+						emitPeerIPv6(sink, "waiting")
+					}
+				},
+			})
 			if err != nil {
+				cb.vpnDetails.routes("error", nil, nil, nil)
+				cb.vpnDetails.publish()
 				emit(sink, "status", "error", "System VPN start failed: "+err.Error())
 				session.Stop()
-				return false
 			}
-			vpnApplied = true
-			emit(sink, "status", "info", "System VPN started")
-			return true
-		}
-		for {
-			select {
-			case endpoint := <-readyCh:
-				if req.TunnelOnly {
-					emit(sink, "status", "info", "SOCKS5 tunnel is ready")
-					continue
-				}
-				effectiveIPv6 := resolveEffectiveIPv6(parent, req.EnableIPv6, endpoint, sink)
-				currentEndpoint = endpoint
-				currentIPv6 = effectiveIPv6
-				if !applyVPN(endpoint, effectiveIPv6, false) {
-					return
-				}
-			case <-bypassUpdateCh:
-				if req.TunnelOnly || !vpnApplied || currentEndpoint == "" {
-					continue
-				}
-				if !applyVPN(currentEndpoint, currentIPv6, true) {
-					return
-				}
-			case status := <-tunnelLostCh:
-				if req.TunnelOnly || !vpnApplied {
-					continue
-				}
-				emit(sink, "status", "warn", "Tunnel status changed to "+status+"; pausing system VPN routes for reconnect")
-				if err := helper.Stop(); err != nil {
-					emit(sink, "status", "warn", "System VPN pause failed: "+err.Error())
-				} else {
-					emit(sink, "status", "info", "System VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
-				}
-				if req.EnableIPv6 {
-					emitPeerIPv6(sink, "waiting")
-				}
-				vpnApplied = false
-			case <-session.Done():
-				return
-			case <-parent.Done():
-				return
-			}
-		}
-	}()
-	return &vpnClientStart{session: session, helper: helper}, nil
+		}()
+	}
+	return &vpnClientStart{session: session, helper: helper, stopRoutes: stopRoutes}, nil
 }
 
 func resolveEffectiveIPv6(parent context.Context, requested bool, socks5Endpoint string, sink Sink) bool {
@@ -683,39 +699,53 @@ func splitExtraArgs(extraArgs string) []string {
 }
 
 type callback struct {
+	vpnDetails  *vpnDetailsTracker
 	mode        Mode
 	sink        Sink
 	reportSink  ReportSink
-	onReady     func(string)
-	onP2PReport func(status string, peer string)
+	onReady     func(string) bool
+	onP2PReport func(P2PStatusReport) bool
+	vpnEventMu  sync.Mutex
 	mu          sync.Mutex
 	exitCode    int
 }
 
 func (c *callback) Event(level string, message string) {
+	if c.vpnDetails != nil {
+		c.vpnEventMu.Lock()
+		if c.vpnDetails.connectionLog(message, time.Now()) {
+			c.vpnDetails.publish()
+		}
+		c.vpnEventMu.Unlock()
+	}
 	flushLine(message, level, c.sink)
 }
 
 func (c *callback) P2PReport(topic string, side string, status string, network string, mode string, peer string, timestamp int64, pid int) {
-	if c.onP2PReport != nil {
-		c.onP2PReport(status, peer)
+	c.vpnEventMu.Lock()
+	defer c.vpnEventMu.Unlock()
+	report := P2PStatusReport{
+		Topic: topic, Status: status, Network: network, Mode: mode,
+		Side: string(c.mode), Peer: peer, Timestamp: timestamp, PID: pid,
+	}
+	if c.onP2PReport != nil && !c.onP2PReport(report) {
+		return
+	}
+	if c.vpnDetails != nil {
+		c.vpnDetails.connectionReport(report, time.Now())
+		c.vpnDetails.publish()
 	}
 	if c.reportSink == nil {
 		return
 	}
-	c.reportSink(P2PStatusReport{
-		Topic:     topic,
-		Status:    status,
-		Network:   network,
-		Mode:      mode,
-		Side:      string(c.mode),
-		Peer:      peer,
-		Timestamp: timestamp,
-		PID:       pid,
-	})
+	c.reportSink(report)
 }
 
 func (c *callback) Traffic(side string, inBytes int64, outBytes int64, inBps float64, outBps float64, elapsed int64, connCount int, final bool) {
+	if c.vpnDetails != nil {
+		c.vpnDetails.traffic(inBytes, outBytes, inBps, outBps, final, time.Now())
+		c.vpnDetails.publish()
+	}
 	if c.sink == nil {
 		return
 	}
@@ -735,11 +765,17 @@ func (c *callback) Traffic(side string, inBytes int64, outBytes int64, inBps flo
 }
 
 func (c *callback) Ready(endpoint string) {
+	c.vpnEventMu.Lock()
+	defer c.vpnEventMu.Unlock()
 	if endpoint == "" {
 		return
 	}
-	if c.onReady != nil {
-		c.onReady(endpoint)
+	if c.onReady != nil && !c.onReady(endpoint) {
+		return
+	}
+	if c.vpnDetails != nil {
+		c.vpnDetails.socksReady()
+		c.vpnDetails.publish()
 	}
 	eventType := "local_http"
 	message := "local HTTP endpoint is ready"
@@ -759,11 +795,19 @@ func (c *callback) Stopped(exitCode int) {
 	c.exitCode = exitCode
 	c.mu.Unlock()
 	if exitCode != 0 {
+		if c.vpnDetails != nil {
+			c.vpnDetails.connectionFailure(fmt.Sprintf("gonc exited with code %d", exitCode), true)
+			c.vpnDetails.publish()
+		}
 		emit(c.sink, "status", "error", fmt.Sprintf("gonc exited with code %d", exitCode))
 	}
 }
 
 func (c *callback) Error(message string) {
+	if c.vpnDetails != nil {
+		c.vpnDetails.connectionFailure(message, false)
+		c.vpnDetails.publish()
+	}
 	emit(c.sink, "status", "error", message)
 }
 

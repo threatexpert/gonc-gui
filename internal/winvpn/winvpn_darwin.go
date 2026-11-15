@@ -30,6 +30,7 @@ type Session struct {
 	ifaceName  string
 	nameFile   string
 	dnsRestore []dnsServiceState
+	appliedDNS []string
 }
 
 type dnsServiceState struct {
@@ -134,6 +135,10 @@ func (s *Session) configure() error {
 	return nil
 }
 
+func (s *Session) DNSServers() []string {
+	return append([]string{}, s.appliedDNS...)
+}
+
 func (s *Session) configureDNS() {
 	var dns []string
 	for _, server := range s.config.DNSServers {
@@ -154,7 +159,9 @@ func (s *Session) configureDNS() {
 		if err == nil {
 			s.dnsRestore = append(s.dnsRestore, state)
 		}
-		_ = run("networksetup", append([]string{"-setdnsservers", service}, dns...)...)
+		if err := run("networksetup", append([]string{"-setdnsservers", service}, dns...)...); err == nil {
+			s.appliedDNS = append([]string{}, dns...)
+		}
 	}
 }
 

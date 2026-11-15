@@ -25,8 +25,9 @@ const (
 )
 
 type Session struct {
-	mu     sync.Mutex
-	config vpnconfig.Config
+	mu         sync.Mutex
+	config     vpnconfig.Config
+	appliedDNS []string
 }
 
 type defaultRoute struct {
@@ -113,6 +114,10 @@ func (s *Session) configure() error {
 	return nil
 }
 
+func (s *Session) DNSServers() []string {
+	return append([]string{}, s.appliedDNS...)
+}
+
 func (s *Session) configureDNS() {
 	if _, err := exec.LookPath("resolvectl"); err != nil {
 		return
@@ -128,7 +133,9 @@ func (s *Session) configureDNS() {
 	if len(dns) == 0 {
 		return
 	}
-	_ = run("resolvectl", append([]string{"dns", interfaceName}, dns...)...)
+	if err := run("resolvectl", append([]string{"dns", interfaceName}, dns...)...); err == nil {
+		s.appliedDNS = append([]string{}, dns...)
+	}
 	_ = run("resolvectl", "domain", interfaceName, "~.")
 }
 

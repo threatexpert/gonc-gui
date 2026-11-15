@@ -1475,6 +1475,12 @@ input[type="checkbox"] {
   animation: spin 0.8s linear infinite;
 }
 
+.big-action .spinner-dot {
+  flex-shrink: 0;
+  border-color: currentColor;
+  border-right-color: transparent;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -2060,11 +2066,46 @@ html.profile-dragging * {
   color: var(--text-muted);
 }
 
+.vpn-hero.waiting .vpn-hero-text p,
+.vpn-connection-error {
+  color: var(--warning);
+}
+
+.vpn-hero.error .vpn-hero-text p,
+.vpn-hero.error .vpn-connection-error {
+  color: var(--danger);
+}
+
+.vpn-connection-error {
+  margin: 0 16px 14px;
+  max-height: 5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  user-select: text;
+}
+
 .vpn-hero-hint {
   margin: -8px 16px 12px;
   color: var(--text-faint);
   font-size: 11.5px;
   text-align: right;
+}
+
+.vpn-paths {
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.vpn-paths-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); }
+.vpn-paths pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 13px;
+  line-height: 1.65;
+  user-select: text;
 }
 
 .stats-row {
@@ -2086,6 +2127,38 @@ html.profile-dragging * {
 .stats-row .metric strong {
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.vpn-detail-group {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.vpn-detail-group .stats-row {
+  padding: 0;
+  border: 0;
+  gap: 14px 18px;
+}
+
+.vpn-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.vpn-network-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.vpn-tunnel-endpoint {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+@media (max-width: 900px) {
+  .vpn-detail-group .stats-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .command-line {
@@ -2129,7 +2202,7 @@ html.profile-dragging * {
   grid-area: drawer;
   display: flex;
   flex-direction: column;
-  height: 260px;
+  height: min(260px, 45vh);
   min-height: 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
@@ -2779,7 +2852,24 @@ html.profile-dragging * {
 
 }
 
+@media (max-height: 600px) {
+  .page--send,
+  .page--receive-connected {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .share-content-card .path-list,
+  .page--receive-connected .remote-list {
+    max-height: 180px;
+  }
+}
+
 @media (max-width: 640px) {
+  .vpn-detail-group {
+    padding: 14px 16px;
+  }
+
   .stats-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 20px 12px;

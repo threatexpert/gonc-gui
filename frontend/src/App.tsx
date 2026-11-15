@@ -11,6 +11,9 @@ import {TransferInlineQr} from './TransferInlineQr';
 import {ConnectionDetails} from './ConnectionDetails';
 import {ProfileStrip} from './ProfileStrip';
 import {ProfileDeleteDialog} from './ProfileDeleteDialog';
+import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
+import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
+import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails, type VPNSnapshot} from './vpnDetails';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -46,6 +49,7 @@ import {
   CheckForUpdate,
   ClearTaskbarProgress,
   CreateTextShare,
+  FitStartupWindow,
   GeneratePassword,
   IsAdministrator,
   ImportClipboard,
@@ -85,6 +89,8 @@ type UpdateState =
   | {kind: 'error'; code: UpdateErrorCode};
 
 type LogEvent = {
+  clientRunId?: number;
+  vpnDetails?: VPNDetails;
   type: string;
   level: string;
   message: string;
@@ -276,15 +282,45 @@ const text = {
     lanRoute: '局域网',
     speed: '速度',
     sentTotal: '累计发送',
+    vpnUpload: '上传速度',
+    vpnDownload: '下载速度',
+    vpnUploaded: '累计上传',
+    vpnDownloaded: '累计下载',
+    vpnDuration: '会话时长',
+    vpnLatestConnection: '最近连接时间',
+    vpnPaths: '路由',
+    vpnTunnelOnlyPath: '仅 SOCKS5 隧道',
+    vpnMorePaths: '更多',
+    vpnSystemDNS: '系统 DNS（未接管）',
+    vpnConnectionInfo: '连接信息',
+    vpnTrafficStats: '传输统计',
+    vpnNetworkConfig: '网络配置',
+    vpnConnecting: '正在连接…',
+    vpnConfiguring: '正在配置 VPN…',
+    vpnReconnecting: '正在重连…',
+    vpnRestoring: '正在恢复 VPN…',
+    vpnConfigurationFailed: 'VPN 配置失败',
+    vpnRetryFailedIn: '连接失败，{seconds} 秒后重试…',
+    vpnRetryInterruptedIn: '连接中断，{seconds} 秒后重试…',
+    vpnRetrying: '正在重试连接…',
+    vpnConnectionFailed: '连接失败',
+    vpnLastFailure: '最近失败原因',
+    vpnFailureUnknown: '底层未提供具体原因，请查看活动日志。',
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
     senderPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     vpnServerPasswordHint: '作为 linkagent 服务端运行，支持多个客户端同时连接。口令相同即可连接，建议随机生成并通过安全渠道分享给 VPN 客户端。',
-    vpnClientPasswordHint: '连接远端 linkagent VPN 服务端。系统 VPN 需要管理员权限，会在连接时弹出 UAC 授权。',
+    vpnClientPasswordHint: '连接远端 linkagent VPN 服务端。系统 VPN 需要管理员权限，会在连接时弹出系统授权窗口。',
+    vpnAuthorizationCanceled: '已取消管理员授权，未连接 VPN。可重新点击连接。',
     vpnClientConnectedSubtitle: '通过已建立的隧道访问对方网络。',
     vpnClientReconnectingSubtitle: '等待连接恢复。',
+    vpnDisconnecting: '正在断开…',
+    vpnDisconnectingSubtitle: '正在断开 VPN 并清理网络设置，请稍候。',
+    vpnDisconnectedSubtitle: 'VPN 已断开，可重新连接。',
+    vpnDisconnectFailed: '断开未完成',
+    vpnDisconnectFailedSubtitle: '断开未完成，请查看错误信息并重试。',
     vpnProfile: '配置',
     vpnProfileDefaultName: '默认配置',
     vpnProfileNewName: '新配置',
@@ -433,9 +469,9 @@ const text = {
     dir: '目录',
     modifiedTime: '修改时间',
     vpnTunnelPausedTitle: 'VPN 隧道已断开',
-    vpnTunnelPausedBody: '正在等待隧道重连，系统路由已临时暂停。',
+    vpnTunnelPausedBody: 'VPN 暂不可用，正在等待重新连接。',
     vpnTunnelRestoredTitle: 'VPN 隧道已恢复',
-    vpnTunnelRestoredBody: '隧道已重新连接，系统路由已恢复。',
+    vpnTunnelRestoredBody: '连接已恢复，可以继续使用。',
     vpnStartedTitle: 'VPN 已开启',
     vpnStartedBody: '系统 VPN 路由和 DNS 已配置完成。',
     shareUpdateFailed: '更新分享列表失败。',
@@ -547,15 +583,45 @@ const text = {
     lanRoute: 'LAN',
     speed: 'Speed',
     sentTotal: 'Sent total',
+    vpnUpload: 'Upload speed',
+    vpnDownload: 'Download speed',
+    vpnUploaded: 'Total uploaded',
+    vpnDownloaded: 'Total downloaded',
+    vpnDuration: 'Session duration',
+    vpnLatestConnection: 'Last connected',
+    vpnPaths: 'Routes',
+    vpnTunnelOnlyPath: 'SOCKS5 tunnel only',
+    vpnMorePaths: 'More',
+    vpnSystemDNS: 'System DNS (unchanged)',
+    vpnConnectionInfo: 'Connection',
+    vpnTrafficStats: 'Transfer statistics',
+    vpnNetworkConfig: 'Network configuration',
+    vpnConnecting: 'Connecting…',
+    vpnConfiguring: 'Configuring VPN…',
+    vpnReconnecting: 'Reconnecting…',
+    vpnRestoring: 'Restoring VPN…',
+    vpnConfigurationFailed: 'VPN configuration failed',
+    vpnRetryFailedIn: 'Connection failed. Retrying in {seconds}s…',
+    vpnRetryInterruptedIn: 'Connection interrupted. Retrying in {seconds}s…',
+    vpnRetrying: 'Retrying connection…',
+    vpnConnectionFailed: 'Connection failed',
+    vpnLastFailure: 'Last failure',
+    vpnFailureUnknown: 'No specific reason was reported. Check the activity log.',
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
     senderPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     vpnServerPasswordHint: 'Run as a linkagent server and allow multiple VPN clients to connect. Use the same passphrase on the client; generating a random one and sharing it securely is recommended.',
-    vpnClientPasswordHint: 'Connect to a remote linkagent VPN server. System VPN requires administrator permission and will show a UAC prompt when connecting.',
+    vpnClientPasswordHint: 'Connect to a remote linkagent VPN server. System VPN requires administrator permission and will show a system authorization prompt when connecting.',
+    vpnAuthorizationCanceled: 'Administrator authorization was canceled. VPN was not connected. You can try connecting again.',
     vpnClientConnectedSubtitle: 'Access the remote network through the established tunnel.',
     vpnClientReconnectingSubtitle: 'Waiting for the connection to recover.',
+    vpnDisconnecting: 'Disconnecting…',
+    vpnDisconnectingSubtitle: 'Disconnecting VPN and cleaning up network settings. Please wait.',
+    vpnDisconnectedSubtitle: 'VPN is disconnected. You can connect again.',
+    vpnDisconnectFailed: 'Disconnection incomplete',
+    vpnDisconnectFailedSubtitle: 'Disconnection did not complete. Check the error and try again.',
     vpnProfile: 'Profile',
     vpnProfileDefaultName: 'Default',
     vpnProfileNewName: 'New profile',
@@ -704,9 +770,9 @@ const text = {
     dir: 'DIR',
     modifiedTime: 'Modified',
     vpnTunnelPausedTitle: 'VPN tunnel disconnected',
-    vpnTunnelPausedBody: 'Waiting for the tunnel to reconnect. System routes are paused temporarily.',
+    vpnTunnelPausedBody: 'VPN is temporarily unavailable. Waiting to reconnect.',
     vpnTunnelRestoredTitle: 'VPN tunnel restored',
-    vpnTunnelRestoredBody: 'The tunnel is connected again and system routes are restored.',
+    vpnTunnelRestoredBody: 'The connection is ready to use again.',
     vpnStartedTitle: 'VPN is on',
     vpnStartedBody: 'System VPN routes and DNS are ready.',
     shareUpdateFailed: 'Failed to update shared list.',
@@ -934,7 +1000,10 @@ function scaleCanvas(source: HTMLCanvasElement, scale: number) {
 function App() {
   const [lang] = useState<Lang>(detectLang);
   const t = text[lang];
-  const [mode, setMode] = useState<Mode>('send');
+  const [mode, setMode] = useState<Mode>(() => {
+    try { return readLastMode(window.localStorage); } catch { return 'send'; }
+  });
+  const modeManuallySelected = useRef(false);
   const [sendPassword, setSendPassword] = useState('');
   const [receivePassword, setReceivePassword] = useState('');
   const [vpnServerPassword, setVpnServerPassword] = useState('');
@@ -980,6 +1049,12 @@ function App() {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [error, setError] = useState('');
   const [startPending, setStartPending] = useState(false);
+  const [vpnDisconnectPhase, setVpnDisconnectPhase] = useState<VpnDisconnectPhase>('idle');
+  const [vpnSnapshot, setVpnSnapshot] = useState<VPNSnapshot | null>(null);
+  const [vpnPathsExpanded, setVpnPathsExpanded] = useState(false);
+  const activeVPNRun = useRef(0);
+  const [vpnDisconnectCoordinator] = useState(() => createVpnDisconnectCoordinator(setVpnDisconnectPhase));
+  const vpnDisconnectPending = vpnDisconnectPhase === 'pending';
   const [receiveP2PReport, setReceiveP2PReport] = useState<P2PReport | null>(null);
   const [sendP2PReports, setSendP2PReports] = useState<Record<string, P2PReport>>({});
   const [sendQrHasConnected, setSendQrHasConnected] = useState(false);
@@ -1062,11 +1137,24 @@ function App() {
     (timer) => window.clearTimeout(timer),
   ));
   const scanPasswordMode = useRef<Mode>('send');
+  const startupWindowFitted = useRef(false);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
 
   useEffect(() => {
     SetUILanguage(lang);
   }, [lang]);
+
+  useEffect(() => {
+    try { saveLastMode(window.localStorage, mode); } catch { /* Storage can be unavailable. */ }
+  }, [mode]);
+
+  useEffect(() => {
+    if (startupWindowFitted.current) return;
+    startupWindowFitted.current = true;
+    FitStartupWindow(window.screen.availWidth, window.screen.availHeight).catch((error) => {
+      console.warn('Could not fit startup window', error);
+    });
+  }, []);
 
   useEffect(() => () => passwordRevealCoordinator.dispose(), []);
 
@@ -1156,7 +1244,9 @@ function App() {
   const sendRunning = status.sendRunning;
   const receiveRunning = status.receiveRunning;
   const vpnServerRunning = status.vpnServerRunning;
-  const vpnClientRunning = status.vpnClientRunning;
+  // Keep configuration locked and the disconnect button visible until the
+  // entire stop call finishes, even if a status event arrives before cleanup.
+  const vpnClientRunning = (status.vpnClientRunning && vpnDisconnectPhase !== 'stopped') || vpnDisconnectPending;
   sharePathsRef.current = sharePaths;
   sendRunningRef.current = sendRunning;
   if (!shareCoordinatorRef.current) {
@@ -1203,7 +1293,41 @@ function App() {
   const receiveStatus = receiveConnectionStatus(receiveP2PReport, receiveRunning, Boolean(status.localHTTPUrl), t);
   // Stay compact through reconnects, until this receiving session is stopped.
   const receiveSessionCompact = receiveRunning && (receiveQrHasConnected || remoteList !== null);
-  const vpnClientStatus = receiveConnectionStatus(vpnClientP2PReport, vpnClientRunning, false, t);
+  const vpnDisconnectDisplay = vpnDisconnectView(vpnDisconnectPhase, vpnClientRunning);
+  const vpnDetails = vpnSnapshot?.data;
+  const vpnConnectionPhase = vpnPhase(vpnDetails, vpnClientRunning);
+  const vpnRetryCountdown = vpnRetrySeconds(vpnSnapshot, performance.now());
+  const vpnAttempt = vpnAttemptStage(vpnDetails);
+  useEffect(() => {
+    if (vpnStopRequested.current || !vpnDetails?.running) return;
+    if (vpnConnectionPhase === 'connected') {
+      if (!vpnDetails.tunnelOnly) notifyVpnStarted();
+      notifyVpnTunnelRestored();
+      vpnTunnelWasConnected.current = true;
+    } else if (!vpnDetails.connected && vpnDetails.everReady) {
+      notifyVpnTunnelPaused();
+    }
+  }, [vpnSnapshot, vpnConnectionPhase]);
+  const vpnPhaseLabels = {
+    idle: t.disconnected, connecting: t[vpnAttempt], configuring: t.vpnConfiguring,
+    connected: t.connectedShort, reconnecting: t[vpnAttempt],
+    restoring: t.vpnRestoring, error: t.vpnConfigurationFailed,
+    retryWait: vpnRetryCountdown > 0
+      ? (vpnDetails?.everReady ? t.vpnRetryInterruptedIn : t.vpnRetryFailedIn).replace('{seconds}', String(vpnRetryCountdown))
+      : t.vpnRetrying,
+    retrying: t[vpnAttempt], failed: t.vpnConnectionFailed,
+  };
+  const vpnClientStatus: {label: string; tone: StatusTone} = vpnDisconnectDisplay === 'pending'
+    ? {label: t.vpnDisconnecting, tone: 'waiting'}
+    : vpnDisconnectDisplay === 'stopped'
+      ? {label: t.disconnected, tone: 'idle'}
+      : vpnDisconnectDisplay === 'failed'
+        ? {label: t.vpnDisconnectFailed, tone: 'error'}
+        : {label: vpnPhaseLabels[vpnConnectionPhase], tone: vpnConnectionPhase === 'connected' ? 'connected'
+          : vpnConnectionPhase === 'error' || vpnConnectionPhase === 'failed' ? 'error'
+          : vpnConnectionPhase === 'retryWait' || (['connecting', 'reconnecting', 'retrying'].includes(vpnConnectionPhase) && vpnAttempt === 'waitingPeer') ? 'waiting'
+          : vpnConnectionPhase === 'idle' ? 'idle' : 'connecting'};
+  const vpnShowFailure = vpnDisconnectDisplay === 'idle' && ['failed', 'retryWait', 'retrying'].includes(vpnConnectionPhase);
   // Keep the session view through reconnects; restore configuration when stopped.
   const vpnClientSessionCompact = vpnClientRunning && (vpnClientHasConnected || vpnClientStatus.tone === 'connected');
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
@@ -1338,7 +1462,7 @@ function App() {
         if (cancelled || !paths || paths.length === 0) {
           return;
         }
-        setMode('send');
+        setMode((current) => startupFileMode(current, true, modeManuallySelected.current));
         appendSharePaths(paths);
       })
       .catch(() => undefined);
@@ -1386,6 +1510,11 @@ function App() {
   useEffect(() => {
     refreshStatus();
     EventsOn('gonc:event', (event: LogEvent) => {
+      if (event.mode === 'vpnClient' && !fileTransferReportBelongsToRun(event.clientRunId ?? 0, activeVPNRun.current)) return;
+      if (event.type === 'vpn_details' && event.vpnDetails) {
+        setVpnSnapshot((current) => acceptVPNDetails(current, activeVPNRun.current, event.clientRunId ?? 0, event.vpnDetails!, performance.now()));
+        return;
+      }
       if (event.type === 'traffic') {
         if (event.mode === 'send') {
           setSendTraffic(event);
@@ -1404,18 +1533,6 @@ function App() {
       }
       if (event.type === 'socks5' && event.mode === 'vpnClient') {
         setVpnClientSocks5Endpoint(event.localUrl || event.message.replace(/^SOCKS5 endpoint is ready:\s*/i, ''));
-      }
-      if (event.mode === 'vpnClient') {
-        if (event.message.includes('pausing system VPN routes') || event.message.includes('pausing Windows VPN routes')) {
-          if (!vpnStopRequested.current) {
-            notifyVpnTunnelPaused();
-          }
-        } else if (event.message.includes('System VPN started') || event.message.includes('System VPN routes restored') || event.message.includes('Windows VPN started') || event.message.includes('Windows VPN routes restored')) {
-          notifyVpnStarted();
-          notifyVpnTunnelRestored();
-          vpnTunnelWasConnected.current = true;
-          vpnStopRequested.current = false;
-        }
       }
       setLogs((current) => [...current.slice(-399), event]);
       if (event.mode === 'receive' && event.localUrl) {
@@ -1457,9 +1574,9 @@ function App() {
       } else if (report.side === 'vpnServer') {
         setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'vpnClient') {
+        if (!fileTransferReportBelongsToRun(report.clientRunId ?? 0, activeVPNRun.current)) return;
         setVpnClientHasConnected((current) => latchSuccessfulConnection(current, report.status));
         setVpnClientP2PReport(report);
-        handleVpnClientTunnelReport(report.status);
       }
     });
     EventsOn('download:event', (event: DownloadEvent) => {
@@ -2015,6 +2132,7 @@ function App() {
   }
 
   async function start() {
+    if (mode === 'vpnClient' && vpnDisconnectCoordinator.isPending()) return;
     const gate = transferStartGate(startPendingRef.current);
     if (!gate.accepted) {
       return;
@@ -2024,7 +2142,7 @@ function App() {
     return shareStartCoordinatorRef.current!.run(async (startupSharePaths) => {
     setError('');
     const passphrase = activePassword.trim();
-    const clientRunId = isFileTransferMode(mode) ? ++transferRunSequence.current : 0;
+    const clientRunId = isFileTransferMode(mode) || mode === 'vpnClient' ? ++transferRunSequence.current : 0;
     let transferStarted = false;
     try {
       if (mode === 'send') {
@@ -2048,6 +2166,9 @@ function App() {
         setVpnServerP2PReports({});
         setVpnServerTraffic(null);
       } else {
+        activeVPNRun.current = clientRunId;
+        setVpnSnapshot(null);
+        setVpnPathsExpanded(false);
         setVpnClientHasConnected(false);
         setVpnClientP2PReport(null);
         setVpnClientTraffic(null);
@@ -2057,6 +2178,7 @@ function App() {
         vpnStartedNotified.current = false;
         vpnTunnelWasConnected.current = false;
         vpnStopRequested.current = false;
+        vpnDisconnectCoordinator.reset();
       }
       await StartTransfer({
         mode,
@@ -2077,7 +2199,7 @@ function App() {
         enableIpv6: vpnClientEnableIPv6,
         tunnelOnly: vpnClientTunnelOnly,
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
-        ...(isFileTransferMode(mode) ? {clientRunId} : {}),
+        ...((isFileTransferMode(mode) || mode === 'vpnClient') ? {clientRunId} : {}),
       });
       latchSendRunningAfterStart(mode, (running) => { sendRunningRef.current = running; });
       transferStarted = true;
@@ -2090,6 +2212,9 @@ function App() {
         activeSendTransferRun.current = 0;
       } else if (!transferStarted && mode === 'receive' && activeReceiveTransferRun.current === clientRunId) {
         activeReceiveTransferRun.current = 0;
+      } else if (!transferStarted && mode === 'vpnClient' && activeVPNRun.current === clientRunId) {
+        activeVPNRun.current = 0;
+        setVpnSnapshot(null);
       }
       setError(localizeError(String(err)));
     } finally {
@@ -2100,13 +2225,13 @@ function App() {
   }
 
   async function stop() {
-    setError('');
-    if (mode === 'vpnClient') {
-      vpnStopRequested.current = true;
-    }
-    const receiveTaskId = receivedDownloadTaskId.current;
-    const receiveDownloadWasBusy = mode === 'receive' && receivedDownloadImperativeBusy();
-    try {
+    const stopCurrentMode = async () => {
+      setError('');
+      if (mode === 'vpnClient') {
+        vpnStopRequested.current = true;
+      }
+      const receiveTaskId = receivedDownloadTaskId.current;
+      const receiveDownloadWasBusy = mode === 'receive' && receivedDownloadImperativeBusy();
       let stopFailure: unknown = null;
       try {
         await StopTransfer(mode);
@@ -2147,14 +2272,25 @@ function App() {
         }
       }
       await refreshStatus();
+      if (mode === 'vpnClient') {
+        // StopTransfer succeeded; do not depend on a concurrently refreshed
+        // pre-stop status to decide whether the Connect button is available.
+        setStatus((current) => ({
+          ...current,
+          vpnClientRunning: false,
+          running: current.sendRunning || current.receiveRunning || current.vpnServerRunning,
+        }));
+      }
+    };
+    try {
+      if (mode === 'vpnClient') {
+        await vpnDisconnectCoordinator.run(stopCurrentMode);
+      } else {
+        await stopCurrentMode();
+      }
     } catch (err) {
       setError(localizeError(String(err)));
-    } finally {
-      if (mode === 'vpnClient') {
-        window.setTimeout(() => {
-          vpnStopRequested.current = false;
-        }, 1000);
-      }
+      await refreshStatus();
     }
   }
 
@@ -2198,6 +2334,15 @@ function App() {
   }
 
   function applyVpnProfile(profile: VPNProfile) {
+    // Do not label the previous session's counters/routes with another profile.
+    if (!vpnClientRunning && !startPendingRef.current) {
+      activeVPNRun.current = 0;
+      setVpnSnapshot(null);
+      setVpnPathsExpanded(false);
+      setVpnClientP2PReport(null);
+      setVpnClientTraffic(null);
+      vpnDisconnectCoordinator.reset();
+    }
     setVpnClientPassword(profile.passphrase || '');
     setVpnClientUseUDP(Boolean(profile.useUdp));
     setVpnClientP2PWithLAN(Boolean(profile.p2pWithLan));
@@ -2441,20 +2586,6 @@ function App() {
       title: t.vpnTunnelRestoredTitle,
       body: t.vpnTunnelRestoredBody,
     }).catch(() => undefined);
-  }
-
-  function handleVpnClientTunnelReport(status: string) {
-    if (vpnTunnelIsConnected(status)) {
-      vpnTunnelWasConnected.current = true;
-      vpnStopRequested.current = false;
-      if (vpnClientTunnelOnly) {
-        notifyVpnTunnelRestored();
-      }
-      return;
-    }
-    if (vpnTunnelNeedsNotification(status) && !vpnStopRequested.current) {
-      notifyVpnTunnelPaused();
-    }
   }
 
   function restoreAppWindowAfterCapture() {
@@ -2731,6 +2862,9 @@ function App() {
   }
 
   function localizeError(message: string) {
+    if (message.includes('VPN administrator authorization canceled')) {
+      return t.vpnAuthorizationCanceled;
+    }
     if (message.includes('password is too weak')) {
       return t.weakPassword;
     }
@@ -2822,9 +2956,18 @@ function App() {
   const securityHint = mode === 'send' ? t.senderPasswordHint : (mode === 'receive' ? t.receiverPasswordHint : '');
   const currentStatus = mode === 'send' ? sendStatus : (mode === 'receive' ? receiveStatus : (mode === 'vpnServer' ? vpnServerStatus : vpnClientStatus));
   const pageTitle = mode === 'send' ? t.sendTitle : (mode === 'receive' ? t.receiveTitle : (mode === 'vpnServer' ? t.vpnServerTitle : t.vpnClient));
-  const vpnClientSubtitle = vpnClientSessionCompact
-    ? (vpnClientStatus.tone === 'connected' ? t.vpnClientConnectedSubtitle : t.vpnClientReconnectingSubtitle)
+  const vpnClientSubtitle = vpnDisconnectDisplay === 'pending' ? t.vpnDisconnectingSubtitle
+    : vpnDisconnectDisplay === 'stopped' ? t.vpnDisconnectedSubtitle
+    : vpnDisconnectDisplay === 'failed' ? t.vpnDisconnectFailedSubtitle
+    : vpnClientSessionCompact
+    ? (vpnClientStatus.tone === 'connected' ? t.vpnClientConnectedSubtitle : vpnClientStatus.label)
     : t.vpnClientPasswordHint;
+  const vpnRate = vpnRates(vpnDetails, Date.now(), vpnDisconnectPending);
+  const vpnUploadText = vpnRate ? formatRate(vpnRate.upload) : '—';
+  const vpnDownloadText = vpnRate ? formatRate(vpnRate.download) : '—';
+  const vpnDurationText = formatVPNDuration(vpnDuration(vpnSnapshot, performance.now()), lang);
+  const vpnStatusTunnelOnly = vpnDetails?.tunnelOnly ?? vpnClientTunnelOnly;
+  const visibleVpnPaths = vpnPaths(vpnDetails, vpnPathsExpanded);
   const pageSubtitle = mode === 'send' ? t.sendSubtitle : (mode === 'receive' ? (receiveSessionCompact ? t.receiveConnectedSubtitle : t.receiveSubtitle) : (mode === 'vpnServer' ? t.vpnServerPasswordHint : vpnClientSubtitle));
   const stopLabel = mode === 'send' ? t.stopShare : (mode === 'vpnServer' ? t.stopVpnServer : t.disconnect);
   const startIcon: IconName = mode === 'send' ? 'send' : (mode === 'receive' ? 'link' : (mode === 'vpnServer' ? 'server' : 'shield'));
@@ -2870,7 +3013,7 @@ function App() {
         type="button"
         className={`nav-item${mode === target ? ' active' : ''}`}
         aria-current={mode === target ? 'page' : undefined}
-        onClick={() => setMode(target)}
+        onClick={() => { modeManuallySelected.current = true; setMode(target); }}
       >
         <Icon name={icon} />
         <span className="nav-label">{label}</span>
@@ -2958,7 +3101,12 @@ function App() {
 
   function runButton(extraClass = '') {
     return currentRunning ? (
-      <button type="button" className={`danger big-action ${extraClass}`.trim()} onClick={stop}>{stopLabel}</button>
+      <button type="button" className={`danger big-action ${extraClass}`.trim()} disabled={mode === 'vpnClient' && vpnDisconnectPending} aria-busy={mode === 'vpnClient' && vpnDisconnectPending} onClick={stop}>
+        <span className="big-action-label">
+          {mode === 'vpnClient' && vpnDisconnectPending && <span className="spinner-dot" aria-hidden="true" />}
+          {mode === 'vpnClient' && vpnDisconnectPending ? t.vpnDisconnecting : stopLabel}
+        </span>
+      </button>
     ) : (
       <button type="button" className={`primary big-action ${extraClass}`.trim()} disabled={!canStart} onClick={start}>
         <span className="big-action-label"><Icon name={startIcon} />{primaryLabel}</span>
@@ -3291,12 +3439,10 @@ function App() {
           </div>
         </div>
         <ProfileStrip
-          items={vpnProfileList.map((profile, index) => ({
+          items={vpnProfileList.map((profile) => ({
             name: profile.name,
             initials: profileInitials(profile.name),
-            detail: index === selectedVpnProfile && vpnClientRunning
-              ? vpnClientStatus.label
-              : `${profile.useUdp ? 'UDP · ' : ''}${profile.tunnelOnly ? t.tunnelOnly : t.systemVpn}`,
+            detail: `${profile.useUdp ? 'UDP · ' : ''}${profile.tunnelOnly ? t.tunnelOnly : t.systemVpn}`,
           }))}
           selected={selectedVpnProfile}
           locked={vpnClientRunning}
@@ -3310,7 +3456,7 @@ function App() {
       )}
 
       <div className="page-stack">
-        <section className={`card vpn-hero ${vpnClientRunning ? vpnClientStatus.tone : 'idle'}`}>
+        <section className={`card vpn-hero ${vpnClientStatus.tone}`}>
           <div className="vpn-hero-main">
             <span className="vpn-hero-icon"><Icon name={vpnClientRunning && vpnClientStatus.tone === 'connected' ? 'shieldCheck' : 'shield'} /></span>
             <div className="vpn-hero-text">
@@ -3319,16 +3465,46 @@ function App() {
             </div>
             <div className="vpn-hero-action">{runButton('compact')}</div>
           </div>
+          {vpnShowFailure && <p className="vpn-connection-error">{t.vpnLastFailure}：{vpnDetails?.connectionError ? localizeError(vpnDetails.connectionError) : t.vpnFailureUnknown}</p>}
           {startHint && <p className="vpn-hero-hint">{startHint}</p>}
           {vpnClientRunning && (
-            <div className="stats-row">
-              <Metric label={t.peer} value={vpnClientP2PReport?.peer || '-'} />
-              <Metric label={t.network} value={vpnClientP2PReport?.network || '-'} />
-              <Metric label={t.connectionRoute} value={routeLabel(vpnClientP2PReport?.mode || '', t)} />
-              <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />
-              <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />
-              <Metric label={t.speed} value={formatRate(transferSpeed)} />
-            </div>
+            <>
+            <section className="vpn-detail-group" aria-label={t.vpnConnectionInfo}>
+              <div className="stats-row vpn-summary-grid">
+                <Metric label={t.peer} value={vpnClientP2PReport?.peer || '—'} />
+                <Metric label={t.network} value={vpnClientP2PReport?.network || '—'} />
+                <Metric label={t.connectionRoute} value={routeLabel(vpnClientP2PReport?.mode || '', t)} />
+                <Metric label={t.vpnDuration} value={vpnDurationText} />
+              </div>
+            </section>
+            <section className="vpn-detail-group" aria-label={t.vpnTrafficStats}>
+              <div className="stats-row vpn-summary-grid">
+                <Metric label={t.vpnUpload} value={vpnUploadText} />
+                <Metric label={t.vpnDownload} value={vpnDownloadText} />
+                <Metric label={t.vpnUploaded} value={vpnDetails?.trafficAt ? formatBytes(vpnDetails.outBytes) : '—'} />
+                <Metric label={t.vpnDownloaded} value={vpnDetails?.trafficAt ? formatBytes(vpnDetails.inBytes) : '—'} />
+              </div>
+            </section>
+            <section className="vpn-detail-group" aria-label={t.vpnNetworkConfig}>
+              {vpnStatusTunnelOnly ? (
+                <p className="vpn-tunnel-endpoint">{`${t.vpnTunnelOnlyPath} · ${vpnClientSocks5Endpoint || '—'}`}</p>
+              ) : (
+                <>
+                  <div className="stats-row vpn-network-grid">
+                    <Metric label="DNS" value={vpnDetails?.routeState === 'applied' ? vpnDetails.dnsServers.join(' · ') || t.vpnSystemDNS : '—'} />
+                    <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />
+                  </div>
+                  <div className="vpn-paths">
+                    <div className="vpn-paths-heading">
+                      <span>{t.vpnPaths}</span>
+                      {visibleVpnPaths.hasMore && <button type="button" className="quiet-action" aria-expanded={vpnPathsExpanded} aria-controls="vpn-path-list" onClick={() => setVpnPathsExpanded((expanded) => !expanded)}>{vpnPathsExpanded ? t.showLess : t.vpnMorePaths}</button>}
+                    </div>
+                    <pre id="vpn-path-list" tabIndex={0}>{visibleVpnPaths.lines.join('\n') || '—'}</pre>
+                  </div>
+                </>
+              )}
+            </section>
+            </>
           )}
         </section>
 
@@ -3605,6 +3781,7 @@ function App() {
             {mode === 'send' && <Metric label={t.sentTotal} value={formatBytes(sendTotalBytes)} />}
             {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
             {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
+            {mode === 'vpnClient' && <Metric label={t.vpnLatestConnection} value={formatVPNConnectedAt(vpnDetails?.lastConnectedAt, lang)} />}
           </div>
           <div className="logs" ref={logsRef} tabIndex={-1}>
             {logs.length === 0 ? (
@@ -3986,21 +4163,6 @@ function captureScreenWithTimeout(timeoutMs: number, timeoutMessage: string) {
       timer = window.setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
     }),
   ]).finally(() => window.clearTimeout(timer));
-}
-
-function vpnTunnelIsConnected(status: string) {
-  return normalizeP2PStatus(status) === 'connected';
-}
-
-function vpnTunnelNeedsNotification(status: string) {
-  const normalized = normalizeP2PStatus(status);
-  if (['wait', 'waiting', 'idle', 'ready', 'connecting', 'negotiating', 'reconnecting', 'disconnected', 'disconnect', 'closed', 'stopped'].includes(normalized)) {
-    return true;
-  }
-  return normalized.includes('fail') ||
-    normalized.includes('error') ||
-    normalized.includes('lost') ||
-    normalized.includes('timeout');
 }
 
 function singleConnectionStatus(status: string, running: boolean, t: typeof text.zh): ConnectionStatus {

@@ -423,6 +423,7 @@ func (a *App) StartTransfer(req TransferRequest) error {
 		ExtraArgs:       req.ExtraArgs,
 	}, func(event goncrunner.Event) {
 		event.Mode = string(mode)
+		event.ClientRunID = req.ClientRunID
 		if mode == goncrunner.ModeReceive && event.Type == "local_http" && event.LocalURL != "" {
 			a.mu.Lock()
 			a.receiveLocalHTTPURL = event.LocalURL

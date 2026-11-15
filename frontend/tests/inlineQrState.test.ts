@@ -1,6 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {readLastMode, saveLastMode, startupFileMode, lastModeStorageKey} from '../src/pagePreference.js';
+
+test('last page is persisted in local storage with a safe default', () => {
+  const entries = new Map<string, string>();
+  const storage = {getItem: (key: string) => entries.get(key) ?? null, setItem: (key: string, value: string) => { entries.set(key, value); }};
+  assert.equal(readLastMode(storage), 'send');
+  for (const mode of ['send', 'receive', 'vpnServer', 'vpnClient'] as const) {
+    saveLastMode(storage, mode);
+    assert.equal(readLastMode(storage), mode);
+  }
+  entries.set(lastModeStorageKey, 'invalid');
+  assert.equal(readLastMode(storage), 'send');
+  assert.equal(readLastMode({getItem: () => { throw new Error('blocked'); }}), 'send');
+  assert.doesNotThrow(() => saveLastMode({setItem: () => { throw new Error('full'); }}, 'receive'));
+});
+
+test('startup files prefer send, but a late response does not undo manual navigation', () => {
+  assert.equal(startupFileMode('vpnClient', false, false), 'vpnClient');
+  assert.equal(startupFileMode('vpnClient', true, false), 'send');
+  assert.equal(startupFileMode('receive', true, true), 'receive');
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.match(source, /readLastMode\(window.localStorage\)/);
+  assert.match(source, /saveLastMode\(window.localStorage, mode\)/);
+  const startup = source.slice(source.indexOf('    StartupSharePaths()'), source.indexOf('    StartupSharePaths()') + 650);
+  assert.match(startup, /startupFileMode/);
+  assert.match(startup, /appendSharePaths\(paths\)/);
+  assert.doesNotMatch(startup, /StartTransfer|start\(/);
+});
+
+test('startup fit runs once and status bar retains a single maximum-direction speed', () => {
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.match(source, /if \(startupWindowFitted.current\) return/);
+  assert.match(source, /startupWindowFitted.current = true/);
+  assert.match(source, /FitStartupWindow\(window.screen.availWidth, window.screen.availHeight\)/);
+  assert.doesNotMatch(source, /WindowMaximise|WindowFullscreen|WindowToggleMaximise/);
+  assert.match(source, /<span className="status-segment">\{formatRate\(transferSpeed\)\}<\/span>/);
+  assert.match(source, /mode === 'vpnClient' \? Math.max\(freshSpeed\(vpnClientTraffic\?\.time, vpnClientTraffic\?\.inBps, nowTick\), freshSpeed\(vpnClientTraffic\?\.time, vpnClientTraffic\?\.outBps, nowTick\)\)/);
+});
+import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from '../src/vpnDisconnectState.js';
 import {
   fileTransferReportBelongsToRun,
   inlineQrShouldMask,
@@ -233,4 +272,78 @@ test('inline QR masking uses only the active file-transfer mode', () => {
 test('transfer start gate synchronously rejects a concurrent start', () => {
   assert.deepEqual(transferStartGate(false), {accepted: true, pending: true});
   assert.deepEqual(transferStartGate(true), {accepted: false, pending: true});
+});
+
+test('VPN authorization cancellation is localized and startup always releases the button gate', () => {
+  const source = readFileSync('src/App.tsx', 'utf8');
+  const start = source.indexOf('  async function start()');
+  const end = source.indexOf('  async function stop()', start);
+  assert.ok(start >= 0 && end > start);
+  const startup = source.slice(start, end);
+  assert.match(startup, /await StartTransfer\(/);
+  assert.match(startup, /finally\s*\{\s*startPendingRef\.current = false;\s*setStartPending\(false\);/);
+  assert.match(source, /message\.includes\('VPN administrator authorization canceled'\)/);
+  assert.match(source, /return t\.vpnAuthorizationCanceled;/);
+});
+
+test('VPN disconnect immediately becomes pending and rejects duplicate clicks and restart', async () => {
+  const phases: VpnDisconnectPhase[] = [];
+  const coordinator = createVpnDisconnectCoordinator((phase) => phases.push(phase));
+  let finish!: () => void;
+  let calls = 0;
+  const operation = () => {
+    calls++;
+    return new Promise<void>((resolve) => { finish = resolve; });
+  };
+  const first = coordinator.run(operation);
+  assert.deepEqual(phases, ['pending']);
+  assert.equal(coordinator.isPending(), true);
+  assert.equal(await coordinator.run(operation), false);
+  assert.equal(coordinator.reset(), false);
+  assert.equal(calls, 1);
+  finish();
+  assert.equal(await first, true);
+  assert.equal(coordinator.isPending(), false);
+  assert.deepEqual(phases, ['pending', 'stopped']);
+  assert.equal(coordinator.reset(), true);
+  assert.deepEqual(phases, ['pending', 'stopped', 'idle']);
+});
+
+test('VPN disconnect failure releases the gate and allows retry', async () => {
+  const phases: VpnDisconnectPhase[] = [];
+  const coordinator = createVpnDisconnectCoordinator((phase) => phases.push(phase));
+  const failure = new Error('stop failed');
+  await assert.rejects(coordinator.run(async () => { throw failure; }), failure);
+  assert.equal(coordinator.isPending(), false);
+  assert.deepEqual(phases, ['pending', 'failed']);
+  assert.equal(await coordinator.run(async () => {}), true);
+  assert.deepEqual(phases, ['pending', 'failed', 'pending', 'stopped']);
+});
+
+test('VPN disconnect intent takes precedence over transient connection reports', () => {
+  for (const running of [true, false]) {
+    assert.equal(vpnDisconnectView('pending', running), 'pending');
+    assert.equal(vpnDisconnectView('stopped', running), 'stopped');
+    assert.equal(vpnDisconnectView('idle', running), 'idle');
+  }
+  assert.equal(vpnDisconnectView('failed', true), 'failed');
+  assert.equal(vpnDisconnectView('failed', false), 'stopped');
+});
+
+test('VPN UI keeps shutdown feedback visible and suppresses late restoration notifications', () => {
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.match(source, /disabled=\{mode === 'vpnClient' && vpnDisconnectPending\}/);
+  assert.match(source, /aria-busy=\{mode === 'vpnClient' && vpnDisconnectPending\}/);
+  assert.match(source, /vpnDisconnectPending \? t\.vpnDisconnecting : stopLabel/);
+  assert.match(source, /vpnDisconnectDisplay === 'pending' \? t\.vpnDisconnectingSubtitle/);
+  assert.match(source, /vpnDisconnectDisplay === 'stopped' \? t\.vpnDisconnectedSubtitle/);
+  assert.match(source, /vpnDisconnectDisplay === 'failed' \? t\.vpnDisconnectFailedSubtitle/);
+  assert.match(source, /vpnDisconnectPhase !== 'stopped'\) \|\| vpnDisconnectPending/);
+  assert.match(source, /await vpnDisconnectCoordinator\.run\(stopCurrentMode\)/);
+  assert.match(source, /if \(mode === 'vpnClient' && vpnDisconnectCoordinator\.isPending\(\)\) return;/);
+  assert.match(source, /if \(vpnStopRequested\.current \|\| !vpnDetails\?\.running\) return;/);
+  assert.match(source, /if \(vpnConnectionPhase === 'connected'\) \{\s*if \(!vpnDetails.tunnelOnly\) notifyVpnStarted\(\);\s*notifyVpnTunnelRestored\(\);/);
+  assert.doesNotMatch(source, /handleVpnClientTunnelReport/);
+  // Only a new explicit connection should clear the user's stop intent.
+  assert.equal(source.match(/vpnStopRequested\.current = false/g)?.length, 1);
 });

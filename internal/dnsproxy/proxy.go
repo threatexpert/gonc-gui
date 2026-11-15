@@ -75,6 +75,23 @@ type socksAddr struct {
 	port int
 }
 
+// UpstreamServers reports the parsed upstreams, including the default chosen
+// when the configured list was empty. These are immutable after construction.
+func (s *Server) UpstreamServers() []string {
+	servers := make([]string, 0, len(s.upstreams))
+	for _, upstream := range s.upstreams {
+		host := upstream.host
+		if upstream.ip != nil {
+			host = upstream.ip.String()
+		}
+		if upstream.port != defaultDNSPort {
+			host = net.JoinHostPort(host, strconv.Itoa(upstream.port))
+		}
+		servers = append(servers, host)
+	}
+	return servers
+}
+
 func Start(bindIP string, socks5Endpoint string, upstreams []string) (*Server, error) {
 	return StartWithTrace(bindIP, socks5Endpoint, upstreams, nil)
 }

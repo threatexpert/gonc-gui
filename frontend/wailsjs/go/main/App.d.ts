@@ -16,6 +16,8 @@ export function ClearTaskbarProgress():Promise<void>;
 
 export function CreateTextShare(arg1:string):Promise<string>;
 
+export function FitStartupWindow(arg1:number,arg2:number):Promise<void>;
+
 export function GeneratePassword():Promise<string>;
 
 export function ImportClipboard():Promise<sharecontent.ClipboardResult>;

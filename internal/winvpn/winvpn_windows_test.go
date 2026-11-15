@@ -5,7 +5,20 @@ package winvpn
 import (
 	"reflect"
 	"testing"
+
+	"gonc-gui/internal/vpnconfig"
 )
+
+func TestReportedDirectDNSIncludesFallbacks(t *testing.T) {
+	s := &Session{config: vpnconfig.Config{DNSServers: []string{"2001:4860:4860::8888"}}}
+	if got := s.DNSServers(); !reflect.DeepEqual(got, []string{"8.8.8.8"}) {
+		t.Fatalf("IPv6 disabled: got %v", got)
+	}
+	s.config.EnableIPv6 = true
+	if got := s.DNSServers(); !reflect.DeepEqual(got, []string{"8.8.8.8", "2001:4860:4860::8888"}) {
+		t.Fatalf("dual-stack: got %v", got)
+	}
+}
 
 func TestDirectDNSServers(t *testing.T) {
 	ipv4, ipv6 := directDNSServers([]string{

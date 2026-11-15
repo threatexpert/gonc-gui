@@ -52,7 +52,7 @@ func Run(connectAddr, token string) error {
 				continue
 			}
 			active = session
-			_ = enc.Encode(response{OK: true})
+			_ = enc.Encode(response{OK: true, DNSServers: session.DNSServers()})
 		case OpStop:
 			if active != nil {
 				_ = active.Stop()

@@ -12,6 +12,8 @@
   "include": [
     "src/inlineQrState.ts",
     "src/passphraseVisibility.ts",
+    "src/vpnDisconnectState.ts",
+    "src/pagePreference.ts",
     "tests/inlineQrState.test.ts"
   ]
 }

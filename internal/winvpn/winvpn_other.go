@@ -23,3 +23,5 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 }
 
 func (s *Session) Stop() error { return nil }
+
+func (s *Session) DNSServers() []string { return []string{} }

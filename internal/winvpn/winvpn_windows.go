@@ -325,6 +325,17 @@ func removeDNSLeakFirewallRule(name string) error {
 	return nil
 }
 
+// DNSServers reports upstreams rather than the local proxy listener address.
+func (s *Session) DNSServers() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dnsProxy != nil {
+		return s.dnsProxy.UpstreamServers()
+	}
+	ipv4, ipv6 := directDNSServers(s.config.DNSServers, s.config.EnableIPv6)
+	return append(ipv4, ipv6...)
+}
+
 func (s *Session) configureDNS(useProxy bool) error {
 	if useProxy {
 		if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dnsProxyIPv4, "primary", "validate=no"); err != nil {

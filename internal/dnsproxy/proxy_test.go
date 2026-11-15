@@ -5,11 +5,34 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestReportedDNSUpstreamsIncludeFallbackAndPreserveIPv6(t *testing.T) {
+	for _, tc := range []struct{ values, want []string }{
+		{nil, []string{"8.8.8.8"}},
+		{[]string{"2001:4860:4860::8888"}, []string{"2001:4860:4860::8888"}},
+		{[]string{"9.9.9.9", "[2606:4700:4700::1111]:5353"}, []string{"9.9.9.9", "[2606:4700:4700::1111]:5353"}},
+	} {
+		upstreams, err := parseUpstreams(tc.values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &Server{upstreams: upstreams}
+		got := s.UpstreamServers()
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("got %v, want %v", got, tc.want)
+		}
+		got[0] = "modified"
+		if s.UpstreamServers()[0] != tc.want[0] {
+			t.Fatal("reported servers alias state")
+		}
+	}
+}
 
 func TestEncodeDecodeSocksUDPIPv4(t *testing.T) {
 	payload := []byte{0x12, 0x34, 0x01, 0x00}

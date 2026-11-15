@@ -31,8 +31,8 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "Gonc Transfer",
-		Width:  980,
-		Height: 680,
+		Width:  defaultWindowWidth,
+		Height: defaultWindowHeight,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
