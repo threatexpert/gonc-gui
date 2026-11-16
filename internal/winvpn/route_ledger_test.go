@@ -103,7 +103,62 @@ func TestDarwinDeleteArgumentsIncludeOwnership(t *testing.T) {
 	if got := routeArgs("delete", ownedRoute{cidr: "::/1", iface: "utun4"}); !reflect.DeepEqual(got, []string{"-n", "delete", "-inet6", "-net", "::/1", "-interface", "utun4"}) {
 		t.Fatal(got)
 	}
-	if got := routeArgs("delete", ownedRoute{cidr: "2001:db8::1/128", iface: "en0", gateway: "fe80::1%en0"}); got[len(got)-1] != "fe80::1%en0" {
+	if got := routeArgs("delete", ownedRoute{cidr: "2001:db8::1/128", iface: "en0", gateway: "fe80::1%en0"}); !reflect.DeepEqual(got, []string{"-n", "delete", "-inet6", "-host", "2001:db8::1", "fe80::1%en0", "-ifp", "en0"}) {
 		t.Fatal(got)
+	}
+}
+
+func TestDarwinHostRouteArguments(t *testing.T) {
+	for _, tc := range []struct{ cidr, family, kind, dst string }{
+		{"8.8.8.8/32", "-inet", "-host", "8.8.8.8"},
+		{"2001:4860:4860::8888/128", "-inet6", "-host", "2001:4860:4860::8888"},
+		{"0.0.0.0/1", "-inet", "-net", "0.0.0.0/1"},
+		{"::/1", "-inet6", "-net", "::/1"},
+	} {
+		for _, op := range []string{"add", "delete"} {
+			r := ownedRoute{cidr: tc.cidr, iface: "utun4"}
+			want := []string{"-n", op, tc.family, tc.kind, tc.dst, "-interface", "utun4"}
+			if got := routeArgs(op, r); !reflect.DeepEqual(got, want) {
+				t.Fatalf("%v != %v", got, want)
+			}
+		}
+	}
+}
+
+func TestDarwinRouteCommandResults(t *testing.T) {
+	r := ownedRoute{cidr: "2001:4860:4860::8888/128", iface: "utun4"}
+	for _, op := range []string{"add", "delete"} {
+		output := op + " host 2001:4860:4860::8888: gateway utun4"
+		if err := checkDarwinRouteOutput(op, r, output+"\n", nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, suffix := range []string{": File exists", ": not in table", ": Network is unreachable"} {
+			if err := checkDarwinRouteOutput(op, r, output+suffix, nil); err == nil {
+				t.Fatal("zero-exit failure accepted", suffix)
+			}
+		}
+		failure := errors.New("exit 1")
+		if err := checkDarwinRouteOutput(op, r, output, failure); !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRouteLedgerFailedAddDoesNotClaimConcurrentRoute(t *testing.T) {
+	queries := 0
+	l := routeLedger{present: func(ownedRoute) (bool, error) { queries++; return queries > 1, nil }, command: func(op string, _ ownedRoute) error {
+		if op != "add" {
+			t.Fatal("removed another actor's route")
+		}
+		return errors.New("File exists")
+	}}
+	if err := l.add(ownedRoute{cidr: "203.0.113.1/32", iface: "en0"}); err == nil {
+		t.Fatal("failed add accepted")
+	}
+	if len(l.owned) != 0 {
+		t.Fatal("claimed route after failed add")
+	}
+	if err := l.cleanup(); err != nil {
+		t.Fatal(err)
 	}
 }

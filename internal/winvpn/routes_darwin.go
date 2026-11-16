@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -25,8 +26,7 @@ func ribIP(a route.Addr) net.IP {
 
 // Read the kernel RIB, not route(8)'s exit status (which can be zero on EEXIST).
 func routeInstalled(r ownedRoute) (bool, error) {
-	prefix, err := netip.ParsePrefix(r.cidr)
-	if err != nil {
+	if _, err := netip.ParsePrefix(r.cidr); err != nil {
 		return false, err
 	}
 	iface, err := net.InterfaceByName(r.iface)
@@ -44,9 +44,17 @@ func routeInstalled(r ownedRoute) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return matchesDarwinRoute(r, *iface, msgs), nil
+}
+
+func matchesDarwinRoute(r ownedRoute, iface net.Interface, msgs []route.Message) bool {
+	prefix, err := netip.ParsePrefix(r.cidr)
+	if err != nil || (r.index != 0 && r.index != iface.Index) {
+		return false
+	}
 	for _, msg := range msgs {
 		m, ok := msg.(*route.RouteMessage)
-		if !ok || m.Index != iface.Index || m.Flags&syscall.RTF_UP == 0 || len(m.Addrs) <= syscall.RTAX_NETMASK {
+		if !ok || m.Index != iface.Index || !stableDarwinRoute(m.Flags, prefix.Bits() == prefix.Addr().BitLen()) || len(m.Addrs) <= syscall.RTAX_DST {
 			continue
 		}
 		dst := ribIP(m.Addrs[syscall.RTAX_DST])
@@ -58,7 +66,8 @@ func routeInstalled(r ownedRoute) (bool, error) {
 		bits := 0
 		if m.Flags&syscall.RTF_HOST != 0 {
 			bits = addr.BitLen()
-		} else if mask := ribIP(m.Addrs[syscall.RTAX_NETMASK]); mask != nil {
+		} else if len(m.Addrs) > syscall.RTAX_NETMASK && m.Addrs[syscall.RTAX_NETMASK] != nil {
+			mask := ribIP(m.Addrs[syscall.RTAX_NETMASK])
 			var width int
 			bits, width = net.IPMask(mask).Size()
 			if width != addr.BitLen() {
@@ -69,15 +78,29 @@ func routeInstalled(r ownedRoute) (bool, error) {
 			continue
 		}
 		if r.gateway != "" {
-			gateway, e := netip.ParseAddr(r.gateway)
-			actual, ok := netip.AddrFromSlice(ribIP(m.Addrs[syscall.RTAX_GATEWAY]))
-			if e != nil || !ok || gateway.WithZone("").Unmap() != actual.Unmap() {
+			if m.Flags&syscall.RTF_GATEWAY == 0 || len(m.Addrs) <= syscall.RTAX_GATEWAY {
 				continue
 			}
+			actual, ok := netip.AddrFromSlice(ribIP(m.Addrs[syscall.RTAX_GATEWAY]))
+			if !ok {
+				continue
+			}
+			if a, ok := m.Addrs[syscall.RTAX_GATEWAY].(*route.Inet6Addr); ok && a.ZoneID != 0 {
+				zone := strconv.Itoa(a.ZoneID)
+				if a.ZoneID == iface.Index {
+					zone = iface.Name
+				}
+				actual = actual.WithZone(zone)
+			}
+			if !sameDarwinGateway(r.gateway, actual.String(), r.iface) {
+				continue
+			}
+		} else if m.Flags&syscall.RTF_GATEWAY != 0 {
+			continue
 		}
-		return true, nil
+		return true
 	}
-	return false, nil
+	return false
 }
 
 func (s *Session) addOwnedRoute(r ownedRoute) error {
@@ -87,38 +110,25 @@ func (s *Session) addOwnedRoute(r ownedRoute) error {
 	}
 	r.index = iface.Index
 	if s.routeLedger == nil {
-		s.routeLedger = &routeLedger{present: routeInstalled, command: func(op string, r ownedRoute) error { return run("route", routeArgs(op, r)...) }}
+		s.routeLedger = &routeLedger{present: routeInstalled, command: runDarwinRoute, trace: s.trace}
 	}
 	return s.routeLedger.add(r)
 }
 
 // Resolve before installing capture routes, including IPv6 tunnel peers.
-func nativeRouteTo(ip string) (iface, gateway string, err error) {
+func nativeRouteTo(ip string) (darwinRouteLookup, error) {
 	family := "-inet"
 	if strings.Contains(ip, ":") {
 		family = "-inet6"
 	}
 	output, err := exec.Command("route", "-n", "get", family, ip).CombinedOutput()
 	if err != nil {
-		return "", "", fmt.Errorf("route to %s: %w: %s", ip, err, output)
+		return darwinRouteLookup{}, fmt.Errorf("route to %s: %w: %s", ip, err, output)
 	}
-	for _, line := range strings.Split(string(output), "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "interface":
-			iface = strings.TrimSpace(value)
-		case "gateway":
-			gateway = strings.TrimSpace(value)
-		}
-	}
-	if iface == "" {
-		return "", "", fmt.Errorf("no native route to %s", ip)
-	}
-	if _, err := netip.ParseAddr(gateway); err != nil {
-		gateway = ""
-	} // On-link peer.
-	return iface, gateway, nil
+	return parseDarwinRouteLookup(string(output))
+}
+
+func runDarwinRoute(op string, r ownedRoute) error {
+	output, err := exec.Command("route", routeArgs(op, r)...).CombinedOutput()
+	return checkDarwinRouteOutput(op, r, string(output), err)
 }

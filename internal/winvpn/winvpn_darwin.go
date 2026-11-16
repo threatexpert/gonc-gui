@@ -24,13 +24,15 @@ const (
 )
 
 type Session struct {
-	mu          sync.Mutex
-	config      vpnconfig.Config
-	ifaceName   string
-	nameFile    string
-	dnsRestore  []dnsServiceState
-	appliedDNS  []string
-	routeLedger *routeLedger
+	mu           sync.Mutex
+	config       vpnconfig.Config
+	ifaceName    string
+	nameFile     string
+	dnsRestore   []dnsServiceState
+	appliedDNS   []string
+	routeLedger  *routeLedger
+	bypassRoutes []ownedRoute
+	trace        func(string)
 }
 
 type dnsServiceState struct {
@@ -49,6 +51,10 @@ func CheckRuntime() error {
 }
 
 func Start(config vpnconfig.Config) (*Session, error) {
+	return StartWithTrace(config, nil)
+}
+
+func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
 	config.Routes = vpnconfig.DesktopRoutes(config.Routes)
 	config.EnableIPv6 = vpnconfig.HasIPv6(config.Routes)
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
@@ -90,15 +96,11 @@ func Start(config vpnconfig.Config) (*Session, error) {
 		_ = os.Remove(nameFile)
 		return nil, err
 	}
-	session := &Session{config: config, ifaceName: actualName, nameFile: nameFile}
+	session := &Session{config: config, ifaceName: actualName, nameFile: nameFile, trace: trace}
 	if err := session.configure(); err != nil {
 		return nil, errors.Join(err, session.Stop())
 	}
 	return session, nil
-}
-
-func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
-	return Start(config)
 }
 
 func (s *Session) Stop() error {
@@ -124,13 +126,7 @@ func (s *Session) configure() error {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}
-	if err := s.configureBypassRoutes(); err != nil {
-		return err
-	}
-	if err := s.configureRoutes(); err != nil {
-		return err
-	}
-	return s.configureDNS()
+	return applyDarwinNetwork(s.configureBypassRoutes, s.configureRoutes, s.configureDNS, s.verifyBypassRoutes)
 }
 
 func (s *Session) DNSServers() []string {
@@ -161,8 +157,14 @@ func (s *Session) configureDNS() error {
 		if err != nil {
 			return fmt.Errorf("macOS VPN DNS requires a plain IP address: %s", server)
 		}
+		for _, bypass := range s.bypassRoutes {
+			p, _ := netip.ParsePrefix(bypass.cidr)
+			if p.Addr() == addr {
+				return fmt.Errorf("VPN DNS %s conflicts with tunnel peer bypass", addr)
+			}
+		}
 		if err := s.addOwnedRoute(ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: s.ifaceName}); err != nil {
-			return err
+			return fmt.Errorf("configure VPN DNS route for %s: %w", addr, err)
 		}
 	}
 	services, err := networkServices()
@@ -191,8 +193,11 @@ func (s *Session) configureDNS() error {
 			return err
 		}
 		actual, err := currentDNSServers(service)
-		if err != nil || strings.Join(actual.servers, "\n") != strings.Join(dns, "\n") {
-			return fmt.Errorf("VPN DNS verification failed for %s", service)
+		if err != nil {
+			return fmt.Errorf("verify VPN DNS for %s: %w", service, err)
+		}
+		if !sameDarwinDNS(actual.servers, dns) {
+			return fmt.Errorf("VPN DNS verification failed for %s: got %v, want %v", service, actual.servers, dns)
 		}
 	}
 	s.appliedDNS = append([]string{}, dns...)
@@ -200,20 +205,25 @@ func (s *Session) configureDNS() error {
 }
 
 func (s *Session) configureBypassRoutes() error {
-	for _, ip := range s.config.BypassIPs {
-		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-		if err != nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
-			continue
+	// Snapshot all native exits before installing any capture or DNS route.
+	routes, err := planDarwinBypass(s.config.BypassIPs, s.ifaceName, nativeRouteTo)
+	if err != nil {
+		return err
+	}
+	s.bypassRoutes = routes
+	for _, r := range routes {
+		if s.trace != nil {
+			s.trace(fmt.Sprintf("VPN bypass %s: native interface=%s gateway=%s", r.cidr, r.iface, r.gateway))
 		}
-		iface, gateway, err := nativeRouteTo(addr.String())
-		if err != nil {
-			return err
-		}
-		if err := s.addOwnedRoute(ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: iface, gateway: gateway}); err != nil {
-			return fmt.Errorf("add VPN bypass route %s: %w", addr, err)
+		if err := s.addOwnedRoute(r); err != nil {
+			return fmt.Errorf("add VPN bypass route %s: %w", r.cidr, err)
 		}
 	}
 	return nil
+}
+
+func (s *Session) verifyBypassRoutes() error {
+	return verifyDarwinBypass(s.bypassRoutes, s.ifaceName, nativeRouteTo, s.trace)
 }
 
 func (s *Session) configureRoutes() error {
@@ -260,7 +270,7 @@ func (s *Session) restoreDNS() error {
 		if err == nil {
 			var actual dnsServiceState
 			actual, err = currentDNSServers(state.name)
-			if err == nil && strings.Join(actual.servers, "\n") != strings.Join(state.servers, "\n") {
+			if err == nil && !sameDarwinDNS(actual.servers, state.servers) {
 				err = fmt.Errorf("DNS restore could not be verified for %s", state.name)
 			}
 		}
