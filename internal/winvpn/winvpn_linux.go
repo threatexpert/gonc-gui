@@ -59,10 +59,7 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	}
 
 	_ = run("ip", "link", "delete", interfaceName)
-	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
-		return nil, err
-	}
-	if err := startEngine(); err != nil {
+	if err := startEngine(config, "tun://"+interfaceName); err != nil {
 		_ = stopEngine()
 		return nil, err
 	}

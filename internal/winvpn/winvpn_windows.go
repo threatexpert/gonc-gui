@@ -94,12 +94,7 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 	}
 	traceVPNStep(trace, "configure DNS leak protection", step)
 	step = time.Now()
-	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
-		return nil, errors.Join(err, session.Stop())
-	}
-	traceVPNStep(trace, "insert tun2socks engine", step)
-	step = time.Now()
-	if err := startEngine(); err != nil {
+	if err := startEngine(config, "tun://"+interfaceName); err != nil {
 		return nil, errors.Join(err, session.Stop())
 	}
 	traceVPNStep(trace, "start tun2socks engine", step)

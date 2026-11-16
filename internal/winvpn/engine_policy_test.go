@@ -3,26 +3,21 @@
 package winvpn
 
 import (
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"gonc-gui/internal/vpnconfig"
 	"testing"
-	"time"
 )
 
 func TestEngineIPv6RejectionClearsOnRecovery(t *testing.T) {
-	key := &engine.Key{}
 	for _, reject := range []bool{true, false, true} {
-		if err := configureEnginePolicy(key, vpnconfig.Config{RejectIPv6: reject}); err != nil {
-			t.Fatal(err)
-		}
-		if key.RejectIPv6 != reject || !key.TCPDeferredHandshake {
+		key := engineConfig(vpnconfig.Config{SOCKS5Endpoint: "socks5://127.0.0.1:1080", MTU: 1400, LogLevel: "warn", RejectIPv6: reject}, "tun://gonc")
+		if key.RejectIPv6 != reject || key.DeferredTCP == nil {
 			t.Fatalf("wrong engine policy: %+v", key)
 		}
-		if key.TCPSOCKSHandshakeTimeout != 30*time.Second {
-			t.Fatalf("wrong timeout policy: %+v", key)
+		if key.Device != "tun://gonc" || key.Proxy != "socks5://127.0.0.1:1080" || key.MTU != 1400 || key.LogLevel != "warn" {
+			t.Fatalf("lost engine settings: %+v", key)
 		}
-		if key.TCPFailureCacheTTL != 30*time.Second || key.TCPFailureCacheCapacity != 4096 {
-			t.Fatalf("wrong failure cache policy: %+v", key)
+		if key.DeferredTCP.SOCKSHandshakeTimeout != 0 || key.DeferredTCP.FailureCacheTTL != 0 || key.DeferredTCP.FailureCacheCapacity != 0 {
+			t.Fatalf("desktop should use shared defaults: %+v", key)
 		}
 	}
 }

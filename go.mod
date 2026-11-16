@@ -8,7 +8,7 @@ require (
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
 	github.com/threatexpert/gonc/v2 v2.6.12
 	github.com/wailsapp/wails/v2 v2.17.1
-	github.com/xjasonlyu/tun2socks/v2 v2.7.0
+	github.com/xjasonlyu/tun2socks/v2 v2.7.0 // indirect
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/image v0.41.0
 	golang.org/x/net v0.61.0

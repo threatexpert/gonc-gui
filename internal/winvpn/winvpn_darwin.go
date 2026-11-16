@@ -78,11 +78,7 @@ func Start(config vpnconfig.Config) (*Session, error) {
 		}
 	}()
 
-	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
-		_ = os.Remove(nameFile)
-		return nil, err
-	}
-	if err := startEngine(); err != nil {
+	if err := startEngine(config, "tun://"+interfaceName); err != nil {
 		_ = stopEngine()
 		_ = os.Remove(nameFile)
 		return nil, err

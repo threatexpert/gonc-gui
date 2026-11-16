@@ -8,6 +8,16 @@
 
 ## 本轮实施状态（2026-11-16）
 
+### 最新：独立公共引擎包（本地联调，待用户发布 gonc）
+
+gonc 新增独立 `tunengine` 包，配置结构不暴露 tun2socks 类型，统一延迟握手默认值、失败缓存、IPv6 拒绝，以及加锁的配置安装/启动/停止入口。同进程只允许一个运行引擎，重复启动返回错误；启动/停止错误向上传递，平台仍负责系统配置及失败回滚。桌面移除旧生命周期签名适配层，改为一次调用公共 Start；Android 保留原 Java API、fdsan/高位 FD 与旧调用兼容行为，仅把配置和引擎调用改到公共包。
+
+用户选择先本地实现测试，不提交不推送。桌面测试使用忽略的 `build/bin/gonc-local.work` 联合本项目和相邻 gonetcat，通过 `wails build -m -nosyncgomod` 避免 unpublished 包被 tidy 从远程查找。正式 go.mod 中的 gonc 仍为 v2.6.12，必须等用户推送新包后固定新提交再进行 CI/正式发布；不将机器本地路径写入正式 replace。tun2socks 现在是间接依赖，顶层固定 fork 的 replace 仍保留。
+
+新增 gonc CLI 依赖隔离回归测试（`go list -deps .`），并实际编译 CLI 检查构建信息，均未引入 tun2socks/gVisor。公共配置四种模式、自定义/非法值、默认值不修改输入、启停错误传递、重复停止、重连清除拒绝、并发启动和停止串行化均有测试。下方“已正式发布依赖”等表述是此前阶段状态，本轮新公共包尚未远程发布。
+
+本轮验证：公共包及移动封装测试连续 10 轮通过，gonc 主包与 GUI 全量 Go 测试通过，公共包和桌面后端 go vet 通过；macOS/arm64、Linux/amd64 VPN 后端测试程序交叉编译通过。Windows 测试版为 `build/bin/gonc-gui-shared-tunengine-test.exe`。新 AAR 已打入 `android/app/build/outputs/apk/release/app-release.apk`，Android 140 项单元测试通过，APK 签名校验通过，APK/AAR 中原生库 SHA-256 一致。实际 VPN 连接、断线重连及设备稳定性仍待实机验收。
+
 ### 最新：Android 接入延迟 TCP 握手及本地 IPv6 拒绝
 
 在 gonc 提交 `e8188775820c33ae44a4e1c2720144bdfdeb513d` 基础上更新移动封装，新增 `StartTun2SocksWithPolicy`，保留旧 `StartTun2Socks` 签名与默认关闭行为。Android 显式开启延迟 TCP 握手，握手等待 30 秒、失败缓存 30 秒/4096 条，连接代理保持底层固定 5 秒。引擎 Start 返回的错误现在会传回 Java，失败不再被当成已经启动。

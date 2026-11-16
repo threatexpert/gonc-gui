@@ -3,19 +3,19 @@
 package winvpn
 
 import (
-	"time"
-
-	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"github.com/threatexpert/gonc/v2/tunengine"
 	"gonc-gui/internal/vpnconfig"
 )
 
-// Desktop builds always use the pinned fork. Enable its optional policy here;
-// library defaults remain unchanged and no special build tag is required.
-func configureEnginePolicy(key *engine.Key, config vpnconfig.Config) error {
-	key.TCPDeferredHandshake = true
-	key.TCPSOCKSHandshakeTimeout = 30 * time.Second
-	key.TCPFailureCacheTTL = 30 * time.Second
-	key.TCPFailureCacheCapacity = 4096
-	key.RejectIPv6 = config.RejectIPv6
-	return nil
+func engineConfig(config vpnconfig.Config, device string) tunengine.Config {
+	return tunengine.Config{
+		Device: device, Proxy: config.SOCKS5Endpoint, MTU: config.MTU, LogLevel: config.LogLevel,
+		DeferredTCP: &tunengine.DeferredTCPConfig{}, RejectIPv6: config.RejectIPv6,
+	}
 }
+
+func startEngine(config vpnconfig.Config, device string) error {
+	return tunengine.Start(engineConfig(config, device))
+}
+
+func stopEngine() error { return tunengine.Stop() }
