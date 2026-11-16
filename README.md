@@ -227,6 +227,39 @@ The desktop app is built with Wails and embeds the `gonetcat` Go engine. The
 Android app uses a gomobile-generated `mobilegonc.aar` built from the sibling
 `gonetcat` checkout.
 
+### Desktop tun2socks dependency
+
+Desktop builds pin `github.com/threatexpert/tun2socks` commit
+`aab02800c33f4ba5ad5a0496fd99b2e53cff9fa2` through a versioned `replace` in
+`go.mod`; imports keep the upstream `github.com/xjasonlyu/tun2socks/v2` path.
+Go 1.27.1 or newer is required. The local build scripts and GitHub desktop
+release workflow set `GOWORK=off`, so neither a sibling checkout nor a local
+`tun2socks-local.work` file is needed. No `gonc_deferred_tcp` tag is required.
+
+Every desktop build enables deferred TCP handshakes, a 30-second / 4096-entry
+failed-SYN cache, and a 30-second SOCKS5 handshake timeout after the fixed
+5-second proxy connection timeout. Local IPv6 TCP/UDP rejection is enabled
+only when IPv6 routes are configured and the exit probe fails; reconnecting
+re-evaluates the probe result. These are application settings, not changes to
+the fork's default behavior.
+
+Android is separate: its checked-in `mobilegonc.aar` is not rebuilt by the
+desktop Go build or the GitHub APK job. The Android client calls
+`StartTun2SocksWithPolicy` in the updated gonc mobile wrapper to enable the same
+deferred-TCP settings and probe-dependent IPv6 rejection. A new tunnel-ready
+generation triggers another probe and an engine restart even when DNS is
+unchanged; in that case the existing VPN interface is retained. The original
+`StartTun2Socks` API remains available with both features disabled for older
+callers. Rebuild the AAR from the updated gonc checkout before building the APK;
+changing this repository's `go.mod` alone does not update the native engine.
+
+The project, local CLI and GitHub workflow use Wails v2.17.1. For a manual
+desktop build, set `GOWORK=off` and use `wails build` with the desired platform
+(and `webkit2_41` tag on Linux). No embed-scanner bypass or placeholder script
+is needed. Wails generates bindings, frontend assets, app icons and platform
+manifests normally, including on a fresh checkout. Prefer the supplied build
+scripts.
+
 
 Rebuild the Android Go bridge after changing `..\gonetcat`:
 
@@ -240,14 +273,14 @@ Prerequisites (the same tools the GitHub release workflow uses):
 
 - Go, at the version in `go.mod`
 - Node.js with npm (the release workflow uses Node.js 24)
-- Wails CLI v2.12.0
+- Wails CLI v2.17.1
 - Microsoft Edge WebView2 Runtime, to run the app
 
 Install the Wails CLI, and make sure `GOBIN` (by default `GOPATH\bin`) is on
 `PATH`:
 
 ```text
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
 ```
 
 From the project root, build:

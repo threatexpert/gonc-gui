@@ -1,4 +1,4 @@
-//go:build (windows || darwin || linux) && gonc_deferred_tcp
+//go:build windows || darwin || linux
 
 package winvpn
 
@@ -9,8 +9,8 @@ import (
 	"gonc-gui/internal/vpnconfig"
 )
 
-// Internal policy for local-fork builds. Start uses the same public entry point
-// in both modes; the library defaults remain unchanged. No UI switch is added.
+// Desktop builds always use the pinned fork. Enable its optional policy here;
+// library defaults remain unchanged and no special build tag is required.
 func configureEnginePolicy(key *engine.Key, config vpnconfig.Config) error {
 	key.TCPDeferredHandshake = true
 	key.TCPSOCKSHandshakeTimeout = 30 * time.Second

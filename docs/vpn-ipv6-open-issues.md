@@ -4,11 +4,31 @@
 
 本文记录 Windows、macOS、Android 的 IPv6 接管、路由清理和连接失败反馈问题。下方“问题总览”及详细根因保留修复前的排查基线；当前实施状态以本节为准。尚未完成实机验收的项目不能视为已经验证解决。
 
-涉及 Gonc／gonetcat 或 Android AAR 构建来源仓库的变更，需要另行获得用户审批。本轮只修改 gonc-gui，没有修改这些仓库或切换 tun2socks 依赖。
+涉及 Gonc／gonetcat 或 Android AAR 构建来源仓库的变更需用户审批。用户已批准本轮移动封装及 AAR 更新，实施状态见下节；历史阶段中的“未修改 gonc/AAR”仅适用于当时。
 
 ## 本轮实施状态（2026-11-16）
 
-### 最新：SOCKS5 分阶段超时测试版
+### 最新：Android 接入延迟 TCP 握手及本地 IPv6 拒绝
+
+在 gonc 提交 `e8188775820c33ae44a4e1c2720144bdfdeb513d` 基础上更新移动封装，新增 `StartTun2SocksWithPolicy`，保留旧 `StartTun2Socks` 签名与默认关闭行为。Android 显式开启延迟 TCP 握手，握手等待 30 秒、失败缓存 30 秒/4096 条，连接代理保持底层固定 5 秒。引擎 Start 返回的错误现在会传回 Java，失败不再被当成已经启动。
+
+仅当最终路由包含 IPv6 且探测失败时启用 `RejectIPv6`；IPv6 TCP 本地 RST、UDP（含 QUIC）本地 ICMPv6 拒绝，不进入 SOCKS5。路由保留，无 IPv6 路由时仍允许本地 IPv6。每个新隧道 Ready 代次探测一次并更新协议栈，包括 DNS 不变的情况；DNS 不变时复用 Java 持有的 TUN 接口，DNS 变化时沿用接口更新流程。保留原有 fdsan 清理、复制高位 fd、Java 关闭原 fd 的所有权约定。停止/过期探测结果会被检查，不增加周期复测。Android 实机抓包、断线恢复及长时间稳定性仍需用户验证。
+
+验证结果：移动封装测试连续 10 轮通过，fork 的 core/SOCKS5/tunnel 测试连续 3 轮通过，Android release 单元测试 140 项全部通过。重建 `android/app/libs/mobilegonc.aar` 及 sources JAR，生成签名 APK `android/app/build/outputs/apk/release/app-release.apk`；apksigner 校验通过，APK 内 libgojni.so 与重建 AAR 内文件 SHA-256 完全一致，原生构建信息确认 tun2socks fork 为 `aab02800c33f`。旧接口和新策略接口均存在。构建有既有扫码依赖 Kotlin 元数据兼容警告但成功；go vet 的既有 `mobilegonc/source.go` 自定义 Seek 签名告警未在本轮修改。AAR 更新脚本禁用继承的 Go workspace，并用单次 Gradle daemon 执行 clean，避免后续构建缓存锁冲突。
+
+### 最新：桌面正式引用远程 fork
+
+`go.mod` 通过版本化 replace 固定到 `github.com/threatexpert/tun2socks/v2 v2.0.0-20261116085757-aab02800c33f`，对应提交 `aab02800c33f4ba5ad5a0496fd99b2e53cff9fa2`；`go.sum` 同步校验和，最低 Go 版本为 1.27.1。桌面默认启用延迟握手、30 秒/4096 条失败缓存、30 秒 SOCKS5 握手等待，以及按探测结果设置 IPv6 本地拒绝；连接代理固定 5 秒。
+
+不再需要 `gonc_deferred_tcp` 标签或本地工作区。Windows/macOS/Linux 构建脚本及 GitHub 桌面工作流设置 `GOWORK=off`。项目、CLI 和 CI 统一升级为 Wails v2.17.1，恢复普通 `wails build`；删除临时 `prepare-wails-assets.cjs` 及 `-skipembedcreate` 绕过步骤。GitHub 从 go.mod 安装 Go；按用户要求，发布工作流不增加 VPN 策略测试步骤。Android APK 打包仓库内的 AAR，其更新方式与桌面依赖独立，见上一节。
+
+用户已在 gonc 提交 `e8188775820c33ae44a4e1c2720144bdfdeb513d` 中固定同一 tun2socks fork 并调整 Go 版本；此提交未修改移动封装。gonc-gui 当前仍引用 gonc v2.6.12，顶层 tun2socks replace 必须保留（Go 不继承依赖模块的 replace），无须为此次桌面构建升级 gonc 或修改其源码。
+
+Wails v2.17.1 本地验证：普通构建及移走 `frontend/dist` 后通过 `build.bat` 完整重新生成前端、绑定与 Windows 资源均成功，不再出现旧 CLI 的 `fmt without types` 错误。Go 全量测试、go vet 和前端 71 项测试通过。Windows 产物为 `build/bin/gonc-gui.exe`；GitHub 工作流配置已同步，但未触发远程发布运行。
+
+以下测试版段落为历史过程记录，其中“正式依赖未改”“需要标签/本地工作区”已由本节取代。
+
+### 历史：SOCKS5 分阶段超时测试版
 
 当前产物：`build/bin/gonc-gui-tcp-timeouts-test.exe`，包含下方 IPv6 本地拒绝及延迟握手补丁。按最新要求，连接代理保持原版固定 5 秒，不增加此项参数；代理连接成功后，协商、认证和等待 CONNECT 结果另计默认 30 秒。两阶段不共享预算，提前失败立即结束，父上下文取消/更早截止时间仍优先，成功后清除读写 deadline。不增加界面选项或配置文件。
 
@@ -16,7 +36,7 @@ tun2socks `engine.Key` 仅新增 `TCPSOCKSHandshakeTimeout`，YAML/CLI 为 `tcp-
 
 GUI 内部显式配置握手等待 30s，连接代理沿用固定 5s。Gonc/gonetcat、Android AAR、正式 go.mod/go.sum 未改。构建命令与下节相同，输出名改为 `gonc-gui-tcp-timeouts-test.exe`。新增测试覆盖两段预算不互相扣减、协商/认证/CONNECT 超时、父 deadline 和停止取消、成功后传输不被握手 deadline 截断、零值/负值、YAML 与 GUI 参数传递。
 
-### 最新：本地 IPv6 TCP/UDP 拒绝测试版
+### 历史：本地 IPv6 TCP/UDP 拒绝测试版
 
 当前产物：`build/bin/gonc-gui-ipv6-reject-test.exe`。本节取代下面历史条目中“探测只影响 DNS”“UDP 快速拒绝尚未实现”的描述。
 

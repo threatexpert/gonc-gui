@@ -9,9 +9,8 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
-// v2.7.0 uses fatal/void lifecycle methods; the local upstream-based fork returns
-// errors. Support both during local testing without committing a machine-local
-// replace directive or ignoring the newer engine's startup failures.
+// Preserve lifecycle error propagation. The pinned fork returns errors; the
+// void signature remains supported for callers of this internal adapter.
 func callEngineLifecycle(fn any) error {
 	switch fn := fn.(type) {
 	case func() error:

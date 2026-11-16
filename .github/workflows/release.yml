@@ -16,12 +16,14 @@ permissions:
 
 env:
   APP_NAME: gonc-gui
-  WAILS_VERSION: v2.12.0
+  WAILS_VERSION: v2.17.1
 
 jobs:
   desktop:
     name: Desktop ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    env:
+      GOWORK: "off"
     strategy:
       fail-fast: false
       matrix:

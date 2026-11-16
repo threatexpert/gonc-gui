@@ -3,6 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Resolve the pinned remote modules even if the shell has a local workspace.
+export GOWORK=off
+
 target="${1:-linux/amd64}"
 tags="${WAILS_TAGS:-webkit2_41}"
 
@@ -28,7 +31,7 @@ if ((${#missing[@]} > 0)); then
   echo "Missing required command(s): ${missing[*]}" >&2
   echo "Install Go, Node.js/npm, Wails, and build tools first." >&2
   echo "Ubuntu example: sudo apt install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev" >&2
-  echo "Wails CLI: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0" >&2
+  echo "Wails CLI: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1" >&2
   exit 1
 fi
 if ! pkg-config --exists gtk+-3.0 webkit2gtk-4.1; then

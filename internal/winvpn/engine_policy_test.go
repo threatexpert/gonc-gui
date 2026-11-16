@@ -1,4 +1,4 @@
-//go:build (windows || darwin || linux) && gonc_deferred_tcp
+//go:build windows || darwin || linux
 
 package winvpn
 
@@ -20,6 +20,9 @@ func TestEngineIPv6RejectionClearsOnRecovery(t *testing.T) {
 		}
 		if key.TCPSOCKSHandshakeTimeout != 30*time.Second {
 			t.Fatalf("wrong timeout policy: %+v", key)
+		}
+		if key.TCPFailureCacheTTL != 30*time.Second || key.TCPFailureCacheCapacity != 4096 {
+			t.Fatalf("wrong failure cache policy: %+v", key)
 		}
 	}
 }

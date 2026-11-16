@@ -3,6 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Resolve the pinned remote modules even if the shell has a local workspace.
+export GOWORK=off
+
 target="${1:-}"
 if [[ -z "$target" ]]; then
   arch="$(uname -m)"
@@ -38,7 +41,7 @@ if ((${#missing[@]} > 0)); then
   echo "Missing required command(s): ${missing[*]}" >&2
   echo "Install Xcode Command Line Tools, Go, Node.js/npm, and Wails first." >&2
   echo "Xcode tools: xcode-select --install" >&2
-  echo "Wails CLI: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0" >&2
+  echo "Wails CLI: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1" >&2
   exit 1
 fi
 

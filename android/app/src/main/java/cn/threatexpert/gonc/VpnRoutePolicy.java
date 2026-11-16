@@ -5,7 +5,7 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Pure policy: capture follows routes; reachability only influences DNS. */
+/** Capture follows routes; reachability controls DNS filtering and local rejection. */
 final class VpnRoutePolicy {
     static final String DEFAULT_ROUTES = "0.0.0.0/1\n128.0.0.0/1\n::/0";
     static final String DEFAULT_DNS = "8.8.8.8\n2001:4860:4860::8888";
@@ -27,6 +27,10 @@ final class VpnRoutePolicy {
             if (line.contains(":") && line.contains("/")) return true;
         }
         return false;
+    }
+
+    static boolean rejectIpv6(String routes, boolean ipv6Available) {
+        return hasIpv6(routes) && !ipv6Available;
     }
 
     static InetAddress numericAddress(String value) {

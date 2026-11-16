@@ -175,7 +175,8 @@ public final class GoncVpnService extends VpnService {
                 }
 
                 List<String> selectedDns = selectedDns(dnsServers, effectiveIpv6);
-                installInterface(enableIpv6, selectedDns, routeCidrs, effectiveMtu, readySocks5Endpoint);
+                installInterface(enableIpv6, selectedDns, routeCidrs, effectiveMtu, readySocks5Endpoint,
+                        VpnRoutePolicy.rejectIpv6(routeCidrs, effectiveIpv6));
                 if (enableIpv6 && !isStopRequested()) {
                     monitorIpv6Reconnects(tunnelReady, probeRevision, selectedDns, dnsServers, routeCidrs, effectiveMtu);
                 }
@@ -196,34 +197,54 @@ public final class GoncVpnService extends VpnService {
     // The Java-owned descriptor remains open for the entire VPN lifetime. The
     // engine receives a detached duplicate, preserving the existing fdsan-safe
     // transfer convention and preventing a route gap during DNS reconfiguration.
-    private void installInterface(boolean captureIpv6, List<String> dns, String routes, int mtu, String endpoint) throws Exception {
+    private void installInterface(boolean captureIpv6, List<String> dns, String routes, int mtu, String endpoint, boolean rejectIpv6) throws Exception {
         synchronized (engineLock) {
             if (isStopRequested()) return;
             GoncVpnState.setSystemVpnReady(false);
             ParcelFileDescriptor next = establishInterface(captureIpv6, dns, routes, mtu);
             if (next == null) throw new IllegalStateException("Could not establish VPN interface");
             ParcelFileDescriptor previous;
-            boolean wasRunning;
             synchronized (lock) {
                 previous = vpnInterface;
                 vpnInterface = next;
+            }
+            try {
+                restartEngine(endpoint, mtu, rejectIpv6);
+                log("info", "All configured routes installed; DNS: " + String.join(", ", dns));
+            } finally {
+                closeParcelQuietly(previous);
+            }
+        }
+    }
+
+    // Reuse the Java-owned TUN when DNS is unchanged. Rebuilding the engine on
+    // every new tunnel generation applies rejection changes and clears old SYN
+    // failure records without removing the VPN routes.
+    private void restartEngine(String endpoint, int mtu, boolean rejectIpv6) throws Exception {
+        synchronized (engineLock) {
+            if (isStopRequested()) return;
+            GoncVpnState.setSystemVpnReady(false);
+            ParcelFileDescriptor tun;
+            boolean wasRunning;
+            synchronized (lock) {
+                tun = vpnInterface;
                 wasRunning = tun2socksRunning;
+            }
+            if (tun == null) throw new IllegalStateException("VPN interface is not available");
+            if (wasRunning) {
+                Mobilegonc.stopTun2Socks();
+                synchronized (lock) { tun2socksRunning = false; }
             }
             int fd = -1;
             try {
                 if (isStopRequested()) return;
-                if (wasRunning) {
-                    Mobilegonc.stopTun2Socks();
-                    synchronized (lock) { tun2socksRunning = false; }
-                }
-                fd = ParcelFileDescriptor.dup(next.getFileDescriptor()).detachFd();
-                Mobilegonc.startTun2Socks(fd, endpoint, "tun0", mtu, "warn");
+                fd = ParcelFileDescriptor.dup(tun.getFileDescriptor()).detachFd();
+                Mobilegonc.startTun2SocksWithPolicy(fd, endpoint, "tun0", mtu, "warn", true, rejectIpv6);
                 synchronized (lock) { tun2socksRunning = true; }
-                log("info", "tun2socks started; all configured routes installed; DNS: " + String.join(", ", dns));
-                markConnected();
+                log("info", "tun2socks started; deferred TCP handshake enabled; local IPv6 rejection=" + rejectIpv6);
+                if (!isStopRequested()) markConnected();
             } finally {
                 closeDetachedFd(fd);
-                closeParcelQuietly(previous);
             }
         }
     }
@@ -256,9 +277,12 @@ public final class GoncVpnService extends VpnService {
             if (isStopRequested()) return;
             if (revision != ready.revision() || !"connected".equals(normalizeP2PStatus(GoncVpnState.p2pStatus()))) continue;
             List<String> nextDns = selectedDns(configuredDns, nextAvailable);
+            boolean rejectIpv6 = VpnRoutePolicy.rejectIpv6(routes, nextAvailable);
             if (!nextDns.equals(activeDns)) {
-                installInterface(true, nextDns, routes, mtu, endpoint);
+                installInterface(true, nextDns, routes, mtu, endpoint, rejectIpv6);
                 activeDns = nextDns;
+            } else {
+                restartEngine(endpoint, mtu, rejectIpv6);
             }
         }
     }
@@ -295,7 +319,7 @@ public final class GoncVpnService extends VpnService {
             return true;
         }
         GoncVpnState.setPeerIpv6("unavailable");
-        log("warn", "Remote IPv6 probe failed; keeping ALL configured IPv6 routes, filtering IPv6 DNS servers (" + result.detail + ")");
+        log("warn", "Remote IPv6 probe failed; keeping ALL configured IPv6 routes, locally rejecting IPv6 TCP/UDP and filtering IPv6 DNS servers (" + result.detail + ")");
         return false;
     }
 

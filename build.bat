@@ -3,6 +3,9 @@ setlocal
 
 cd /d "%~dp0"
 
+rem Release builds must resolve the pinned remote modules, not a local workspace.
+set "GOWORK=off"
+
 set "TARGET=%~1"
 if "%TARGET%"=="" set "TARGET=windows/amd64"
 if /i "%TARGET%"=="amd64" set "TARGET=windows/amd64"

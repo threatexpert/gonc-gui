@@ -6,6 +6,27 @@ import java.util.List;
 import static org.junit.Assert.*;
 
 public class VpnRoutePolicyTest {
+    @Test public void rejectionOnlyAppliesToCapturedIpv6AfterFailedProbe() {
+        assertFalse(VpnRoutePolicy.rejectIpv6("0.0.0.0/0", false));
+        assertFalse(VpnRoutePolicy.rejectIpv6("0.0.0.0/0", true));
+        assertTrue(VpnRoutePolicy.rejectIpv6("::/0", false));
+        assertFalse(VpnRoutePolicy.rejectIpv6("::/0", true));
+        assertTrue(VpnRoutePolicy.rejectIpv6("2001:db8::/32", false));
+        assertTrue(VpnRoutePolicy.rejectIpv6("", false));
+    }
+
+    @Test public void probeRecoveryChangesRejectionEvenWhenDnsIsUnchanged() {
+        String routes = "0.0.0.0/0\n::/0";
+        List<String> dns = VpnRoutePolicy.dns("9.9.9.9", false);
+        boolean[] available = {false, true, false};
+        boolean[] expectedRejection = {true, false, true};
+        for (int i = 0; i < available.length; i++) {
+            assertEquals(dns, VpnRoutePolicy.dns("9.9.9.9", available[i]));
+            assertEquals(expectedRejection[i], VpnRoutePolicy.rejectIpv6(routes, available[i]));
+            assertEquals(2, VpnRoutePolicy.routes(routes).size());
+        }
+    }
+
     @Test public void ipv6IsDerivedFromFinalRoutes() {
         assertTrue(VpnRoutePolicy.hasIpv6(""));
         assertFalse(VpnRoutePolicy.hasIpv6("0.0.0.0/0"));

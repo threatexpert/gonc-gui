@@ -3,6 +3,8 @@ setlocal
 cd /d "%~dp0"
 
 set "ANDROID_DIR=%~dp0"
+rem Use the gonc checkout's pinned fork, never an inherited desktop workspace.
+set "GOWORK=off"
 
 if "%ANDROID_HOME%"=="" set "ANDROID_HOME=D:\Android\sdk"
 if "%ANDROID_SDK_ROOT%"=="" set "ANDROID_SDK_ROOT=D:\Android\sdk"
@@ -49,7 +51,7 @@ echo mobilegonc.aar updated:
 echo %ANDROID_DIR%app\libs\mobilegonc.aar
 echo.
 echo Cleaning Gradle build cache so next APK build picks up the new AAR...
-call "%ANDROID_DIR%gradlew.bat" clean
+call "%ANDROID_DIR%gradlew.bat" --no-daemon clean
 if errorlevel 1 (
     echo.
     echo Gradle clean failed.
