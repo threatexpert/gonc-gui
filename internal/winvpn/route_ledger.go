@@ -102,8 +102,10 @@ func routeDestination(cidr string) (kind, destination string) {
 	return "-net", cidr
 }
 
-// route(8) may exit zero after a kernel error. Its successful mutation output
-// has this exact form; fail closed on an error suffix or unexpected output.
+// route(8) may exit zero after a kernel error. Recognize its successful mutation
+// output, including IPv4 CIDR suffix removal, but never ignore an error suffix.
+// This is NOT proof of route installation: the ledger also checks the exact
+// prefix, interface and gateway in the kernel RIB before reporting success.
 func checkDarwinRouteOutput(op string, r ownedRoute, output string, commandErr error) error {
 	kind, destination := routeDestination(r.cidr)
 	gateway := r.gateway
@@ -114,7 +116,16 @@ func checkDarwinRouteOutput(op string, r ownedRoute, output string, commandErr e
 	if commandErr != nil {
 		return fmt.Errorf("route %s: %w; output: %s", strings.Join(routeArgs(op, r), " "), commandErr, strings.TrimSpace(output))
 	}
-	if strings.TrimSpace(output) != want {
+	actual := strings.TrimSpace(output)
+	if actual == want {
+		return nil
+	}
+	// Apple's IPv4 getaddr() replaces '/' with NUL while parsing a network,
+	// and does not restore it before printing dest. IPv6 restores the slash.
+	if p, err := netip.ParsePrefix(destination); err == nil && p.Addr().Is4() && kind == "-net" {
+		want = fmt.Sprintf("%s net %s: gateway %s", op, p.Addr(), gateway)
+	}
+	if actual != want {
 		return fmt.Errorf("route %s: unexpected result: %s", strings.Join(routeArgs(op, r), " "), strings.TrimSpace(output))
 	}
 	return nil

@@ -144,6 +144,78 @@ func TestDarwinRouteCommandResults(t *testing.T) {
 	}
 }
 
+func TestDarwinRouteOutputAddressFormatting(t *testing.T) {
+	// IPv4 getaddr() in Apple's route(8) splits CIDR at '/' in place.
+	// Its success message therefore prints the address without the prefix.
+	// These cases include the actual v1.2.36 failure reported on macOS.
+	for _, tc := range []struct{ cidr, printed, gateway, iface string }{
+		{"0.0.0.0/1", "net 0.0.0.0", "", "utun4"},
+		{"128.0.0.0/1", "net 128.0.0.0", "", "utun4"},
+		{"10.0.0.0/8", "net 10.0.0.0", "", "utun4"},
+		{"111.230.148.111/32", "host 111.230.148.111", "192.168.50.1", "en0"},
+		{"101.33.204.3/32", "host 101.33.204.3", "192.168.50.1", "en0"},
+		{"8.8.8.8/32", "host 8.8.8.8", "", "utun4"},
+		{"::/1", "net ::/1", "", "utun4"},
+		{"8000::/1", "net 8000::/1", "", "utun4"},
+		{"2001:4860:4860::8888/128", "host 2001:4860:4860::8888", "", "utun4"},
+	} {
+		for _, op := range []string{"add", "delete"} {
+			t.Run(op+"/"+tc.cidr, func(t *testing.T) {
+				r := ownedRoute{cidr: tc.cidr, gateway: tc.gateway, iface: tc.iface}
+				nextHop := tc.gateway
+				if nextHop == "" {
+					nextHop = tc.iface
+				}
+				output := op + " " + tc.printed + ": gateway " + nextHop
+				if err := checkDarwinRouteOutput(op, r, output+"\n", nil); err != nil {
+					t.Fatal(err)
+				}
+				for _, suffix := range []string{": File exists", ": not in table", ": Network is unreachable", "\nroute: error"} {
+					if err := checkDarwinRouteOutput(op, r, output+suffix, nil); err == nil {
+						t.Fatal("accepted error suffix", suffix)
+					}
+				}
+			})
+		}
+	}
+	for _, output := range []string{
+		"add net 128.0.0.0: gateway utun4", // wrong destination
+		"add net 0.0.0.0/2: gateway utun4", // explicit wrong prefix
+		"add net 0.0.0.0: gateway en0",     // wrong interface
+		"add host 0.0.0.0: gateway utun4",  // wrong kind
+	} {
+		if err := checkDarwinRouteOutput("add", ownedRoute{cidr: "0.0.0.0/1", iface: "utun4"}, output, nil); err == nil {
+			t.Fatal("accepted mismatched output", output)
+		}
+	}
+}
+
+func TestDarwinIPv4OutputStillRequiresRIBVerificationAndRollback(t *testing.T) {
+	for _, installed := range []bool{true, false} {
+		r := ownedRoute{cidr: "0.0.0.0/1", iface: "utun4"}
+		present := false
+		var commands []string
+		l := routeLedger{present: func(ownedRoute) (bool, error) { return present, nil }, command: func(op string, _ ownedRoute) error {
+			commands = append(commands, op)
+			present = op == "add" && installed
+			return checkDarwinRouteOutput(op, r, op+" net 0.0.0.0: gateway utun4\n", nil)
+		}}
+		err := l.add(r)
+		if (err == nil) != installed {
+			t.Fatalf("installed=%t: %v", installed, err)
+		}
+		if len(l.owned) != 1 {
+			t.Fatal("successful mutation not tracked for rollback")
+		}
+		if err := l.cleanup(); err != nil || present || len(l.owned) != 0 {
+			t.Fatal("rollback failed", err)
+		}
+		if installed && !reflect.DeepEqual(commands, []string{"add", "delete"}) {
+			t.Fatal(commands)
+		}
+	}
+}
+
 func TestRouteLedgerFailedAddDoesNotClaimConcurrentRoute(t *testing.T) {
 	queries := 0
 	l := routeLedger{present: func(ownedRoute) (bool, error) { queries++; return queries > 1, nil }, command: func(op string, _ ownedRoute) error {
