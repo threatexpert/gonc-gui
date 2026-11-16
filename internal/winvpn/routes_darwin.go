@@ -54,7 +54,7 @@ func matchesDarwinRoute(r ownedRoute, iface net.Interface, msgs []route.Message)
 	}
 	for _, msg := range msgs {
 		m, ok := msg.(*route.RouteMessage)
-		if !ok || m.Index != iface.Index || !stableDarwinRoute(m.Flags, prefix.Bits() == prefix.Addr().BitLen()) || len(m.Addrs) <= syscall.RTAX_DST {
+		if !ok || m.Index != iface.Index || !stableDarwinRoute(m.Flags, prefix) || len(m.Addrs) <= syscall.RTAX_DST {
 			continue
 		}
 		dst := ribIP(m.Addrs[syscall.RTAX_DST])
@@ -110,7 +110,7 @@ func (s *Session) addOwnedRoute(r ownedRoute) error {
 	}
 	r.index = iface.Index
 	if s.routeLedger == nil {
-		s.routeLedger = &routeLedger{present: routeInstalled, command: runDarwinRoute, trace: s.trace}
+		s.routeLedger = &routeLedger{present: routeInstalled, command: runDarwinRoute, trace: s.trace, diagnose: diagnoseDarwinRoute}
 	}
 	return s.routeLedger.add(r)
 }
@@ -131,4 +131,53 @@ func nativeRouteTo(ip string) (darwinRouteLookup, error) {
 func runDarwinRoute(op string, r ownedRoute) error {
 	output, err := exec.Command("route", routeArgs(op, r)...).CombinedOutput()
 	return checkDarwinRouteOutput(op, r, string(output), err)
+}
+
+// Called only after failed installation verification, before rollback removes
+// the TUN interface and destroys the evidence needed to diagnose the failure.
+func diagnoseDarwinRoute(r ownedRoute) string {
+	prefix, err := netip.ParsePrefix(r.cidr)
+	if err != nil {
+		return err.Error()
+	}
+	var entries []string
+	buf, err := route.FetchRIB(syscall.AF_UNSPEC, route.RIBTypeRoute, 0)
+	if err == nil {
+		var msgs []route.Message
+		msgs, err = route.ParseRIB(route.RIBTypeRoute, buf)
+		for _, msg := range msgs {
+			m, ok := msg.(*route.RouteMessage)
+			if !ok || len(m.Addrs) <= syscall.RTAX_DST {
+				continue
+			}
+			addr, ok := netip.AddrFromSlice(ribIP(m.Addrs[syscall.RTAX_DST]))
+			if !ok || addr.Unmap() != prefix.Addr().Unmap() {
+				continue
+			}
+			var addrs []string
+			for i, a := range m.Addrs {
+				if a == nil {
+					continue
+				}
+				value := fmt.Sprintf("%+v", a)
+				if ip := ribIP(a); ip != nil {
+					value = ip.String()
+				}
+				addrs = append(addrs, fmt.Sprintf("%d:%s", i, value))
+			}
+			entries = append(entries, fmt.Sprintf("index=%d flags=0x%X addrs=[%s]", m.Index, m.Flags, strings.Join(addrs, " ")))
+		}
+	}
+	if err != nil {
+		entries = append(entries, "RIB error: "+err.Error())
+	}
+	if len(entries) == 0 {
+		entries = append(entries, "no RIB entries for destination")
+	}
+	family := "-inet"
+	if prefix.Addr().Is6() {
+		family = "-inet6"
+	}
+	output, queryErr := exec.Command("route", "-n", "get", family, prefix.Addr().String()).CombinedOutput()
+	return fmt.Sprintf("expected index=%d interface=%s; RIB: %s; route get (error=%v): %s", r.index, r.iface, strings.Join(entries, "; "), queryErr, strings.TrimSpace(string(output)))
 }

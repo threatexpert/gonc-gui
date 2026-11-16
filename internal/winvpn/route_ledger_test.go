@@ -3,6 +3,7 @@ package winvpn
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -231,6 +232,25 @@ func TestRouteLedgerFailedAddDoesNotClaimConcurrentRoute(t *testing.T) {
 		t.Fatal("claimed route after failed add")
 	}
 	if err := l.cleanup(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouteLedgerCapturesDiagnosticsBeforeRollback(t *testing.T) {
+	r := ownedRoute{cidr: "2001:4860:4860::8888/128", iface: "utun4"}
+	mutated := false
+	l := routeLedger{
+		present: func(ownedRoute) (bool, error) { return false, nil },
+		command: func(string, ownedRoute) error { mutated = true; return nil },
+		diagnose: func(got ownedRoute) string {
+			if !mutated || got != r {
+				t.Fatal("diagnostics did not capture the failed mutation")
+			}
+			return "RIB: index=20 flags=0xC05"
+		},
+	}
+	err := l.add(r)
+	if err == nil || !strings.Contains(err.Error(), "RIB: index=20 flags=0xC05") {
 		t.Fatal(err)
 	}
 }

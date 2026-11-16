@@ -15,10 +15,11 @@ type ownedRoute struct {
 // The ledger never treats the requested configuration as proof of ownership.
 // It is independent of OS calls so failure/rollback paths can be tested locally.
 type routeLedger struct {
-	owned   []ownedRoute
-	present func(ownedRoute) (bool, error)
-	command func(string, ownedRoute) error
-	trace   func(string)
+	owned    []ownedRoute
+	present  func(ownedRoute) (bool, error)
+	command  func(string, ownedRoute) error
+	trace    func(string)
+	diagnose func(ownedRoute) string
 }
 
 func (l *routeLedger) add(r ownedRoute) error {
@@ -48,7 +49,11 @@ func (l *routeLedger) add(r ownedRoute) error {
 		return fmt.Errorf("verify route %s: %w", r.cidr, verifyErr)
 	}
 	if !installed {
-		return fmt.Errorf("route %s was not installed on %s; VPN is not ready", r.cidr, r.iface)
+		detail := ""
+		if l.diagnose != nil {
+			detail = "; " + l.diagnose(r)
+		}
+		return fmt.Errorf("route %s was not installed on %s; VPN is not ready%s", r.cidr, r.iface, detail)
 	}
 	if l.trace != nil {
 		l.trace(fmt.Sprintf("VPN route %s: created static route via %s on %s", r.cidr, r.gateway, r.iface))

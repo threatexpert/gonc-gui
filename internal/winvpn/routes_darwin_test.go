@@ -44,6 +44,11 @@ func TestDarwinRIBHostAndNetworkRoutes(t *testing.T) {
 			addrs := []route.Addr{tc.dst, &route.LinkAddr{Index: 20}}
 			if tc.host {
 				flags |= syscall.RTF_HOST
+				if netip.MustParsePrefix(tc.cidr).Addr().Is6() {
+					// nd6_rtrequest adds LLINFO to manual IPv6 interface host
+					// routes too, including on point-to-point interfaces.
+					flags |= syscall.RTF_LLINFO
+				}
 			} else {
 				addrs = append(addrs, tc.mask)
 			}

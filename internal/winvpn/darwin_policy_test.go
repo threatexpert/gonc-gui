@@ -3,26 +3,72 @@ package winvpn
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestStableDarwinRoute(t *testing.T) {
+	hostPrefix := netip.MustParsePrefix("203.0.113.7/32")
+	netPrefix := netip.MustParsePrefix("0.0.0.0/1")
 	host := darwinRouteUp | darwinRouteStatic | darwinRouteHost | darwinRouteGateway
-	if !stableDarwinRoute(host, true) {
+	if !stableDarwinRoute(host, hostPrefix) {
 		t.Fatal("static unscoped host rejected")
 	}
 	for _, flag := range []int{darwinRouteWasCloned, darwinRouteIfScope, darwinRouteDynamic, darwinRouteReject, darwinRouteBlackhole, darwinRouteLLInfo, darwinRouteCloning, darwinRouteProtoCloning} {
-		if stableDarwinRoute(host|flag, true) {
+		if stableDarwinRoute(host|flag, hostPrefix) {
 			t.Fatalf("unsafe host flags accepted: %x", flag)
 		}
 	}
-	if stableDarwinRoute(host&^darwinRouteStatic, true) || stableDarwinRoute(host&^darwinRouteUp, true) || stableDarwinRoute(host, false) {
+	if stableDarwinRoute(host&^darwinRouteStatic, hostPrefix) || stableDarwinRoute(host&^darwinRouteUp, hostPrefix) || stableDarwinRoute(host, netPrefix) {
 		t.Fatal("unstable/wrong route kind accepted")
 	}
-	if !stableDarwinRoute(darwinRouteUp|darwinRouteStatic|darwinRouteProtoCloning, false) {
+	if !stableDarwinRoute(darwinRouteUp|darwinRouteStatic|darwinRouteProtoCloning, netPrefix) {
 		t.Fatal("static capture network rejected")
+	}
+}
+
+func TestDarwinStaticIPv6HostWithLLInfo(t *testing.T) {
+	prefix := netip.MustParsePrefix("2001:4860:4860::8888/128")
+	flags := darwinRouteUp | darwinRouteStatic | darwinRouteHost | darwinRouteLLInfo
+	if !stableDarwinRoute(flags, prefix) {
+		t.Fatal("manual IPv6 DNS route with LLINFO rejected")
+	}
+	for _, extra := range []int{darwinRouteWasCloned, darwinRouteIfScope, darwinRouteDynamic, darwinRouteReject, darwinRouteBlackhole, darwinRouteGateway, darwinRouteCloning, darwinRouteProtoCloning} {
+		if stableDarwinRoute(flags|extra, prefix) {
+			t.Fatalf("unsafe IPv6 route accepted: %x", extra)
+		}
+	}
+	for _, missing := range []int{darwinRouteUp, darwinRouteStatic, darwinRouteHost} {
+		if stableDarwinRoute(flags&^missing, prefix) {
+			t.Fatalf("accepted missing required flag: %x", missing)
+		}
+	}
+	if stableDarwinRoute(flags, netip.MustParsePrefix("8.8.8.8/32")) {
+		t.Fatal("IPv4 LLINFO exception unintentionally enabled")
+	}
+	if stableDarwinRoute(flags&^darwinRouteHost, netip.MustParsePrefix("2001:4860::/32")) {
+		t.Fatal("network LLINFO exception unintentionally enabled")
+	}
+	// The same acceptance rule is used during cleanup, so a route created by
+	// this session is not forgotten merely because the kernel added LLINFO.
+	r := ownedRoute{cidr: prefix.String(), iface: "utun4"}
+	present := false
+	var commands []string
+	l := routeLedger{present: func(ownedRoute) (bool, error) { return present && stableDarwinRoute(flags, prefix), nil }, command: func(op string, _ ownedRoute) error {
+		commands = append(commands, op)
+		present = op == "add"
+		return nil
+	}}
+	if err := l.add(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.cleanup(); err != nil || present || len(l.owned) != 0 {
+		t.Fatal("failed to clean owned IPv6 route", err)
+	}
+	if !reflect.DeepEqual(commands, []string{"add", "delete"}) {
+		t.Fatal(commands)
 	}
 }
 
@@ -176,7 +222,7 @@ func TestDarwinCloneDoesNotSuppressStaticBypass(t *testing.T) {
 	r := ownedRoute{cidr: "203.0.113.7/32", iface: "en0", gateway: "192.168.50.1"}
 	flags := darwinRouteUp | darwinRouteHost | darwinRouteWasCloned | darwinRouteIfScope
 	adds := 0
-	l := routeLedger{present: func(ownedRoute) (bool, error) { return stableDarwinRoute(flags, true), nil }, command: func(op string, _ ownedRoute) error {
+	l := routeLedger{present: func(r ownedRoute) (bool, error) { return stableDarwinRoute(flags, netip.MustParsePrefix(r.cidr)), nil }, command: func(op string, _ ownedRoute) error {
 		if op == "add" {
 			adds++
 			flags = darwinRouteUp | darwinRouteHost | darwinRouteStatic

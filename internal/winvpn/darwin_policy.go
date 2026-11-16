@@ -23,10 +23,21 @@ const (
 	darwinRouteIfScope      = 0x1000000
 )
 
-func stableDarwinRoute(flags int, host bool) bool {
+func stableDarwinRoute(flags int, prefix netip.Prefix) bool {
+	if !prefix.IsValid() {
+		return false
+	}
+	host := prefix.Bits() == prefix.Addr().BitLen()
 	const required = darwinRouteUp | darwinRouteStatic
-	const excluded = darwinRouteWasCloned | darwinRouteIfScope | darwinRouteDynamic | darwinRouteReject | darwinRouteBlackhole | darwinRouteLLInfo
+	const excluded = darwinRouteWasCloned | darwinRouteIfScope | darwinRouteDynamic | darwinRouteReject | darwinRouteBlackhole
 	if flags&required != required || flags&excluded != 0 {
+		return false
+	}
+	// XNU nd6_rtrequest(RTM_ADD) adds LLINFO even to manually-created IPv6
+	// on-link host routes on point-to-point interfaces. It does not mean that
+	// such a STATIC route is a temporary WASCLONED entry. All other checks,
+	// including exact destination, interface and gateway matching, still apply.
+	if flags&darwinRouteLLInfo != 0 && !(host && prefix.Addr().Is6() && flags&darwinRouteGateway == 0) {
 		return false
 	}
 	if host {
