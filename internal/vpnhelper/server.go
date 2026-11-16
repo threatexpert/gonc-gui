@@ -56,7 +56,13 @@ func Run(connectAddr, token string) error {
 				_ = active.Stop()
 				active = nil
 			}
-			session, err := winvpn.Start(req.Config)
+			var trace func(string)
+			if req.Trace {
+				trace = func(message string) {
+					_ = enc.Encode(response{Progress: true, Logs: []string{message}})
+				}
+			}
+			session, err := winvpn.StartWithTrace(req.Config, trace)
 			if err != nil {
 				_ = enc.Encode(response{OK: false, Error: err.Error()})
 				continue

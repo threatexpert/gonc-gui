@@ -8,7 +8,19 @@
 
 ## 本轮实施状态（2026-11-16）
 
-### 最新：独立公共引擎包（本地联调，待用户发布 gonc）
+### 最新：同步 tun2socks 修复提交
+
+gonc 与 GUI 的顶层 replace 均固定到已推送的 `4b0120a38bf2ea724209882f0d7d5352dc75a436`（`v2.0.0-20261116123949-4b0120a38bf2`），同步 go.sum。本次包含 deferred HTTP/SOCKS4 握手超时及取消、RST 输出不持有全局准入锁、生命周期取消不进入失败缓存、IPv6 接收校验卸载标志兼容修复；原模式、2048 名额和 SOCKS5 30 秒握手默认值不变。gonc 的依赖更新已提交为 `ee76a9aa423e806f7cf43b63e87188b5c1da5ec2`，用户推送后 GUI 已同步固定到 `v2.6.13-0.20261116125136-ee76a9aa423e`。AAR 从该提交相同源码重新构建。构建保持 `GOWORK=off`，不依赖本地 tun2socks 源码或 workspace。下方依赖版本记录为历史阶段。
+
+验证结果：新版依赖的 core/tunnel/SOCKS5 回归测试、gonc 公共包/移动封装测试、GUI 全量 Go 测试及 Android 140 项单元测试通过。Windows 已通过正常 build.bat 构建，构建信息确认 gonc 为 ee76a9a、tun2socks 为 4b0120a；新 AAR 原生库同样确认包含 4b0120a。Android release APK 版本名为 1.2.35，签名校验通过，APK 与 AAR 的 libgojni.so SHA-256 一致。产物为 build/bin/gonc-gui.exe、android/app/libs/mobilegonc.aar 和 android/app/build/outputs/apk/release/app-release.apk。实机 VPN 测试待用户验收。
+
+### 历史：公共引擎固定到远程提交
+
+GUI 的 go.mod/go.sum 现固定到已发布的 gonc 提交 `390e310f5e0f9d81e1be4d31ade14217236cad09`，对应 `v2.6.13-0.20261116103338-390e310f5e0f`，包含公共引擎及 v2.6.13 版本号更新；正常桌面构建使用 `GOWORK=off` 和普通 Wails 构建，不再依赖本地 workspace 或相邻源码。移除临时 workspace 文件和已注释的本地 replace 示例，保留版本化 tun2socks fork replace。本地及 GitHub 桌面脚本原本已禁用 workspace，无须增加构建步骤。Android 发布仍直接使用已提交的 AAR，不依赖相邻 gonc 仓库；本次只更新 Go 依赖引用，未重新生成 AAR。
+
+验证：`GOWORK=off` 下模块校验、GUI 全量 Go 测试、VPN 后端 go vet 及正常 `build.bat` Windows/amd64 构建通过；macOS/amd64、macOS/arm64、Linux/amd64、Windows/arm64 VPN 后端交叉编译通过；与 GitHub 相同的 Android `assembleRelease --no-daemon` 命令通过。GitHub workflow 配置已检查，无本地模块替换，未触发会执行正式发布的远程 workflow；其他平台完整 GUI 构建仍由各平台 CI 验证。
+
+### 历史：独立公共引擎包本地联调
 
 gonc 新增独立 `tunengine` 包，配置结构不暴露 tun2socks 类型，统一延迟握手默认值、失败缓存、IPv6 拒绝，以及加锁的配置安装/启动/停止入口。同进程只允许一个运行引擎，重复启动返回错误；启动/停止错误向上传递，平台仍负责系统配置及失败回滚。桌面移除旧生命周期签名适配层，改为一次调用公共 Start；Android 保留原 Java API、fdsan/高位 FD 与旧调用兼容行为，仅把配置和引擎调用改到公共包。
 

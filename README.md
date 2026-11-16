@@ -234,23 +234,20 @@ package instead of importing tun2socks directly. Android's mobilegonc wrapper
 uses the same package and defaults. OS routes, DNS and Android FD ownership stay
 in their existing platform adapters. The gonc CLI does not import this package.
 
-**Local integration pending publication:** the new gonc package is not yet in
-the pinned remote gonc version. Until the updated gonc checkout is committed and
-pushed and `go.mod` is updated to that commit, use a local Go workspace containing
-this project and `../gonetcat` for desktop tests. The current local test workspace
-is `build/bin/gonc-local.work` (not committed); build with `GOWORK` set to its
-absolute path and `wails build -m -nosyncgomod`. These two flags only skip remote
-module tidy/sync during unpublished-package testing, not binding or asset
-generation. Normal release scripts intentionally keep `GOWORK=off` and must not
-be used to release this integration before the dependency pin is updated.
+The shared engine is pinned to published gonc commit
+`ee76a9aa423e806f7cf43b63e87188b5c1da5ec2`, resolved as
+`v2.6.13-0.20261116125136-ee76a9aa423e` in `go.mod` and verified by `go.sum`.
+Normal builds use `GOWORK=off` and plain `wails build`; no local workspace,
+sibling source checkout, `-m`, or `-nosyncgomod` is needed for desktop builds.
 
 Desktop builds pin `github.com/threatexpert/tun2socks` commit
-`aab02800c33f4ba5ad5a0496fd99b2e53cff9fa2` through a versioned `replace` in
+`4b0120a38bf2ea724209882f0d7d5352dc75a436` through a versioned `replace` in
 `go.mod`; imports keep the upstream `github.com/xjasonlyu/tun2socks/v2` path.
 Go 1.27.1 or newer is required. The local build scripts and GitHub desktop
 release workflow set `GOWORK=off`, so neither a sibling checkout nor a local
-`tun2socks-local.work` file is needed once the gonc package above is published
-and pinned. No `gonc_deferred_tcp` tag is required.
+workspace file is needed. No `gonc_deferred_tcp` tag is required. The top-level
+tun2socks `replace` remains necessary because Go does not inherit replacements
+from dependency modules.
 
 Every desktop build enables deferred TCP handshakes, a 30-second / 4096-entry
 failed-SYN cache, and a 30-second SOCKS5 handshake timeout after the fixed

@@ -24,7 +24,6 @@ import (
 const (
 	interfaceName      = "Gonc"
 	interfaceIPv4      = "10.60.173.33"
-	interfaceMask      = "255.255.255.0"
 	dnsProxyIPv4       = "127.60.173.33"
 	defaultMTU         = 1400
 	defaultRouteMetric = 1
@@ -37,10 +36,12 @@ const (
 )
 
 type Session struct {
-	mu          sync.Mutex
-	config      vpnconfig.Config
-	dnsProxy    *dnsproxy.Server
-	ownedRoutes []string
+	mu            sync.Mutex
+	config        vpnconfig.Config
+	dnsProxy      *dnsproxy.Server
+	ownedRoutes   []windows.MibIpForwardRow2
+	interfaceLUID uint64
+	networkAPI    *windowsNetworkAPI
 }
 
 type routeTarget struct {
@@ -124,7 +125,7 @@ func (s *Session) configure(trace func(string)) error {
 	}
 	traceVPNStep(trace, "wait interface", step)
 	step = time.Now()
-	if err := run("netsh", "interface", "ipv4", "set", "address", "name="+interfaceName, "static", interfaceIPv4, interfaceMask); err != nil {
+	if err := s.configureIPv4Address(); err != nil {
 		return fmt.Errorf("configure VPN IPv4 address: %w", err)
 	}
 	traceVPNStep(trace, "configure IPv4 address", step)
@@ -155,7 +156,7 @@ func (s *Session) configure(trace func(string)) error {
 	step = time.Now()
 	traceVPNMessage(trace, "System VPN step: configure bypass routes skipped on Windows")
 	step = time.Now()
-	if err := s.configureRoutes(); err != nil {
+	if err := s.configureRoutes(trace); err != nil {
 		return err
 	}
 	traceVPNStep(trace, "configure VPN routes", step)
@@ -181,28 +182,6 @@ func normalizeRouteMetric(value int) int {
 		return defaultRouteMetric
 	}
 	return value
-}
-
-func (s *Session) configureInterfaceMetric() error {
-	metric := fmt.Sprint(s.config.RouteMetric)
-	if err := run("netsh", "interface", "ipv4", "set", "interface", "interface="+interfaceName, "metric="+metric); err != nil {
-		return fmt.Errorf("configure VPN IPv4 interface metric: %w", err)
-	}
-	if s.config.EnableIPv6 {
-		if err := run("netsh", "interface", "ipv6", "set", "interface", "interface="+interfaceName, "metric="+metric); err != nil {
-			return fmt.Errorf("configure VPN IPv6 interface metric: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *Session) configureIPv6Address() error {
-	_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd00::2")
-	_ = run("netsh", "interface", "ipv6", "delete", "address", "interface="+interfaceName, "address=fd60:173:33::2")
-	if err := run("netsh", "interface", "ipv6", "add", "address", "interface="+interfaceName, "address=fd60:173:33::2/128"); err != nil {
-		return fmt.Errorf("configure VPN IPv6 address: %w", err)
-	}
-	return nil
 }
 
 func (s *Session) configureDNSLeakProtection(trace func(string)) error {
@@ -260,6 +239,10 @@ func (s *Session) configureDNSLeakProtection(trace func(string)) error {
 		}
 	}
 	for _, result := range ordered {
+		if result.err != nil {
+			traceVPNMessage(trace, fmt.Sprintf("System VPN step: ensure DNS leak rule %s %s remote %s failed after %s: %v", result.action, result.protocol, result.remoteIP, result.elapsed.Round(time.Millisecond), result.err))
+			continue
+		}
 		traceVPNMessage(trace, fmt.Sprintf(
 			"System VPN step: ensure DNS leak rule %s %s remote %s completed in %s",
 			result.action,
@@ -269,52 +252,10 @@ func (s *Session) configureDNSLeakProtection(trace func(string)) error {
 		))
 	}
 	if firstErr != nil {
-		return firstErr
+		// All workers have finished; roll back the batch rather than leaving a
+		// partially configured global DNS policy after a failed VPN start.
+		return errors.Join(firstErr, cleanupDNSLeakFirewallRules())
 	}
-	return nil
-}
-
-func ensureDNSLeakFirewallRule(name string, action string, protocol string, remoteIP string) error {
-	_ = removeDNSLeakFirewallRule(name)
-	return addDNSLeakFirewallRule(name, action, protocol, remoteIP)
-}
-
-func addDNSLeakFirewallRule(name string, action string, protocol string, remoteIP string) error {
-	if err := run("netsh", "advfirewall", "firewall", "add", "rule",
-		"name="+name,
-		"dir=out",
-		"action="+action,
-		"protocol="+protocol,
-		"remoteip="+remoteIP,
-		"remoteport=53",
-		"service=Dnscache",
-		"profile=any",
-		"enable=yes"); err != nil {
-		return fmt.Errorf("add DNS leak firewall rule %s: %w", name, err)
-	}
-	return nil
-}
-
-func cleanupDNSLeakFirewallRules() error {
-	for _, name := range []string{
-		dnsLeakRuleUDPLow,
-		dnsLeakRuleUDPHigh,
-		dnsLeakRuleTCPLow,
-		dnsLeakRuleTCPHigh,
-		dnsLeakRuleUDPIPv6,
-		dnsLeakRuleTCPIPv6,
-		"Gonc VPN DNS Leak Protection Dnscache UDP 53 loopback DNS proxy allow",
-		"Gonc VPN DNS Leak Protection Dnscache TCP 53 loopback DNS proxy allow",
-	} {
-		_ = removeDNSLeakFirewallRule(name)
-	}
-	return nil
-}
-
-func removeDNSLeakFirewallRule(name string) error {
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+name)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmd.Run()
 	return nil
 }
 
@@ -331,24 +272,13 @@ func (s *Session) DNSServers() []string {
 
 func (s *Session) configureDNS(useProxy bool) error {
 	if useProxy {
-		if err := run("netsh", "interface", "ipv4", "set", "dnsservers", "name="+interfaceName, "static", dnsProxyIPv4, "primary", "validate=no"); err != nil {
+		if err := configureWindowsDNS([]string{dnsProxyIPv4}, nil); err != nil {
 			return fmt.Errorf("configure VPN DNS proxy: %w", err)
 		}
-		_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
 		return nil
 	}
 	ipv4, ipv6 := directDNSServers(s.config.DNSServers, s.config.EnableIPv6)
-	if err := configureWindowsDNSServers("ipv4", ipv4); err != nil {
-		return fmt.Errorf("configure VPN direct IPv4 DNS: %w", err)
-	}
-	if s.config.EnableIPv6 && len(ipv6) > 0 {
-		if err := configureWindowsDNSServers("ipv6", ipv6); err != nil {
-			return fmt.Errorf("configure VPN direct IPv6 DNS: %w", err)
-		}
-	} else {
-		_ = run("netsh", "interface", "ipv6", "delete", "dnsservers", "name="+interfaceName, "all")
-	}
-	return nil
+	return configureWindowsDNS(ipv4, ipv6)
 }
 
 // Keep the TUN and all capture routes installed while changing DNS upstreams.
@@ -377,15 +307,19 @@ func (s *Session) startDNSProxy(trace func(string)) error {
 	return nil
 }
 
-func configureWindowsDNSServers(family string, servers []string) error {
+func configureWindowsDNSServersNetsh(family string, servers []string) error {
+	return configureWindowsDNSServersNetshWith(family, servers, run)
+}
+
+func configureWindowsDNSServersNetshWith(family string, servers []string, runCommand func(string, ...string) error) error {
 	if len(servers) == 0 {
-		return run("netsh", "interface", family, "delete", "dnsservers", "name="+interfaceName, "all")
+		return runCommand("netsh", "interface", family, "delete", "dnsservers", "name="+interfaceName, "all")
 	}
-	if err := run("netsh", "interface", family, "set", "dnsservers", "name="+interfaceName, "static", servers[0], "primary", "validate=no"); err != nil {
+	if err := runCommand("netsh", "interface", family, "set", "dnsservers", "name="+interfaceName, "static", servers[0], "primary", "validate=no"); err != nil {
 		return err
 	}
 	for index, server := range servers[1:] {
-		if err := run("netsh", "interface", family, "add", "dnsservers", "name="+interfaceName, "address="+server, "index="+fmt.Sprint(index+2), "validate=no"); err != nil {
+		if err := runCommand("netsh", "interface", family, "add", "dnsservers", "name="+interfaceName, "address="+server, "index="+fmt.Sprint(index+2), "validate=no"); err != nil {
 			return err
 		}
 	}
@@ -469,63 +403,20 @@ func (s *Session) configureBypassRoutes() error {
 	return nil
 }
 
-func (s *Session) configureRoutes() error {
-	for _, cidr := range s.config.Routes {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
-			continue
-		}
-		if strings.Contains(cidr, ":") {
-			if err := run("netsh", "interface", "ipv6", "add", "route", cidr, "interface="+interfaceName, "metric="+fmt.Sprint(s.config.RouteMetric), "publish=no", "store=active"); err != nil {
-				return fmt.Errorf("add VPN IPv6 route %s: %w", cidr, err)
-			}
-			s.ownedRoutes = append(s.ownedRoutes, cidr)
-			continue
-		}
-		ip, _, err := net.ParseCIDR(cidr)
-		if err != nil || ip == nil {
-			return fmt.Errorf("invalid VPN route %s", cidr)
-		}
-		if err := run("netsh", "interface", "ipv4", "add", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "metric="+fmt.Sprint(s.config.RouteMetric), "store=active"); err != nil {
-			return fmt.Errorf("add VPN route %s: %w", cidr, err)
-		}
-		s.ownedRoutes = append(s.ownedRoutes, cidr)
+func (s *Session) configureRoutes(trace func(string)) error {
+	step := time.Now()
+	if err := s.addWindowsRoutes(); err != nil {
+		return err
 	}
-	return verifyWindowsRoutes(s.config.Routes)
-}
-
-func verifyWindowsRoutes(routes []string) error {
-	var quoted []string
-	for _, cidr := range routes {
-		p, err := netip.ParsePrefix(cidr)
-		if err != nil {
-			return err
-		}
-		quoted = append(quoted, "'"+p.Masked().String()+"'")
+	traceVPNStep(trace, "add VPN routes", step)
+	step = time.Now()
+	err := verifyWindowsRoutes(s.config.Routes)
+	if err == nil {
+		traceVPNStep(trace, "verify VPN routes (Windows API)", step)
+	} else {
+		traceVPNMessage(trace, fmt.Sprintf("System VPN step: verify VPN routes (Windows API) failed after %s: %v", time.Since(step).Round(time.Millisecond), err))
 	}
-	if len(quoted) == 0 {
-		return fmt.Errorf("no VPN routes configured")
-	}
-	script := "$ErrorActionPreference='Stop'; $routes=@(Get-NetRoute -InterfaceAlias 'Gonc' -PolicyStore ActiveStore); foreach($prefix in @(" + strings.Join(quoted, ",") + ")) { if(-not ($routes | Where-Object { $_.DestinationPrefix -eq $prefix })) { throw ('VPN route missing: '+$prefix) } }"
-	return run("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-}
-
-func (s *Session) cleanupRoutes() {
-	// Windows does not install bypass routes; never delete the user's host routes.
-	for _, cidr := range s.ownedRoutes {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
-			continue
-		}
-		if strings.Contains(cidr, ":") {
-			_ = run("netsh", "interface", "ipv6", "delete", "route", cidr, "interface="+interfaceName, "store=active")
-			continue
-		}
-		if ip, _, err := net.ParseCIDR(cidr); err == nil && ip != nil {
-			_ = run("netsh", "interface", "ipv4", "delete", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "store=active")
-		}
-	}
-	s.ownedRoutes = nil
+	return err
 }
 
 func findWintunDLL() (string, error) {

@@ -3,12 +3,12 @@ module gonc-gui
 go 1.27.1
 
 require (
+	github.com/go-ole/go-ole v1.3.0
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.12
+	github.com/threatexpert/gonc/v2 v2.6.13-0.20261116125136-ee76a9aa423e
 	github.com/wailsapp/wails/v2 v2.17.1
-	github.com/xjasonlyu/tun2socks/v2 v2.7.0 // indirect
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/image v0.41.0
 	golang.org/x/net v0.61.0
@@ -28,7 +28,6 @@ require (
 	github.com/go-chi/cors v1.2.2 // indirect
 	github.com/go-chi/render v1.0.3 // indirect
 	github.com/go-gost/relay v0.7.0 // indirect
-	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
@@ -65,6 +64,7 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	github.com/xjasonlyu/tun2socks/v2 v2.7.0 // indirect
 	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
@@ -83,6 +83,4 @@ require (
 )
 
 // Keep upstream import paths, but pin our fork with deferred TCP and IPv6 rejection.
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261116085757-aab02800c33f
-
-//replace github.com/threatexpert/gonc/v2 => ../gonetcat
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261116123949-4b0120a38bf2

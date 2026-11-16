@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -67,8 +66,12 @@ func StartElevated(ctx context.Context) (*Client, error) {
 
 // Start returns the DNS servers actually configured by the helper.
 func (c *Client) Start(config vpnconfig.Config) ([]string, error) {
+	return c.StartWithTrace(config, nil)
+}
+
+func (c *Client) StartWithTrace(config vpnconfig.Config, trace func(string)) ([]string, error) {
 	if c.conn != nil {
-		resp, err := c.call(request{Op: OpStart, Config: config})
+		resp, err := c.callWithTrace(request{Op: OpStart, Config: config, Trace: trace != nil}, trace)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +81,7 @@ func (c *Client) Start(config vpnconfig.Config) ([]string, error) {
 		_ = c.local.Stop()
 		c.local = nil
 	}
-	session, err := winvpn.Start(config)
+	session, err := winvpn.StartWithTrace(config, trace)
 	if err != nil {
 		return nil, err
 	}
@@ -128,22 +131,16 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) call(req request) (response, error) {
+	return c.callWithTrace(req, nil)
+}
+
+func (c *Client) callWithTrace(req request, trace func(string)) (response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.enc.Encode(req); err != nil {
 		return response{}, err
 	}
-	var resp response
-	if err := c.dec.Decode(&resp); err != nil {
-		return response{}, err
-	}
-	if !resp.OK {
-		if resp.Error == "" {
-			resp.Error = "VPN helper command failed"
-		}
-		return resp, errors.New(resp.Error)
-	}
-	return resp, nil
+	return readResponse(c.dec, trace)
 }
 
 func randomToken() (string, error) {

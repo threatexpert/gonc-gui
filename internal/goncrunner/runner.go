@@ -452,7 +452,9 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				},
 				start: func(s vpnTunnelSnapshot, ipv6 bool) ([]string, error) {
 					logDNSFallback(req.DNSServers, ipv6, sink)
-					return helper.Start(configFor(s, ipv6))
+					return helper.StartWithTrace(configFor(s, ipv6), func(message string) {
+						emit(sink, "log", "info", message)
+					})
 				},
 				stop: helper.Stop,
 				applying: func(s vpnTunnelSnapshot, ipv6 bool) {
