@@ -53,13 +53,13 @@ func TestDarwinStaticIPv6HostWithLLInfo(t *testing.T) {
 	}
 	// The same acceptance rule is used during cleanup, so a route created by
 	// this session is not forgotten merely because the kernel added LLINFO.
-	r := ownedRoute{cidr: prefix.String(), iface: "utun4"}
+	r := ownedRoute{prefix: prefix, iface: "utun4"}
 	present := false
 	var commands []string
-	l := routeLedger{present: func(ownedRoute) (bool, error) { return present && stableDarwinRoute(flags, prefix), nil }, command: func(op string, _ ownedRoute) error {
+	l := routeLedger{present: func(ownedRoute) (bool, error) { return present && stableDarwinRoute(flags, prefix), nil }, command: func(op string, _ ownedRoute) routeMutation {
 		commands = append(commands, op)
 		present = op == "add"
-		return nil
+		return routeMutation{state: routeMutationSucceeded}
 	}}
 	if err := l.add(r); err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestParseDarwinRouteLookup(t *testing.T) {
 func TestDarwinBypassPlanningAndReconnect(t *testing.T) {
 	lookup := func(ip string) (darwinRouteLookup, error) { return darwinRouteLookup{"en0", "192.168.50.1"}, nil }
 	routes, err := planDarwinBypass([]string{"203.0.113.7", "203.0.113.7"}, "utun4", lookup)
-	if err != nil || len(routes) != 1 || routes[0].cidr != "203.0.113.7/32" {
+	if err != nil || len(routes) != 1 || routes[0].prefix.String() != "203.0.113.7/32" {
 		t.Fatal(routes, err)
 	}
 	if err := verifyDarwinBypass(routes, "utun4", lookup, nil); err != nil {
@@ -117,7 +117,7 @@ func TestDarwinBypassPlanningAndReconnect(t *testing.T) {
 	// A new session resolves the changed peer/network afresh, not an old exit.
 	lookup6 := func(string) (darwinRouteLookup, error) { return darwinRouteLookup{"en1", "fe80::1%en1"}, nil }
 	next, err := planDarwinBypass([]string{"2001:db8::7"}, "utun5", lookup6)
-	if err != nil || next[0].iface != "en1" || next[0].cidr != "2001:db8::7/128" {
+	if err != nil || next[0].iface != "en1" || next[0].prefix.String() != "2001:db8::7/128" {
 		t.Fatal(next, err)
 	}
 	if err := verifyDarwinBypass(next, "utun5", lookup6, nil); err != nil {
@@ -175,14 +175,14 @@ func TestDarwinConfigurationStagesAndRollback(t *testing.T) {
 			var calls []string
 			failure := errors.New("failure")
 			owned := map[ownedRoute]bool{}
-			r := ownedRoute{cidr: "203.0.113.7/32", iface: "en0", gateway: "192.168.50.1"}
-			ledger := routeLedger{present: func(r ownedRoute) (bool, error) { return owned[r], nil }, command: func(op string, r ownedRoute) error {
+			r := ownedRoute{prefix: netip.MustParsePrefix("203.0.113.7/32"), iface: "en0", gateway: "192.168.50.1"}
+			ledger := routeLedger{present: func(r ownedRoute) (bool, error) { return owned[r], nil }, command: func(op string, r ownedRoute) routeMutation {
 				if op == "add" {
 					owned[r] = true
 				} else {
 					delete(owned, r)
 				}
-				return nil
+				return routeMutation{state: routeMutationSucceeded}
 			}}
 			step := func(name string) error {
 				calls = append(calls, name)
@@ -192,12 +192,12 @@ func TestDarwinConfigurationStagesAndRollback(t *testing.T) {
 				return nil
 			}
 			checks := 0
-			err := applyDarwinNetwork(func() error {
+			err := applyDarwinNetwork(darwinNetworkSteps{bypass: func() error {
 				if err := step("bypass"); err != nil {
 					return err
 				}
 				return ledger.add(r)
-			}, func() error { return step("capture") }, func() error { return step("dns") }, func() error { checks++; return step(fmt.Sprintf("verify%d", checks)) })
+			}, capture: func() error { return step("capture") }, dns: func() error { return step("dns") }, verifyBypass: func() error { checks++; return step(fmt.Sprintf("verify%d", checks)) }})
 			if failAt == "" {
 				if err != nil || !reflect.DeepEqual(calls, []string{"bypass", "capture", "verify1", "dns", "verify2"}) {
 					t.Fatal(calls, err)
@@ -219,17 +219,17 @@ func TestDarwinConfigurationStagesAndRollback(t *testing.T) {
 }
 
 func TestDarwinCloneDoesNotSuppressStaticBypass(t *testing.T) {
-	r := ownedRoute{cidr: "203.0.113.7/32", iface: "en0", gateway: "192.168.50.1"}
+	r := ownedRoute{prefix: netip.MustParsePrefix("203.0.113.7/32"), iface: "en0", gateway: "192.168.50.1"}
 	flags := darwinRouteUp | darwinRouteHost | darwinRouteWasCloned | darwinRouteIfScope
 	adds := 0
-	l := routeLedger{present: func(r ownedRoute) (bool, error) { return stableDarwinRoute(flags, netip.MustParsePrefix(r.cidr)), nil }, command: func(op string, _ ownedRoute) error {
+	l := routeLedger{present: func(r ownedRoute) (bool, error) { return stableDarwinRoute(flags, r.prefix), nil }, command: func(op string, _ ownedRoute) routeMutation {
 		if op == "add" {
 			adds++
 			flags = darwinRouteUp | darwinRouteHost | darwinRouteStatic
 		} else {
 			flags = 0
 		}
-		return nil
+		return routeMutation{state: routeMutationSucceeded}
 	}}
 	if err := l.add(r); err != nil || adds != 1 || len(l.owned) != 1 {
 		t.Fatal(adds, l.owned, err)

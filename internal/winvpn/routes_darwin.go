@@ -26,8 +26,8 @@ func ribIP(a route.Addr) net.IP {
 
 // Read the kernel RIB, not route(8)'s exit status (which can be zero on EEXIST).
 func routeInstalled(r ownedRoute) (bool, error) {
-	if _, err := netip.ParsePrefix(r.cidr); err != nil {
-		return false, err
+	if !r.prefix.IsValid() {
+		return false, fmt.Errorf("invalid route prefix")
 	}
 	iface, err := net.InterfaceByName(r.iface)
 	if err != nil {
@@ -48,8 +48,8 @@ func routeInstalled(r ownedRoute) (bool, error) {
 }
 
 func matchesDarwinRoute(r ownedRoute, iface net.Interface, msgs []route.Message) bool {
-	prefix, err := netip.ParsePrefix(r.cidr)
-	if err != nil || (r.index != 0 && r.index != iface.Index) {
+	prefix := r.prefix
+	if !prefix.IsValid() || (r.index != 0 && r.index != iface.Index) {
 		return false
 	}
 	for _, msg := range msgs {
@@ -128,17 +128,17 @@ func nativeRouteTo(ip string) (darwinRouteLookup, error) {
 	return parseDarwinRouteLookup(string(output))
 }
 
-func runDarwinRoute(op string, r ownedRoute) error {
+func runDarwinRoute(op string, r ownedRoute) routeMutation {
 	output, err := exec.Command("route", routeArgs(op, r)...).CombinedOutput()
-	return checkDarwinRouteOutput(op, r, string(output), err)
+	return parseDarwinRouteMutation(op, r, string(output), err)
 }
 
 // Called only after failed installation verification, before rollback removes
 // the TUN interface and destroys the evidence needed to diagnose the failure.
 func diagnoseDarwinRoute(r ownedRoute) string {
-	prefix, err := netip.ParsePrefix(r.cidr)
-	if err != nil {
-		return err.Error()
+	prefix := r.prefix
+	if !prefix.IsValid() {
+		return "invalid route prefix"
 	}
 	var entries []string
 	buf, err := route.FetchRIB(syscall.AF_UNSPEC, route.RIBTypeRoute, 0)

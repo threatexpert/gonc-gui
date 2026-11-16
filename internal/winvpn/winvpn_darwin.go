@@ -126,7 +126,12 @@ func (s *Session) configure() error {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}
-	return applyDarwinNetwork(s.configureBypassRoutes, s.configureRoutes, s.configureDNS, s.verifyBypassRoutes)
+	return applyDarwinNetwork(darwinNetworkSteps{
+		bypass:       s.configureBypassRoutes,
+		capture:      s.configureRoutes,
+		dns:          s.configureDNS,
+		verifyBypass: s.verifyBypassRoutes,
+	})
 }
 
 func (s *Session) DNSServers() []string {
@@ -158,12 +163,11 @@ func (s *Session) configureDNS() error {
 			return fmt.Errorf("macOS VPN DNS requires a plain IP address: %s", server)
 		}
 		for _, bypass := range s.bypassRoutes {
-			p, _ := netip.ParsePrefix(bypass.cidr)
-			if p.Addr() == addr {
+			if bypass.prefix.Addr() == addr {
 				return fmt.Errorf("VPN DNS %s conflicts with tunnel peer bypass", addr)
 			}
 		}
-		if err := s.addOwnedRoute(ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: s.ifaceName}); err != nil {
+		if err := s.addOwnedRoute(ownedRoute{prefix: netip.PrefixFrom(addr, addr.BitLen()), iface: s.ifaceName}); err != nil {
 			return fmt.Errorf("configure VPN DNS route for %s: %w", addr, err)
 		}
 	}
@@ -213,10 +217,10 @@ func (s *Session) configureBypassRoutes() error {
 	s.bypassRoutes = routes
 	for _, r := range routes {
 		if s.trace != nil {
-			s.trace(fmt.Sprintf("VPN bypass %s: native interface=%s gateway=%s", r.cidr, r.iface, r.gateway))
+			s.trace(fmt.Sprintf("VPN bypass %s: native interface=%s gateway=%s", r.prefix, r.iface, r.gateway))
 		}
 		if err := s.addOwnedRoute(r); err != nil {
-			return fmt.Errorf("add VPN bypass route %s: %w", r.cidr, err)
+			return fmt.Errorf("add VPN bypass route %s: %w", r.prefix, err)
 		}
 	}
 	return nil
@@ -232,11 +236,11 @@ func (s *Session) configureRoutes() error {
 		if cidr == "" {
 			continue
 		}
-		ip, _, err := net.ParseCIDR(cidr)
-		if err != nil || ip == nil {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
 			return fmt.Errorf("invalid VPN route %s", cidr)
 		}
-		if err := s.addOwnedRoute(ownedRoute{cidr: cidr, iface: s.ifaceName}); err != nil {
+		if err := s.addOwnedRoute(ownedRoute{prefix: prefix.Masked(), iface: s.ifaceName}); err != nil {
 			return fmt.Errorf("add VPN route %s: %w", cidr, err)
 		}
 	}
@@ -363,25 +367,6 @@ func waitInterface(name string, timeout time.Duration) error {
 		time.Sleep(150 * time.Millisecond)
 	}
 	return fmt.Errorf("VPN interface %q did not appear", name)
-}
-
-func currentDefaultGateway() (string, error) {
-	cmd := exec.Command("route", "-n", "get", "default")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "gateway:") {
-			continue
-		}
-		gateway := strings.TrimSpace(strings.TrimPrefix(line, "gateway:"))
-		if gateway != "" {
-			return gateway, nil
-		}
-	}
-	return "", fmt.Errorf("default gateway not found")
 }
 
 func run(name string, args ...string) error {

@@ -71,7 +71,7 @@ func TestDarwinIsolatedIPv6HostRoute(t *testing.T) {
 			}
 		}
 	})
-	r := ownedRoute{cidr: netip.PrefixFrom(target, 128).String(), iface: name}
+	r := ownedRoute{prefix: netip.PrefixFrom(target, 128), iface: name}
 	if err := s.addOwnedRoute(r); err != nil {
 		t.Fatal(err)
 	}

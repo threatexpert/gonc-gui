@@ -109,7 +109,7 @@ func planDarwinBypass(ips []string, tun string, lookup func(string) (darwinRoute
 		if native.iface == "" || native.iface == tun {
 			return nil, fmt.Errorf("tunnel peer %s already routes to VPN interface %s; refusing recursive bypass", addr, native.iface)
 		}
-		routes = append(routes, ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: native.iface, gateway: native.gateway})
+		routes = append(routes, ownedRoute{prefix: netip.PrefixFrom(addr, addr.BitLen()), iface: native.iface, gateway: native.gateway})
 	}
 	if len(routes) == 0 {
 		return nil, fmt.Errorf("no tunnel peer IP available to protect from VPN capture")
@@ -119,13 +119,10 @@ func planDarwinBypass(ips []string, tun string, lookup func(string) (darwinRoute
 
 func verifyDarwinBypass(routes []ownedRoute, tun string, lookup func(string) (darwinRouteLookup, error), trace func(string)) error {
 	for _, r := range routes {
-		prefix, err := netip.ParsePrefix(r.cidr)
-		if err != nil {
-			return err
-		}
+		prefix := r.prefix
 		actual, err := lookup(prefix.Addr().String())
 		if err != nil {
-			return fmt.Errorf("verify VPN bypass %s: %w", r.cidr, err)
+			return fmt.Errorf("verify VPN bypass %s: %w", r.prefix, err)
 		}
 		if trace != nil {
 			trace(fmt.Sprintf("VPN bypass %s: actual interface=%s gateway=%s; expected interface=%s gateway=%s", prefix.Addr(), actual.iface, actual.gateway, r.iface, r.gateway))
@@ -169,10 +166,23 @@ func sameDarwinDNS(a, b []string) bool {
 
 // The first verification detects capture-induced recursion before changing DNS;
 // the second catches conflicts introduced by DNS host routes before readiness.
-func applyDarwinNetwork(bypass, capture, dns, verify func() error) error {
-	for _, step := range []func() error{bypass, capture, verify, dns, verify} {
-		if err := step(); err != nil {
-			return err
+type darwinNetworkSteps struct {
+	bypass, capture, dns, verifyBypass func() error
+}
+
+func applyDarwinNetwork(steps darwinNetworkSteps) error {
+	for _, step := range []struct {
+		name string
+		run  func() error
+	}{
+		{"configure bypass routes", steps.bypass},
+		{"configure capture routes", steps.capture},
+		{"verify bypass after capture", steps.verifyBypass},
+		{"configure DNS", steps.dns},
+		{"verify bypass after DNS", steps.verifyBypass},
+	} {
+		if err := step.run(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
 		}
 	}
 	return nil

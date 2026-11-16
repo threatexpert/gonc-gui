@@ -53,7 +53,7 @@ func TestDarwinRIBHostAndNetworkRoutes(t *testing.T) {
 				addrs = append(addrs, tc.mask)
 			}
 			msg := &route.RouteMessage{Index: 20, Flags: flags, Addrs: addrs}
-			r := ownedRoute{cidr: tc.cidr, iface: "utun4", index: 20}
+			r := ownedRoute{prefix: netip.MustParsePrefix(tc.cidr), iface: "utun4", index: 20}
 			if !matchesDarwinRoute(r, iface, []route.Message{msg}) {
 				t.Fatal("valid route not found")
 			}
@@ -79,7 +79,7 @@ func TestDarwinRIBHostAndNetworkRoutes(t *testing.T) {
 
 func TestDarwinRIBBypassGateway(t *testing.T) {
 	iface := net.Interface{Index: 11, Name: "en0"}
-	r := ownedRoute{cidr: "2001:db8::7/128", iface: "en0", gateway: "fe80::1%en0", index: 11}
+	r := ownedRoute{prefix: netip.MustParsePrefix("2001:db8::7/128"), iface: "en0", gateway: "fe80::1%en0", index: 11}
 	gw := &route.Inet6Addr{IP: netip.MustParseAddr("fe80::1").As16(), ZoneID: 11}
 	msg := &route.RouteMessage{Index: 11, Flags: syscall.RTF_UP | syscall.RTF_STATIC | syscall.RTF_HOST | syscall.RTF_GATEWAY, Addrs: []route.Addr{&route.Inet6Addr{IP: netip.MustParseAddr("2001:db8::7").As16()}, gw}}
 	if !matchesDarwinRoute(r, iface, []route.Message{msg}) {
