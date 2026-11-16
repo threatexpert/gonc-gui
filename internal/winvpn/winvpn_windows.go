@@ -3,6 +3,7 @@
 package winvpn
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -17,7 +18,6 @@ import (
 	"gonc-gui/internal/dnsproxy"
 	"gonc-gui/internal/vpnconfig"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"golang.org/x/sys/windows"
 )
 
@@ -37,9 +37,10 @@ const (
 )
 
 type Session struct {
-	mu       sync.Mutex
-	config   vpnconfig.Config
-	dnsProxy *dnsproxy.Server
+	mu          sync.Mutex
+	config      vpnconfig.Config
+	dnsProxy    *dnsproxy.Server
+	ownedRoutes []string
 }
 
 type routeTarget struct {
@@ -65,6 +66,8 @@ func Start(config vpnconfig.Config) (*Session, error) {
 }
 
 func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, error) {
+	config.Routes = vpnconfig.DesktopRoutes(config.Routes)
+	config.EnableIPv6 = vpnconfig.HasIPv6(config.Routes)
 	started := time.Now()
 	defer func() {
 		traceVPNStep(trace, "total", started)
@@ -91,15 +94,14 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 	}
 	traceVPNStep(trace, "configure DNS leak protection", step)
 	step = time.Now()
-	engine.Insert(&engine.Key{
-		Device:   "tun://" + interfaceName,
-		Proxy:    config.SOCKS5Endpoint,
-		LogLevel: config.LogLevel,
-		MTU:      config.MTU,
-	})
+	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
+		return nil, errors.Join(err, session.Stop())
+	}
 	traceVPNStep(trace, "insert tun2socks engine", step)
 	step = time.Now()
-	engine.Start()
+	if err := startEngine(); err != nil {
+		return nil, errors.Join(err, session.Stop())
+	}
 	traceVPNStep(trace, "start tun2socks engine", step)
 	if err := session.configure(trace); err != nil {
 		_ = session.Stop()
@@ -117,8 +119,7 @@ func (s *Session) Stop() error {
 		s.dnsProxy = nil
 	}
 	err := cleanupDNSLeakFirewallRules()
-	engine.Stop()
-	return err
+	return errors.Join(err, stopEngine())
 }
 
 func (s *Session) configure(trace func(string)) error {
@@ -145,17 +146,14 @@ func (s *Session) configure(trace func(string)) error {
 	}
 	traceVPNStep(trace, "configure interface metric", step)
 	step = time.Now()
-	dnsProxyReady := true
 	if err := s.startDNSProxy(trace); err != nil {
-		if s.config.BlockDNSLeak {
-			return err
-		}
-		dnsProxyReady = false
-		traceVPNMessage(trace, "System VPN warning: DNS proxy unavailable; falling back to direct DNS servers: "+err.Error())
+		// A direct fallback can escape split routes. Do not advertise readiness
+		// with DNS silently falling back to the physical network.
+		return err
 	}
 	traceVPNStep(trace, "start DNS proxy", step)
 	step = time.Now()
-	if err := s.configureDNS(dnsProxyReady); err != nil {
+	if err := s.configureDNS(true); err != nil {
 		return err
 	}
 	traceVPNStep(trace, "configure DNS", step)
@@ -358,6 +356,23 @@ func (s *Session) configureDNS(useProxy bool) error {
 	return nil
 }
 
+// Keep the TUN and all capture routes installed while changing DNS upstreams.
+func (s *Session) UpdateDNS(servers []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dnsProxy != nil {
+		if err := s.dnsProxy.Close(); err != nil {
+			return err
+		}
+		s.dnsProxy = nil
+	}
+	s.config.DNSServers = append([]string{}, servers...)
+	if err := s.startDNSProxy(nil); err != nil {
+		return err
+	}
+	return s.configureDNS(true)
+}
+
 func (s *Session) startDNSProxy(trace func(string)) error {
 	proxy, err := dnsproxy.StartWithTrace(dnsProxyIPv4, s.config.SOCKS5Endpoint, s.config.DNSServers, trace)
 	if err != nil {
@@ -403,11 +418,8 @@ func directDNSServers(values []string, enableIPv6 bool) ([]string, []string) {
 			ipv6 = append(ipv6, addr.String())
 		}
 	}
-	if len(ipv4) == 0 {
+	if len(ipv4) == 0 && len(ipv6) == 0 {
 		ipv4 = append(ipv4, "8.8.8.8")
-	}
-	if enableIPv6 && len(ipv6) == 0 {
-		ipv6 = append(ipv6, "2001:4860:4860::8888")
 	}
 	return ipv4, ipv6
 }
@@ -469,12 +481,10 @@ func (s *Session) configureRoutes() error {
 			continue
 		}
 		if strings.Contains(cidr, ":") {
-			if !s.config.EnableIPv6 {
-				continue
-			}
-			if err := run("netsh", "interface", "ipv6", "add", "route", cidr, "interface="+interfaceName, "metric="+fmt.Sprint(s.config.RouteMetric), "publish=no"); err != nil {
+			if err := run("netsh", "interface", "ipv6", "add", "route", cidr, "interface="+interfaceName, "metric="+fmt.Sprint(s.config.RouteMetric), "publish=no", "store=active"); err != nil {
 				return fmt.Errorf("add VPN IPv6 route %s: %w", cidr, err)
 			}
+			s.ownedRoutes = append(s.ownedRoutes, cidr)
 			continue
 		}
 		ip, _, err := net.ParseCIDR(cidr)
@@ -484,35 +494,43 @@ func (s *Session) configureRoutes() error {
 		if err := run("netsh", "interface", "ipv4", "add", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "metric="+fmt.Sprint(s.config.RouteMetric), "store=active"); err != nil {
 			return fmt.Errorf("add VPN route %s: %w", cidr, err)
 		}
+		s.ownedRoutes = append(s.ownedRoutes, cidr)
 	}
-	return nil
+	return verifyWindowsRoutes(s.config.Routes)
+}
+
+func verifyWindowsRoutes(routes []string) error {
+	var quoted []string
+	for _, cidr := range routes {
+		p, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return err
+		}
+		quoted = append(quoted, "'"+p.Masked().String()+"'")
+	}
+	if len(quoted) == 0 {
+		return fmt.Errorf("no VPN routes configured")
+	}
+	script := "$ErrorActionPreference='Stop'; $routes=@(Get-NetRoute -InterfaceAlias 'Gonc' -PolicyStore ActiveStore); foreach($prefix in @(" + strings.Join(quoted, ",") + ")) { if(-not ($routes | Where-Object { $_.DestinationPrefix -eq $prefix })) { throw ('VPN route missing: '+$prefix) } }"
+	return run("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 }
 
 func (s *Session) cleanupRoutes() {
-	for _, ip := range s.config.BypassIPs {
-		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-		if err != nil || !addr.IsValid() {
-			continue
-		}
-		if addr.Is6() {
-			_ = run("netsh", "interface", "ipv6", "delete", "route", addr.String()+"/128")
-			continue
-		}
-		_ = run("route", "delete", addr.String(), "mask", "255.255.255.255")
-	}
-	for _, cidr := range s.config.Routes {
+	// Windows does not install bypass routes; never delete the user's host routes.
+	for _, cidr := range s.ownedRoutes {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
 			continue
 		}
 		if strings.Contains(cidr, ":") {
-			_ = run("netsh", "interface", "ipv6", "delete", "route", cidr, "interface="+interfaceName)
+			_ = run("netsh", "interface", "ipv6", "delete", "route", cidr, "interface="+interfaceName, "store=active")
 			continue
 		}
 		if ip, _, err := net.ParseCIDR(cidr); err == nil && ip != nil {
-			_ = run("netsh", "interface", "ipv4", "delete", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0")
+			_ = run("netsh", "interface", "ipv4", "delete", "route", "prefix="+cidr, "interface="+interfaceName, "nexthop=0.0.0.0", "store=active")
 		}
 	}
+	s.ownedRoutes = nil
 }
 
 func findWintunDLL() (string, error) {

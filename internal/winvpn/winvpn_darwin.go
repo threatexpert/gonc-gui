@@ -3,6 +3,7 @@
 package winvpn
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -14,8 +15,6 @@ import (
 	"time"
 
 	"gonc-gui/internal/vpnconfig"
-
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
 const (
@@ -25,12 +24,13 @@ const (
 )
 
 type Session struct {
-	mu         sync.Mutex
-	config     vpnconfig.Config
-	ifaceName  string
-	nameFile   string
-	dnsRestore []dnsServiceState
-	appliedDNS []string
+	mu          sync.Mutex
+	config      vpnconfig.Config
+	ifaceName   string
+	nameFile    string
+	dnsRestore  []dnsServiceState
+	appliedDNS  []string
+	routeLedger *routeLedger
 }
 
 type dnsServiceState struct {
@@ -49,6 +49,8 @@ func CheckRuntime() error {
 }
 
 func Start(config vpnconfig.Config) (*Session, error) {
+	config.Routes = vpnconfig.DesktopRoutes(config.Routes)
+	config.EnableIPv6 = vpnconfig.HasIPv6(config.Routes)
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
 		return nil, fmt.Errorf("SOCKS5 endpoint is required")
 	}
@@ -76,24 +78,25 @@ func Start(config vpnconfig.Config) (*Session, error) {
 		}
 	}()
 
-	engine.Insert(&engine.Key{
-		Device:   "tun://" + interfaceName,
-		Proxy:    config.SOCKS5Endpoint,
-		LogLevel: config.LogLevel,
-		MTU:      config.MTU,
-	})
-	engine.Start()
+	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
+		_ = os.Remove(nameFile)
+		return nil, err
+	}
+	if err := startEngine(); err != nil {
+		_ = stopEngine()
+		_ = os.Remove(nameFile)
+		return nil, err
+	}
 
 	actualName, err := waitTUNName(nameFile, 8*time.Second)
 	if err != nil {
-		engine.Stop()
+		_ = stopEngine()
 		_ = os.Remove(nameFile)
 		return nil, err
 	}
 	session := &Session{config: config, ifaceName: actualName, nameFile: nameFile}
 	if err := session.configure(); err != nil {
-		_ = session.Stop()
-		return nil, err
+		return nil, errors.Join(err, session.Stop())
 	}
 	return session, nil
 }
@@ -105,12 +108,12 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cleanupRoutes()
-	engine.Stop()
+	err := s.cleanupRoutes()
+	err = errors.Join(err, stopEngine())
 	if s.nameFile != "" {
 		_ = os.Remove(s.nameFile)
 	}
-	return nil
+	return err
 }
 
 func (s *Session) configure() error {
@@ -125,21 +128,27 @@ func (s *Session) configure() error {
 			return fmt.Errorf("configure VPN IPv6 address: %w", err)
 		}
 	}
-	s.configureDNS()
 	if err := s.configureBypassRoutes(); err != nil {
 		return err
 	}
 	if err := s.configureRoutes(); err != nil {
 		return err
 	}
-	return nil
+	return s.configureDNS()
 }
 
 func (s *Session) DNSServers() []string {
 	return append([]string{}, s.appliedDNS...)
 }
 
-func (s *Session) configureDNS() {
+func (s *Session) UpdateDNS(servers []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config.DNSServers = append([]string{}, servers...)
+	return s.configureDNS()
+}
+
+func (s *Session) configureDNS() error {
 	var dns []string
 	for _, server := range s.config.DNSServers {
 		server = strings.TrimSpace(server)
@@ -148,37 +157,63 @@ func (s *Session) configureDNS() {
 		}
 	}
 	if len(dns) == 0 {
-		return
+		return fmt.Errorf("no usable VPN DNS servers")
+	}
+	// Explicit DNS host routes also keep split-tunnel/fallback DNS in the VPN.
+	for _, server := range dns {
+		addr, err := netip.ParseAddr(server)
+		if err != nil {
+			return fmt.Errorf("macOS VPN DNS requires a plain IP address: %s", server)
+		}
+		if err := s.addOwnedRoute(ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: s.ifaceName}); err != nil {
+			return err
+		}
 	}
 	services, err := networkServices()
 	if err != nil {
-		return
+		return err
+	}
+	if len(services) == 0 {
+		return fmt.Errorf("no network services available to configure VPN DNS")
 	}
 	for _, service := range services {
-		state, err := currentDNSServers(service)
-		if err == nil {
+		saved := false
+		for _, state := range s.dnsRestore {
+			if state.name == service {
+				saved = true
+				break
+			}
+		}
+		if !saved {
+			state, err := currentDNSServers(service)
+			if err != nil {
+				return fmt.Errorf("read DNS for %s: %w", service, err)
+			}
 			s.dnsRestore = append(s.dnsRestore, state)
 		}
-		if err := run("networksetup", append([]string{"-setdnsservers", service}, dns...)...); err == nil {
-			s.appliedDNS = append([]string{}, dns...)
+		if err := run("networksetup", append([]string{"-setdnsservers", service}, dns...)...); err != nil {
+			return err
+		}
+		actual, err := currentDNSServers(service)
+		if err != nil || strings.Join(actual.servers, "\n") != strings.Join(dns, "\n") {
+			return fmt.Errorf("VPN DNS verification failed for %s", service)
 		}
 	}
+	s.appliedDNS = append([]string{}, dns...)
+	return nil
 }
 
 func (s *Session) configureBypassRoutes() error {
-	gateway, err := currentDefaultGateway()
-	if err != nil {
-		if len(s.config.BypassIPs) == 0 {
-			return nil
-		}
-		return fmt.Errorf("find default gateway for VPN bypass: %w", err)
-	}
 	for _, ip := range s.config.BypassIPs {
 		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-		if err != nil || !addr.IsValid() || !addr.Is4() || addr.IsLoopback() || addr.IsUnspecified() {
+		if err != nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
 			continue
 		}
-		if err := run("route", "-n", "add", "-host", addr.String(), gateway); err != nil {
+		iface, gateway, err := nativeRouteTo(addr.String())
+		if err != nil {
+			return err
+		}
+		if err := s.addOwnedRoute(ownedRoute{cidr: netip.PrefixFrom(addr, addr.BitLen()).String(), iface: iface, gateway: gateway}); err != nil {
 			return fmt.Errorf("add VPN bypass route %s: %w", addr, err)
 		}
 	}
@@ -195,54 +230,51 @@ func (s *Session) configureRoutes() error {
 		if err != nil || ip == nil {
 			return fmt.Errorf("invalid VPN route %s", cidr)
 		}
-		if strings.Contains(cidr, ":") {
-			if !s.config.EnableIPv6 {
-				continue
-			}
-			if err := run("route", "-n", "add", "-inet6", cidr, "-interface", s.ifaceName); err != nil {
-				return fmt.Errorf("add VPN IPv6 route %s: %w", cidr, err)
-			}
-			continue
-		}
-		if err := run("route", "-n", "add", "-net", cidr, interfaceIPv4); err != nil {
+		if err := s.addOwnedRoute(ownedRoute{cidr: cidr, iface: s.ifaceName}); err != nil {
 			return fmt.Errorf("add VPN route %s: %w", cidr, err)
 		}
 	}
 	return nil
 }
 
-func (s *Session) cleanupRoutes() {
-	s.restoreDNS()
-	for _, ip := range s.config.BypassIPs {
-		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-		if err != nil || !addr.IsValid() || !addr.Is4() {
-			continue
-		}
-		_ = run("route", "-n", "delete", "-host", addr.String())
+func (s *Session) cleanupRoutes() error {
+	var failures []error
+	if err := s.restoreDNS(); err != nil {
+		failures = append(failures, err)
 	}
-	for _, cidr := range s.config.Routes {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
-			continue
+	if s.routeLedger != nil {
+		if err := s.routeLedger.cleanup(); err != nil {
+			failures = append(failures, err)
 		}
-		if strings.Contains(cidr, ":") {
-			_ = run("route", "-n", "delete", "-inet6", cidr)
-			continue
-		}
-		_ = run("route", "-n", "delete", "-net", cidr)
 	}
+	return errors.Join(failures...)
 }
 
-func (s *Session) restoreDNS() {
+func (s *Session) restoreDNS() error {
+	var failures []error
+	var retry []dnsServiceState
 	for i := len(s.dnsRestore) - 1; i >= 0; i-- {
 		state := s.dnsRestore[i]
+		var err error
 		if state.empty || len(state.servers) == 0 {
-			_ = run("networksetup", "-setdnsservers", state.name, "Empty")
-			continue
+			err = run("networksetup", "-setdnsservers", state.name, "Empty")
+		} else {
+			err = run("networksetup", append([]string{"-setdnsservers", state.name}, state.servers...)...)
 		}
-		_ = run("networksetup", append([]string{"-setdnsservers", state.name}, state.servers...)...)
+		if err == nil {
+			var actual dnsServiceState
+			actual, err = currentDNSServers(state.name)
+			if err == nil && strings.Join(actual.servers, "\n") != strings.Join(state.servers, "\n") {
+				err = fmt.Errorf("DNS restore could not be verified for %s", state.name)
+			}
+		}
+		if err != nil {
+			failures = append(failures, err)
+			retry = append([]dnsServiceState{state}, retry...)
+		}
 	}
-	s.dnsRestore = nil
+	s.dnsRestore = retry
+	return errors.Join(failures...)
 }
 
 func networkServices() ([]string, error) {
@@ -278,6 +310,9 @@ func currentDNSServers(service string) (dnsServiceState, error) {
 			state.empty = true
 			state.servers = nil
 			return state, nil
+		}
+		if _, err := netip.ParseAddr(line); err != nil {
+			return dnsServiceState{}, fmt.Errorf("read DNS for %s: %s", service, line)
 		}
 		state.servers = append(state.servers, line)
 	}

@@ -15,7 +15,7 @@ func TestReportedDirectDNSIncludesFallbacks(t *testing.T) {
 		t.Fatalf("IPv6 disabled: got %v", got)
 	}
 	s.config.EnableIPv6 = true
-	if got := s.DNSServers(); !reflect.DeepEqual(got, []string{"8.8.8.8", "2001:4860:4860::8888"}) {
+	if got := s.DNSServers(); !reflect.DeepEqual(got, []string{"2001:4860:4860::8888"}) {
 		t.Fatalf("dual-stack: got %v", got)
 	}
 }
@@ -50,7 +50,7 @@ func TestDirectDNSServersFallbacks(t *testing.T) {
 	if want := []string{"8.8.8.8"}; !reflect.DeepEqual(ipv4, want) {
 		t.Fatalf("ipv4 fallback = %#v, want %#v", ipv4, want)
 	}
-	if want := []string{"2001:4860:4860::8888"}; !reflect.DeepEqual(ipv6, want) {
-		t.Fatalf("ipv6 fallback = %#v, want %#v", ipv6, want)
+	if len(ipv6) != 0 {
+		t.Fatalf("must not reintroduce filtered IPv6 DNS: %#v", ipv6)
 	}
 }

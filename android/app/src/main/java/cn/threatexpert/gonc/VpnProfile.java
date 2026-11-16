@@ -16,7 +16,6 @@ final class VpnProfile {
     String passphrase;
     boolean useUdp;
     boolean p2pWithLan;
-    boolean routeIpv6;
     String dnsServers;
     String routeCidrs;
     /** Optional gonc -link config (e.g. a bare port "3080", or a full mux link); blank = auto-pick a free port. */
@@ -35,7 +34,6 @@ final class VpnProfile {
         profile.passphrase = "";
         profile.useUdp = false;
         profile.p2pWithLan = false;
-        profile.routeIpv6 = false;
         profile.dnsServers = DEFAULT_VPN_DNS;
         profile.routeCidrs = DEFAULT_VPN_ROUTES;
         profile.linkConfig = "";
@@ -52,7 +50,6 @@ final class VpnProfile {
         profile.passphrase = object.optString("passphrase", "");
         profile.useUdp = object.optBoolean("useUdp", false);
         profile.p2pWithLan = object.optBoolean("p2pWithLan", false);
-        profile.routeIpv6 = object.optBoolean("routeIpv6", false);
         profile.dnsServers = object.optString("dnsServers", DEFAULT_VPN_DNS);
         profile.routeCidrs = object.optString("routeCidrs", DEFAULT_VPN_ROUTES);
         // Back-compat: an earlier build briefly stored this as "socks5Address".
@@ -71,7 +68,8 @@ final class VpnProfile {
             object.put("passphrase", passphrase == null ? "" : passphrase);
             object.put("useUdp", useUdp);
             object.put("p2pWithLan", p2pWithLan);
-            object.put("routeIpv6", routeIpv6);
+            // Compatibility for older importers; the setting itself is gone.
+            object.put("routeIpv6", VpnRoutePolicy.hasIpv6(routeCidrs));
             object.put("dnsServers", dnsServers == null ? "" : dnsServers);
             object.put("routeCidrs", routeCidrs == null ? "" : routeCidrs);
             object.put("linkConfig", linkConfig == null ? "" : linkConfig);

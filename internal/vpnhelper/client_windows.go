@@ -102,6 +102,11 @@ func (c *Client) Stop() error {
 	return err
 }
 
+func (c *Client) UpdateDNS(servers []string) ([]string, error) {
+	resp, err := c.call(request{Op: OpDNS, Config: vpnconfig.Config{DNSServers: servers}})
+	return append([]string{}, resp.DNSServers...), err
+}
+
 func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
 		return nil

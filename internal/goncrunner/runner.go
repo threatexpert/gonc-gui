@@ -48,7 +48,7 @@ type Request struct {
 	MTU             int
 	RouteMetric     int
 	BlockDNSLeak    bool
-	EnableIPv6      bool
+	EnableIPv6      bool // Legacy input, ignored. IPv6 capture is derived from RouteCIDRs.
 	TunnelOnly      bool
 	ExtraArgs       string
 }
@@ -232,24 +232,25 @@ func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	if stopVPNRoutes != nil {
 		stopVPNRoutes()
 	}
+	var cleanupErr error
 	if helper != nil {
-		_ = helper.Stop()
+		cleanupErr = helper.Stop()
 		_ = helper.Close()
 	}
 	if details != nil {
 		details.finish(time.Now())
 	}
 	if timeout <= 0 {
-		return false, nil
+		return false, cleanupErr
 	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-session.Done():
-		return true, nil
+		return true, cleanupErr
 	case <-timer.C:
-		return false, nil
+		return false, cleanupErr
 	}
 }
 
@@ -374,6 +375,17 @@ func vpnExtraArgs(req Request) string {
 }
 
 func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink) (*vpnClientStart, error) {
+	routes, err := vpnconfig.ParseRoutes(req.RouteCIDRs)
+	if err != nil && !req.TunnelOnly {
+		return nil, err
+	}
+	routes = vpnconfig.DesktopRoutes(routes)
+	wantsIPv6 := vpnconfig.HasIPv6(routes)
+	if !req.TunnelOnly {
+		if _, _, err := vpnconfig.SelectDNS(req.DNSServers, true); err != nil {
+			return nil, err
+		}
+	}
 	linkConfig, err := effectiveLinkConfig(req.LinkConfig)
 	if err != nil {
 		return nil, err
@@ -390,7 +402,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		}
 		emit(sink, "status", "info", "Elevated VPN helper is ready")
 	}
-	if req.TunnelOnly || !req.EnableIPv6 {
+	if req.TunnelOnly || !wantsIPv6 {
 		emitPeerIPv6(sink, "disabled")
 	} else {
 		emitPeerIPv6(sink, "waiting")
@@ -422,23 +434,24 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				}
 			}()
 			configFor := func(s vpnTunnelSnapshot, ipv6 bool) vpnconfig.Config {
-				return vpnconfig.Config{
-					SOCKS5Endpoint: s.endpoint,
-					Routes:         routeLines(req.RouteCIDRs, ipv6),
-					DNSServers:     dnsLines(req.DNSServers, ipv6),
-					BypassIPs:      s.bypass,
-					EnableIPv6:     ipv6,
-					MTU:            normalizeMTU(req.MTU),
-					RouteMetric:    normalizeRouteMetric(req.RouteMetric),
-					BlockDNSLeak:   req.BlockDNSLeak,
-					LogLevel:       "warn",
-				}
+				return systemVPNConfig(req, s, routes, ipv6)
 			}
 			err := runVPNRouteLifecycle(ctx, session.Done(), lifecycle, vpnRouteActions{
 				probe: func(ctx context.Context, endpoint string) bool {
-					return resolveEffectiveIPv6(ctx, req.EnableIPv6, endpoint, sink)
+					snapshot := lifecycle.snapshot()
+					if !snapshot.ready || snapshot.endpoint != endpoint {
+						return false
+					}
+					return resolveEffectiveIPv6(ctx, wantsIPv6, endpoint, func(event Event) {
+						cb.vpnEventMu.Lock()
+						defer cb.vpnEventMu.Unlock()
+						if lifecycle.current(snapshot) && ctx.Err() == nil && sink != nil {
+							sink(event)
+						}
+					})
 				},
 				start: func(s vpnTunnelSnapshot, ipv6 bool) ([]string, error) {
+					logDNSFallback(req.DNSServers, ipv6, sink)
 					return helper.Start(configFor(s, ipv6))
 				},
 				stop: helper.Stop,
@@ -474,7 +487,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 						emit(sink, "status", "info", "System VPN routes paused; waiting for SOCKS5 tunnel to be ready again")
 					}
 					cb.vpnDetails.publish()
-					if req.EnableIPv6 {
+					if wantsIPv6 {
 						emitPeerIPv6(sink, "waiting")
 					}
 				},
@@ -490,6 +503,22 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 	return &vpnClientStart{session: session, helper: helper, stopRoutes: stopRoutes}, nil
 }
 
+func systemVPNConfig(req Request, s vpnTunnelSnapshot, routes []string, ipv6Available bool) vpnconfig.Config {
+	dns, _, _ := vpnconfig.SelectDNS(req.DNSServers, ipv6Available)
+	return vpnconfig.Config{
+		SOCKS5Endpoint: s.endpoint,
+		Routes:         routes,
+		DNSServers:     dns,
+		BypassIPs:      s.bypass,
+		EnableIPv6:     vpnconfig.HasIPv6(routes),
+		RejectIPv6:     vpnconfig.ShouldRejectIPv6(routes, ipv6Available),
+		MTU:            normalizeMTU(req.MTU),
+		RouteMetric:    normalizeRouteMetric(req.RouteMetric),
+		BlockDNSLeak:   req.BlockDNSLeak,
+		LogLevel:       "warn",
+	}
+}
+
 func resolveEffectiveIPv6(parent context.Context, requested bool, socks5Endpoint string, sink Sink) bool {
 	if !requested {
 		emitPeerIPv6(sink, "disabled")
@@ -498,14 +527,23 @@ func resolveEffectiveIPv6(parent context.Context, requested bool, socks5Endpoint
 	emitPeerIPv6(sink, "checking")
 	emit(sink, "status", "info", "Checking remote IPv6 availability")
 	result := ipv6probe.Check(parent, socks5Endpoint, ipv6probe.DefaultTimeout)
+	if parent.Err() != nil {
+		return false
+	}
 	if result.Available {
 		emitPeerIPv6(sink, "available")
-		emit(sink, "status", "info", "Remote IPv6 is available via "+result.Detail+"; enabling IPv6 routes")
+		emit(sink, "status", "info", "Remote IPv6 is available via "+result.Detail+"; configured IPv6 routes remain captured")
 		return true
 	}
 	emitPeerIPv6(sink, "unavailable")
-	emit(sink, "status", "warn", "Remote IPv6 is unavailable; IPv6 routes disabled ("+result.Detail+")")
+	emit(sink, "status", "warn", "Remote IPv6 probe failed; keeping ALL configured IPv6 routes, rejecting captured IPv6 TCP/UDP locally, filtering IPv6 DNS servers ("+result.Detail+")")
 	return false
+}
+
+func logDNSFallback(value string, ipv6 bool, sink Sink) {
+	if _, fallback, _ := vpnconfig.SelectDNS(value, ipv6); fallback {
+		emit(sink, "status", "warn", "No usable configured DNS after IPv6 filtering; using 8.8.8.8 through the VPN")
+	}
 }
 
 func effectiveLinkConfig(value string) (string, error) {
@@ -531,45 +569,14 @@ func normalizeRouteMetric(value int) int {
 }
 
 func routeLines(value string, enableIPv6 bool) []string {
-	lines := splitLines(value)
-	if len(lines) == 0 {
-		lines = []string{"0.0.0.0/1", "128.0.0.0/1"}
-		if enableIPv6 {
-			lines = append(lines, "::/0")
-		}
-		return lines
-	}
-	if !enableIPv6 {
-		filtered := lines[:0]
-		for _, line := range lines {
-			if !strings.Contains(line, ":") {
-				filtered = append(filtered, line)
-			}
-		}
-		return filtered
-	}
-	return lines
+	// Legacy flag is intentionally ignored; retained for source compatibility.
+	routes, _ := vpnconfig.ParseRoutes(value)
+	return vpnconfig.DesktopRoutes(routes)
 }
 
 func dnsLines(value string, enableIPv6 bool) []string {
-	lines := splitLines(value)
-	if len(lines) == 0 {
-		lines = []string{"8.8.8.8"}
-		if enableIPv6 {
-			lines = append(lines, "2001:4860:4860::8888")
-		}
-		return lines
-	}
-	if !enableIPv6 {
-		filtered := lines[:0]
-		for _, line := range lines {
-			if !strings.Contains(line, ":") {
-				filtered = append(filtered, line)
-			}
-		}
-		return filtered
-	}
-	return lines
+	dns, _, _ := vpnconfig.SelectDNS(value, enableIPv6)
+	return dns
 }
 
 func extractPeerIPs(peer string) []string {

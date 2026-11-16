@@ -20,3 +20,6 @@ func (c *Client) Start(config vpnconfig.Config) ([]string, error) {
 }
 func (c *Client) Stop() error  { return nil }
 func (c *Client) Close() error { return nil }
+func (c *Client) UpdateDNS([]string) ([]string, error) {
+	return nil, fmt.Errorf("unsupported platform")
+}

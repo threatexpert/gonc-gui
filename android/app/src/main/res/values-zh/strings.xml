@@ -90,7 +90,7 @@
     <string name="vpn_service_disconnected">VPN 已断开</string>
     <string name="vpn_service_error">VPN 连接异常</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
-    <string name="vpn_route_ipv6_hint">开启后先检测远程 IPv6，可用时才添加 IPv6 路由。</string>
+    <string name="vpn_route_ipv6_hint">IPv6 接管和出口检测由路由规则决定；未配置 IPv6 路由时使用本地网络。</string>
     <string name="vpn_endpoint">SOCKS5 入口</string>
     <string name="vpn_profile_settings">VPN 配置</string>
     <string name="vpn_profile_default_name">默认配置</string>
@@ -176,7 +176,7 @@
     <string name="connection_route">连接方式</string>
     <string name="peer">对端</string>
     <string name="peer_ipv6">对端 IPv6 出口</string>
-    <string name="peer_ipv6_disabled">未启用</string>
+    <string name="peer_ipv6_disabled">未配置 IPv6 路由</string>
     <string name="peer_ipv6_waiting">等待 P2P</string>
     <string name="peer_ipv6_checking">检测中</string>
     <string name="peer_ipv6_available">可用</string>

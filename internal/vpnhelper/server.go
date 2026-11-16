@@ -41,6 +41,16 @@ func Run(connectAddr, token string) error {
 			return nil
 		}
 		switch req.Op {
+		case OpDNS:
+			if active == nil {
+				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})
+				continue
+			}
+			if err := active.UpdateDNS(req.Config.DNSServers); err != nil {
+				_ = enc.Encode(response{OK: false, Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true, DNSServers: active.DNSServers()})
 		case OpStart:
 			if active != nil {
 				_ = active.Stop()
@@ -55,7 +65,10 @@ func Run(connectAddr, token string) error {
 			_ = enc.Encode(response{OK: true, DNSServers: session.DNSServers()})
 		case OpStop:
 			if active != nil {
-				_ = active.Stop()
+				if err := active.Stop(); err != nil {
+					_ = enc.Encode(response{OK: false, Error: err.Error()})
+					continue
+				}
 				active = nil
 			}
 			_ = enc.Encode(response{OK: true})

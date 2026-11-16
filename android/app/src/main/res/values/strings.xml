@@ -90,7 +90,7 @@
     <string name="vpn_service_disconnected">VPN disconnected</string>
     <string name="vpn_service_error">VPN connection problem</string>
     <string name="vpn_route_ipv6">Route IPv6</string>
-    <string name="vpn_route_ipv6_hint">When enabled, the app checks remote IPv6 first and only adds IPv6 routes if available.</string>
+    <string name="vpn_route_ipv6_hint">Routes determine IPv6 capture and probing. Without IPv6 routes, IPv6 uses the local network.</string>
     <string name="vpn_endpoint">SOCKS5 endpoint</string>
     <string name="vpn_profile_settings">VPN profile</string>
     <string name="vpn_profile_default_name">Default</string>
@@ -180,7 +180,7 @@
     <string name="connection_route">Route</string>
     <string name="peer">Peer</string>
     <string name="peer_ipv6">Peer IPv6 exit</string>
-    <string name="peer_ipv6_disabled">Not enabled</string>
+    <string name="peer_ipv6_disabled">No IPv6 routes</string>
     <string name="peer_ipv6_waiting">Waiting for P2P</string>
     <string name="peer_ipv6_checking">Checking</string>
     <string name="peer_ipv6_available">Available</string>

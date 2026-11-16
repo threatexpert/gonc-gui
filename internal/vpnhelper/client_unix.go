@@ -99,6 +99,20 @@ func (c *Client) Stop() error {
 	return nil
 }
 
+func (c *Client) UpdateDNS(servers []string) ([]string, error) {
+	if c.conn != nil {
+		resp, err := c.call(request{Op: OpDNS, Config: vpnconfig.Config{DNSServers: servers}})
+		return append([]string{}, resp.DNSServers...), err
+	}
+	if c.local == nil {
+		return nil, fmt.Errorf("VPN is not running")
+	}
+	if err := c.local.UpdateDNS(servers); err != nil {
+		return nil, err
+	}
+	return c.local.DNSServers(), nil
+}
+
 func (c *Client) Close() error {
 	if c == nil {
 		return nil

@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"gonc-gui/internal/vpnconfig"
-
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
 const (
@@ -46,6 +44,7 @@ func CheckRuntime() error {
 }
 
 func Start(config vpnconfig.Config) (*Session, error) {
+	config.EnableIPv6 = vpnconfig.HasIPv6(config.Routes)
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
 		return nil, fmt.Errorf("SOCKS5 endpoint is required")
 	}
@@ -60,13 +59,13 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	}
 
 	_ = run("ip", "link", "delete", interfaceName)
-	engine.Insert(&engine.Key{
-		Device:   "tun://" + interfaceName,
-		Proxy:    config.SOCKS5Endpoint,
-		LogLevel: config.LogLevel,
-		MTU:      config.MTU,
-	})
-	engine.Start()
+	if err := insertEngine(config, "tun://"+interfaceName); err != nil {
+		return nil, err
+	}
+	if err := startEngine(); err != nil {
+		_ = stopEngine()
+		return nil, err
+	}
 
 	session := &Session{config: config}
 	if err := session.configure(); err != nil {
@@ -84,9 +83,9 @@ func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupRoutes()
-	engine.Stop()
+	err := stopEngine()
 	_ = run("ip", "link", "delete", interfaceName)
-	return nil
+	return err
 }
 
 func (s *Session) configure() error {
@@ -104,7 +103,9 @@ func (s *Session) configure() error {
 	if err := run("ip", "link", "set", "dev", interfaceName, "mtu", fmt.Sprint(s.config.MTU), "up"); err != nil {
 		return fmt.Errorf("bring VPN interface up: %w", err)
 	}
-	s.configureDNS()
+	if err := s.configureDNS(); err != nil {
+		return err
+	}
 	if err := s.configureBypassRoutes(); err != nil {
 		return err
 	}
@@ -118,9 +119,16 @@ func (s *Session) DNSServers() []string {
 	return append([]string{}, s.appliedDNS...)
 }
 
-func (s *Session) configureDNS() {
+func (s *Session) UpdateDNS(servers []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config.DNSServers = append([]string{}, servers...)
+	return s.configureDNS()
+}
+
+func (s *Session) configureDNS() error {
 	if _, err := exec.LookPath("resolvectl"); err != nil {
-		return
+		return fmt.Errorf("VPN DNS requires resolvectl: %w", err)
 	}
 	var dns []string
 	for _, server := range s.config.DNSServers {
@@ -131,12 +139,16 @@ func (s *Session) configureDNS() {
 		dns = append(dns, server)
 	}
 	if len(dns) == 0 {
-		return
+		return fmt.Errorf("no usable VPN DNS servers")
 	}
-	if err := run("resolvectl", append([]string{"dns", interfaceName}, dns...)...); err == nil {
-		s.appliedDNS = append([]string{}, dns...)
+	if err := run("resolvectl", append([]string{"dns", interfaceName}, dns...)...); err != nil {
+		return err
 	}
-	_ = run("resolvectl", "domain", interfaceName, "~.")
+	if err := run("resolvectl", "domain", interfaceName, "~."); err != nil {
+		return err
+	}
+	s.appliedDNS = append([]string{}, dns...)
+	return nil
 }
 
 func (s *Session) configureRoutes() error {

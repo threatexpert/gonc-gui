@@ -97,7 +97,7 @@ export function vpnRates(data: VPNDetails | undefined, now: number, stopping: bo
 
 export function vpnPaths(data: VPNDetails | undefined, expanded: boolean): {lines: string[]; hasMore: boolean} {
   const routes = data?.tunnelOnly ? [] : data?.routes || [];
-  return {lines: expanded ? routes : routes.slice(0, 3), hasMore: routes.length > 3};
+  return {lines: expanded ? routes : routes.slice(0, 4), hasMore: routes.length > 4};
 }
 
 export function formatVPNConnectedAt(value: string | undefined, lang: 'zh' | 'en'): string {

@@ -174,15 +174,15 @@ func TestVPNDetailsTrafficCountersAndFinalSample(t *testing.T) {
 	}
 }
 
-func TestVPNDetailsAppliedRoutesUseEffectiveIPv6(t *testing.T) {
+func TestVPNDetailsProbeFailureNeverFiltersIPv6Routes(t *testing.T) {
 	v := newVPNDetailsTracker(Request{EnableIPv6: true}, nil)
-	if got := v.snapshot(time.Now()); len(got.Routes) != 3 || len(got.DNSServers) != 0 || got.RouteState != "pending" {
+	if got := v.snapshot(time.Now()); len(got.Routes) != 4 || len(got.DNSServers) != 0 || got.RouteState != "pending" {
 		t.Fatal(got)
 	}
 	actual := routeLines("", false)
 	v.routes("applied", actual, []string{"192.0.2.1"}, dnsLines("9.9.9.9\n2001:4860:4860::8888", false))
 	d := v.snapshot(time.Now())
-	if len(d.ConfiguredRoutes) != 3 || len(d.Routes) != 2 || len(d.DNSServers) != 1 || d.DNSServers[0] != "9.9.9.9" {
+	if len(d.ConfiguredRoutes) != 4 || len(d.Routes) != 4 || len(d.DNSServers) != 1 || d.DNSServers[0] != "9.9.9.9" {
 		t.Fatal(d)
 	}
 	d.Routes[0] = "modified"

@@ -5,6 +5,7 @@ import "gonc-gui/internal/vpnconfig"
 const (
 	OpHello = "hello"
 	OpStart = "start"
+	OpDNS   = "dns"
 	OpStop  = "stop"
 	OpExit  = "exit"
 )

@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.system.OsConstants;
 
 import androidx.core.app.NotificationCompat;
 
@@ -17,6 +18,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.security.SecureRandom;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -29,7 +31,6 @@ public final class GoncVpnService extends VpnService {
     static final String EXTRA_PASSWORD = "password";
     static final String EXTRA_USE_UDP = "use_udp";
     static final String EXTRA_P2P_WITH_LAN = "p2p_with_lan";
-    static final String EXTRA_ENABLE_IPV6 = "enable_ipv6";
     static final String EXTRA_DNS_SERVERS = "dns_servers";
     static final String EXTRA_ROUTE_CIDRS = "route_cidrs";
     static final String EXTRA_LINK_CONFIG = "link_config";
@@ -45,6 +46,8 @@ public final class GoncVpnService extends VpnService {
     private static final SecureRandom PORT_RANDOM = new SecureRandom();
 
     private final Object lock = new Object();
+    private final Object engineLock = new Object();
+    private Thread vpnWorker;
     private ParcelFileDescriptor vpnInterface;
     private mobilegonc.Session goncSession;
     private Runnable releaseMulticast;
@@ -82,22 +85,22 @@ public final class GoncVpnService extends VpnService {
             String password = intent.getStringExtra(EXTRA_PASSWORD);
             boolean useUdp = intent.getBooleanExtra(EXTRA_USE_UDP, false);
             boolean p2pWithLan = intent.getBooleanExtra(EXTRA_P2P_WITH_LAN, false);
-            boolean enableIpv6 = intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false);
             String dnsServers = intent.getStringExtra(EXTRA_DNS_SERVERS);
             String routeCidrs = intent.getStringExtra(EXTRA_ROUTE_CIDRS);
             String linkConfig = intent.getStringExtra(EXTRA_LINK_CONFIG);
             int mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU);
             String extraArgs = intent.getStringExtra(EXTRA_EXTRA_ARGS);
             boolean tunnelOnly = intent.getBooleanExtra(EXTRA_TUNNEL_ONLY, false);
-            startVpn(password, useUdp, p2pWithLan, enableIpv6, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
+            startVpn(password, useUdp, p2pWithLan, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
             return START_STICKY;
         }
         return START_NOT_STICKY;
     }
 
-    private void startVpn(String password, boolean useUdp, boolean p2pWithLan, boolean enableIpv6, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
+    private void startVpn(String password, boolean useUdp, boolean p2pWithLan, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
+        boolean enableIpv6 = VpnRoutePolicy.hasIpv6(routeCidrs);
         synchronized (lock) {
-            if (goncSession != null || vpnInterface != null || tun2socksRunning) {
+            if (goncSession != null || vpnInterface != null || tun2socksRunning || vpnWorker != null || stopWorkerRunning) {
                 log("warn", "VPN is already running");
                 return;
             }
@@ -110,6 +113,10 @@ public final class GoncVpnService extends VpnService {
 
         Thread worker = new Thread(() -> {
             try {
+                if (!tunnelOnly) {
+                    VpnRoutePolicy.routes(routeCidrs); // Reject invalid rules before starting anything.
+                    VpnRoutePolicy.dns(dnsServers, true);
+                }
                 if (isStopRequested()) {
                     return;
                 }
@@ -161,70 +168,99 @@ public final class GoncVpnService extends VpnService {
                     return;
                 }
 
-                boolean effectiveIpv6 = resolveEffectiveIpv6(enableIpv6, readySocks5Endpoint);
+                long probeRevision = tunnelReady.revision();
+                boolean effectiveIpv6 = resolveEffectiveIpv6(enableIpv6, readySocks5Endpoint, tunnelReady, probeRevision);
                 if (isStopRequested()) {
                     return;
                 }
 
-                GoncCrashReporter.stage(this, "establish VPN interface");
-                ParcelFileDescriptor establishedTun = establishInterface(effectiveIpv6, dnsServers, routeCidrs, effectiveMtu);
-                if (establishedTun == null) {
-                    throw new IllegalStateException("Could not establish VPN interface");
-                }
-                synchronized (lock) {
-                    if (stopRequested) {
-                        closeParcelQuietly(establishedTun);
-                        return;
-                    }
-                    vpnInterface = establishedTun;
-                }
-
-                GoncCrashReporter.stage(this, "detach TUN fd for tun2socks");
-                int tun2socksFd = -1;
-                boolean shouldStartTun2Socks;
-                synchronized (lock) {
-                    shouldStartTun2Socks = !stopRequested && vpnInterface == establishedTun;
-                    if (shouldStartTun2Socks) {
-                        tun2socksFd = establishedTun.detachFd();
-                        vpnInterface = null;
-                    }
-                }
-                if (!shouldStartTun2Socks) {
-                    return;
-                }
-                GoncCrashReporter.stage(this, "start tun2socks");
-                boolean startedTun2Socks = false;
-                boolean shouldStopAfterStart = false;
-                try {
-                    Mobilegonc.startTun2Socks(tun2socksFd, readySocks5Endpoint, "tun0", effectiveMtu, "warn");
-                    startedTun2Socks = true;
-                    // Step 3: close the original low-numbered fd via bionic so Android's
-                    // fdsan tables are properly updated. Go already cleared the PFD tag
-                    // and moved the engine to a high-numbered fd (>= 512); the original
-                    // fd is no longer needed and must be released cleanly.
-                    closeDetachedFd(tun2socksFd);
-                    synchronized (lock) {
-                        tun2socksRunning = true;
-                        shouldStopAfterStart = stopRequested;
-                    }
-                    log("info", "tun2socks started");
-                    markConnected();
-                } finally {
-                    if (!startedTun2Socks) {
-                        closeDetachedFd(tun2socksFd);
-                    }
-                }
-                if (shouldStopAfterStart) {
-                    stopVpn();
+                List<String> selectedDns = selectedDns(dnsServers, effectiveIpv6);
+                installInterface(enableIpv6, selectedDns, routeCidrs, effectiveMtu, readySocks5Endpoint);
+                if (enableIpv6 && !isStopRequested()) {
+                    monitorIpv6Reconnects(tunnelReady, probeRevision, selectedDns, dnsServers, routeCidrs, effectiveMtu);
                 }
             } catch (Throwable error) {
+                if (isStopRequested()) return;
                 GoncCrashReporter.recordNonFatal(this, "VPN start failed", error);
                 log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                 GoncVpnState.setError(error.getMessage() == null ? error.toString() : error.getMessage());
                 stopVpn();
+            } finally {
+                synchronized (lock) { vpnWorker = null; lock.notifyAll(); }
             }
         }, "gonc-vpn-start");
+        synchronized (lock) { vpnWorker = worker; }
         worker.start();
+    }
+
+    // The Java-owned descriptor remains open for the entire VPN lifetime. The
+    // engine receives a detached duplicate, preserving the existing fdsan-safe
+    // transfer convention and preventing a route gap during DNS reconfiguration.
+    private void installInterface(boolean captureIpv6, List<String> dns, String routes, int mtu, String endpoint) throws Exception {
+        synchronized (engineLock) {
+            if (isStopRequested()) return;
+            GoncVpnState.setSystemVpnReady(false);
+            ParcelFileDescriptor next = establishInterface(captureIpv6, dns, routes, mtu);
+            if (next == null) throw new IllegalStateException("Could not establish VPN interface");
+            ParcelFileDescriptor previous;
+            boolean wasRunning;
+            synchronized (lock) {
+                previous = vpnInterface;
+                vpnInterface = next;
+                wasRunning = tun2socksRunning;
+            }
+            int fd = -1;
+            try {
+                if (isStopRequested()) return;
+                if (wasRunning) {
+                    Mobilegonc.stopTun2Socks();
+                    synchronized (lock) { tun2socksRunning = false; }
+                }
+                fd = ParcelFileDescriptor.dup(next.getFileDescriptor()).detachFd();
+                Mobilegonc.startTun2Socks(fd, endpoint, "tun0", mtu, "warn");
+                synchronized (lock) { tun2socksRunning = true; }
+                log("info", "tun2socks started; all configured routes installed; DNS: " + String.join(", ", dns));
+                markConnected();
+            } finally {
+                closeDetachedFd(fd);
+                closeParcelQuietly(previous);
+            }
+        }
+    }
+
+    private List<String> selectedDns(String configured, boolean ipv6Available) {
+        List<String> selected = VpnRoutePolicy.dns(configured, ipv6Available);
+        if (!ipv6Available && VpnRoutePolicy.dns(configured, true).stream().allMatch(value -> value.contains(":"))) {
+            log("warn", "No usable configured DNS after IPv6 filtering; using 8.8.8.8 through the VPN");
+        }
+        return selected;
+    }
+
+    private void monitorIpv6Reconnects(TunnelReadySignal ready, long revision, List<String> activeDns,
+                             String configuredDns, String routes, int mtu) throws Exception {
+        boolean waitingForReconnect = false;
+        while (!isStopRequested()) {
+            Thread.sleep(250);
+            if (!"connected".equals(normalizeP2PStatus(GoncVpnState.p2pStatus()))) {
+                if (!waitingForReconnect) GoncVpnState.setPeerIpv6("waiting");
+                waitingForReconnect = true;
+                continue;
+            }
+            long currentRevision = ready.revision();
+            // Only a new SOCKS5 Ready generation triggers another probe.
+            if (currentRevision == revision) continue;
+            waitingForReconnect = false;
+            revision = currentRevision;
+            String endpoint = ready.awaitReadyEndpoint(0);
+            boolean nextAvailable = resolveEffectiveIpv6(true, endpoint, ready, revision);
+            if (isStopRequested()) return;
+            if (revision != ready.revision() || !"connected".equals(normalizeP2PStatus(GoncVpnState.p2pStatus()))) continue;
+            List<String> nextDns = selectedDns(configuredDns, nextAvailable);
+            if (!nextDns.equals(activeDns)) {
+                installInterface(true, nextDns, routes, mtu, endpoint);
+                activeDns = nextDns;
+            }
+        }
     }
 
     private String waitForSocks5Ready(TunnelReadySignal tunnelReady) throws InterruptedException {
@@ -239,7 +275,8 @@ public final class GoncVpnService extends VpnService {
         return "";
     }
 
-    private boolean resolveEffectiveIpv6(boolean requestedIpv6, String socks5Endpoint) {
+    private boolean resolveEffectiveIpv6(boolean requestedIpv6, String socks5Endpoint, TunnelReadySignal ready, long revision) {
+        if (isStopRequested()) return false;
         if (!requestedIpv6) {
             GoncVpnState.setPeerIpv6("disabled");
             return false;
@@ -247,13 +284,18 @@ public final class GoncVpnService extends VpnService {
         GoncVpnState.setPeerIpv6("checking");
         log("info", "Checking remote IPv6 availability");
         RemoteIpv6Probe.Result result = RemoteIpv6Probe.check(socks5Endpoint, RemoteIpv6Probe.DEFAULT_TIMEOUT_MS);
+        if (isStopRequested()) return false;
+        if (revision != ready.revision() || !"connected".equals(normalizeP2PStatus(GoncVpnState.p2pStatus()))) {
+            GoncVpnState.setPeerIpv6("waiting");
+            return false;
+        }
         if (result.available) {
             GoncVpnState.setPeerIpv6("available");
-            log("info", "Remote IPv6 is available via " + result.detail + "; enabling IPv6 routes");
+            log("info", "Remote IPv6 is available via " + result.detail + "; configured IPv6 routes remain captured");
             return true;
         }
         GoncVpnState.setPeerIpv6("unavailable");
-        log("warn", "Remote IPv6 is unavailable; IPv6 routes disabled (" + result.detail + ")");
+        log("warn", "Remote IPv6 probe failed; keeping ALL configured IPv6 routes, filtering IPv6 DNS servers (" + result.detail + ")");
         return false;
     }
 
@@ -392,7 +434,7 @@ public final class GoncVpnService extends VpnService {
         }
     }
 
-    private ParcelFileDescriptor establishInterface(boolean enableIpv6, String dnsServers, String routeCidrs, int mtu) throws Exception {
+    private ParcelFileDescriptor establishInterface(boolean enableIpv6, List<String> dnsServers, String routeCidrs, int mtu) throws Exception {
         GoncCrashReporter.stage(this, "vpn builder create");
         Builder builder = new Builder();
 
@@ -408,10 +450,13 @@ public final class GoncVpnService extends VpnService {
         if (enableIpv6) {
             GoncCrashReporter.stage(this, "vpn builder add ipv6 address");
             builder.addAddress("fd60:173:33::2", 128);
+        } else {
+            // Without an IPv6 route this family is intentionally outside the VPN.
+            builder.allowFamily(OsConstants.AF_INET6);
         }
 
-        addRoutes(builder, routeCidrs, enableIpv6);
-        addDnsServers(builder, dnsServers, enableIpv6);
+        addRoutes(builder, routeCidrs);
+        addDnsServers(builder, dnsServers);
         try {
             GoncCrashReporter.stage(this, "vpn builder disallow self");
             builder.addDisallowedApplication(getPackageName());
@@ -428,53 +473,20 @@ public final class GoncVpnService extends VpnService {
         return descriptor;
     }
 
-    private void addRoutes(Builder builder, String routeCidrs, boolean enableIpv6) {
-        for (String cidr : linesOrDefault(routeCidrs, defaultRouteCidrs())) {
-            cidr = cidr == null ? "" : cidr.trim();
-            if (cidr.isEmpty()) {
-                continue;
-            }
-            int slash = cidr.indexOf('/');
-            if (slash <= 0 || slash == cidr.length() - 1) {
-                GoncCrashReporter.appendLog(this, "warn", "Ignoring invalid VPN route " + cidr);
-                continue;
-            }
-            String address = cidr.substring(0, slash).trim();
-            int prefix;
-            try {
-                prefix = Integer.parseInt(cidr.substring(slash + 1).trim());
-            } catch (NumberFormatException error) {
-                GoncCrashReporter.appendLog(this, "warn", "Ignoring invalid VPN route " + cidr);
-                continue;
-            }
-            boolean ipv6 = address.contains(":");
-            if (ipv6 && !enableIpv6) {
-                continue;
-            }
-            try {
-                GoncCrashReporter.stage(this, "vpn builder add route " + cidr);
-                builder.addRoute(address, prefix);
-            } catch (RuntimeException error) {
-                GoncCrashReporter.appendLog(this, "warn", "Cannot add VPN route " + cidr + ": " + error.getMessage());
-            }
+    private void addRoutes(Builder builder, String routeCidrs) {
+        for (VpnRoutePolicy.Route route : VpnRoutePolicy.routes(routeCidrs)) {
+            // A failed rule aborts setup. Never silently publish partial readiness.
+            builder.addRoute(route.address, route.prefix);
         }
     }
 
-    private void addDnsServers(Builder builder, String dnsServers, boolean enableIpv6) {
-        for (String dns : linesOrDefault(dnsServers, defaultDnsServers())) {
-            dns = dns == null ? "" : dns.trim();
-            if (dns.isEmpty()) {
-                continue;
-            }
-            if (dns.contains(":") && !enableIpv6) {
-                continue;
-            }
-            try {
-                GoncCrashReporter.stage(this, "vpn builder add dns " + dns);
-                builder.addDnsServer(dns);
-            } catch (RuntimeException error) {
-                GoncCrashReporter.appendLog(this, "warn", "Cannot add VPN DNS " + dns + ": " + error.getMessage());
-            }
+    private void addDnsServers(Builder builder, List<String> dnsServers) {
+        if (dnsServers.isEmpty()) throw new IllegalArgumentException("No usable VPN DNS servers");
+        for (String dns : dnsServers) {
+            InetAddress address = VpnRoutePolicy.numericAddress(dns);
+            builder.addDnsServer(address);
+            // DNS must stay inside the tunnel even with split routes / fallback.
+            builder.addRoute(address, address.getAddress().length * 8);
         }
     }
 
@@ -503,6 +515,7 @@ public final class GoncVpnService extends VpnService {
 
             @Override
             public void p2PReport(String topic, String side, String status, String network, String mode, String peer, long timestamp, long pid) {
+                if (isStopRequested()) return;
                 GoncVpnState.setP2PReport(status, network, mode, peer);
                 log("info", "P2P " + emptyDash(status) + " " + emptyDash(network) + " " + emptyDash(mode) + " " + emptyDash(peer));
                 if (isStopRequested()) {
@@ -513,11 +526,13 @@ public final class GoncVpnService extends VpnService {
 
             @Override
             public void traffic(String side, long inBytes, long outBytes, double inBps, double outBps, long elapsed, long connCount, boolean isFinal) {
+                if (isStopRequested()) return;
                 GoncVpnState.setTraffic(inBytes, outBytes, inBps, outBps);
             }
 
             @Override
             public void ready(String endpoint) {
+                if (isStopRequested()) return;
                 if (endpoint != null && endpoint.startsWith("socks5://")) {
                     GoncVpnState.setEndpoint(endpoint);
                     tunnelReady.markReady(endpoint);
@@ -551,11 +566,15 @@ public final class GoncVpnService extends VpnService {
     private static final class TunnelReadySignal {
         private final CountDownLatch ready = new CountDownLatch(1);
         private volatile String endpoint = "";
+        private long revision;
 
-        void markReady(String nextEndpoint) {
+        synchronized void markReady(String nextEndpoint) {
             endpoint = nextEndpoint == null ? "" : nextEndpoint.trim();
+            revision++;
             ready.countDown();
         }
+
+        synchronized long revision() { return revision; }
 
         String awaitReadyEndpoint(long timeoutMs) throws InterruptedException {
             if (ready.await(timeoutMs, TimeUnit.MILLISECONDS)) {
@@ -566,7 +585,7 @@ public final class GoncVpnService extends VpnService {
     }
 
     private boolean hasActiveResourcesLocked() {
-        return vpnInterface != null || goncSession != null || tun2socksRunning;
+        return vpnInterface != null || goncSession != null || tun2socksRunning || vpnWorker != null;
     }
 
     /**
@@ -681,6 +700,12 @@ public final class GoncVpnService extends VpnService {
             GoncVpnState.setStatus(GoncVpnState.STOPPING);
         }
         Thread worker = new Thread(() -> {
+            Thread starting;
+            synchronized (lock) { starting = vpnWorker; }
+            if (starting != null) {
+                try { starting.join(); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            }
             mobilegonc.Session session;
             ParcelFileDescriptor tun;
             boolean stopTun2Socks;

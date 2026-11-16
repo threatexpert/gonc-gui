@@ -5,7 +5,8 @@ type Config struct {
 	Routes         []string `json:"routes"`
 	DNSServers     []string `json:"dnsServers"`
 	BypassIPs      []string `json:"bypassIps"`
-	EnableIPv6     bool     `json:"enableIPv6"`
+	EnableIPv6     bool     `json:"enableIPv6"` // Derived from Routes, never from exit reachability.
+	RejectIPv6     bool     `json:"rejectIPv6"` // Reject captured TCP/UDP locally when the exit probe fails.
 	MTU            int      `json:"mtu"`
 	RouteMetric    int      `json:"routeMetric"`
 	BlockDNSLeak   bool     `json:"blockDnsLeak"`

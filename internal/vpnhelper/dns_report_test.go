@@ -41,3 +41,26 @@ func TestStartReturnsHelperDNSInsteadOfInputConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSUpdateDoesNotIssueStopOrStart(t *testing.T) {
+	c, h := net.Pipe()
+	defer c.Close()
+	defer h.Close()
+	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = h.SetDeadline(time.Now().Add(3 * time.Second))
+	client := &Client{conn: c, enc: json.NewEncoder(c), dec: json.NewDecoder(c)}
+	requests := make(chan request, 1)
+	go func() {
+		var req request
+		_ = json.NewDecoder(h).Decode(&req)
+		requests <- req
+		_ = json.NewEncoder(h).Encode(response{OK: true, DNSServers: []string{"8.8.8.8"}})
+	}()
+	got, err := client.UpdateDNS([]string{"8.8.8.8"})
+	if err != nil || !reflect.DeepEqual(got, []string{"8.8.8.8"}) {
+		t.Fatal(got, err)
+	}
+	if req := <-requests; req.Op != OpDNS || len(req.Config.Routes) != 0 {
+		t.Fatal(req)
+	}
+}

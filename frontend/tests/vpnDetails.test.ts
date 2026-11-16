@@ -149,11 +149,12 @@ test('dual rates preserve directions and distinguish missing samples from zero',
   assert.deepEqual(vpnRates(sample({connected:false}),now,false), {upload:0,download:0});
 });
 
-test('paths preserve raw entries and order, collapse to three lines and expand on demand', () => {
+test('paths preserve raw entries and order, collapse to four lines and expand on demand', () => {
   const routes = ['10.0.0.0/8', '192.168.0.0/16', 'fc00::/7', '0.0.0.0/1', '128.0.0.0/1'];
-  assert.deepEqual(vpnPaths(sample({routes}), false), {lines: routes.slice(0, 3), hasMore: true});
+  assert.deepEqual(vpnPaths(sample({routes}), false), {lines: routes.slice(0, 4), hasMore: true});
   assert.deepEqual(vpnPaths(sample({routes}), true), {lines: routes, hasMore: true});
   assert.deepEqual(vpnPaths(sample({routes: routes.slice(0, 3)}), false), {lines: routes.slice(0, 3), hasMore: false});
+  assert.deepEqual(vpnPaths(sample({routes: routes.slice(0, 4)}), false), {lines: routes.slice(0, 4), hasMore: false});
   assert.deepEqual(vpnPaths(sample({routes, tunnelOnly:true}), true), {lines: [], hasMore: false});
   assert.deepEqual(vpnPaths(undefined, false), {lines: [], hasMore: false});
   assert.deepEqual(vpnPaths(sample({routes:['custom', 'custom']}), false), {lines:['custom', 'custom'], hasMore:false});
@@ -206,6 +207,16 @@ test('profile subtitles remain static while connection status belongs to the sta
   assert.match(source, /vpnPaths: '路由'/);
   assert.match(source, /vpnPaths: 'Routes'/);
   assert.match(source, /<p>\{vpnClientStatus.label\}<\/p>/);
+});
+
+test('IPv6 checkbox is removed and legacy import flags cannot override routes', () => {
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.doesNotMatch(source, /setVpnClientEnableIPv6|label={t.routeIpv6}/);
+  assert.match(source, /enableIpv6: hasIPv6Routes\(vpnClientRouteCIDRs\)/);
+  assert.match(source, /routeIpv6: hasIPv6Routes\(String\(profile.routeCidrs/);
+  assert.match(source, /peerIpv6Unavailable: '不可用'/);
+  assert.match(source, /peerIpv6Unavailable: 'Unavailable'/);
+  assert.doesNotMatch(source, /保持接管，自动复测|routes retained, retrying/);
 });
 
 test('VPN status groups connection, traffic and network fields without mixing them', () => {

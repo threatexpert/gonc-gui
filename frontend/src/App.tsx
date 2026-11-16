@@ -393,9 +393,9 @@ const text = {
     extraArgs: '额外 gonc 参数',
     extraArgsPlaceholder: '例如 -x socks5://host:port',
     extraArgsHint: '追加到外层 gonc 命令，适合临时使用高级参数。',
-    routeIpv6: 'Route IPv6',
+    routeIpv6Hint: 'IPv6 接管和出口检测由路由规则决定；未配置 IPv6 路由时使用本地网络。',
     peerIpv6: '对端 IPv6 出口',
-    peerIpv6Disabled: '未启用',
+    peerIpv6Disabled: '未配置 IPv6 路由',
     peerIpv6Waiting: '等待 P2P',
     peerIpv6Checking: '检测中',
     peerIpv6Available: '可用',
@@ -694,9 +694,9 @@ const text = {
     extraArgs: 'Extra gonc Args',
     extraArgsPlaceholder: 'e.g. -x socks5://host:port',
     extraArgsHint: 'Appended to the outer gonc command for temporary advanced options.',
-    routeIpv6: 'Route IPv6',
+    routeIpv6Hint: 'Routes determine IPv6 capture and probing. Without IPv6 routes, IPv6 uses the local network.',
     peerIpv6: 'Peer IPv6 exit',
-    peerIpv6Disabled: 'Not enabled',
+    peerIpv6Disabled: 'No IPv6 routes',
     peerIpv6Waiting: 'Waiting for P2P',
     peerIpv6Checking: 'Checking',
     peerIpv6Available: 'Available',
@@ -1033,7 +1033,6 @@ function App() {
   const [vpnServerExtraArgs, setVpnServerExtraArgs] = useState('');
   const [vpnClientUseUDP, setVpnClientUseUDP] = useState(false);
   const [vpnClientP2PWithLAN, setVpnClientP2PWithLAN] = useState(false);
-  const [vpnClientEnableIPv6, setVpnClientEnableIPv6] = useState(false);
   const [vpnClientTunnelOnly, setVpnClientTunnelOnly] = useState(false);
   const [vpnClientDNSServers, setVpnClientDNSServers] = useState('');
   const [vpnClientRouteCIDRs, setVpnClientRouteCIDRs] = useState('');
@@ -2172,7 +2171,7 @@ function App() {
         setVpnClientHasConnected(false);
         setVpnClientP2PReport(null);
         setVpnClientTraffic(null);
-        setVpnClientPeerIPv6(vpnClientEnableIPv6 && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
+        setVpnClientPeerIPv6(hasIPv6Routes(vpnClientRouteCIDRs) && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
         setVpnClientSocks5Endpoint('');
         vpnDisconnectNotified.current = false;
         vpnStartedNotified.current = false;
@@ -2196,7 +2195,7 @@ function App() {
         mtu: normalizeVpnMTU(vpnClientMTU),
         routeMetric: normalizeRouteMetric(vpnClientRouteMetric),
         blockDnsLeak: isWindows && vpnClientBlockDNSLeak,
-        enableIpv6: vpnClientEnableIPv6,
+        enableIpv6: hasIPv6Routes(vpnClientRouteCIDRs),
         tunnelOnly: vpnClientTunnelOnly,
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
         ...((isFileTransferMode(mode) || mode === 'vpnClient') ? {clientRunId} : {}),
@@ -2346,7 +2345,6 @@ function App() {
     setVpnClientPassword(profile.passphrase || '');
     setVpnClientUseUDP(Boolean(profile.useUdp));
     setVpnClientP2PWithLAN(Boolean(profile.p2pWithLan));
-    setVpnClientEnableIPv6(Boolean(profile.routeIpv6));
     setVpnClientTunnelOnly(Boolean(profile.tunnelOnly));
     setVpnClientDNSServers(profile.dnsServers || defaultVpnDNS);
     setVpnClientRouteCIDRs(profile.routeCidrs || defaultVpnRoutes);
@@ -2395,9 +2393,6 @@ function App() {
         break;
       case 'p2pWithLan':
         setVpnClientP2PWithLAN(Boolean(value));
-        break;
-      case 'routeIpv6':
-        setVpnClientEnableIPv6(Boolean(value));
         break;
       case 'tunnelOnly':
         setVpnClientTunnelOnly(Boolean(value));
@@ -3533,9 +3528,8 @@ function App() {
             <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnClientUseUDP} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('useUdp', checked)} />
             <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnClientP2PWithLAN} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('p2pWithLan', checked)} />
           </SettingsSection>
-          <SettingsSection title={t.sectionRouting} summary={vpnClientTunnelOnly ? t.tunnelOnly : `${t.systemVpn}${vpnClientEnableIPv6 ? ' · IPv6' : ''}`}>
+          <SettingsSection title={t.sectionRouting} summary={vpnClientTunnelOnly ? t.tunnelOnly : `${t.systemVpn}${hasIPv6Routes(vpnClientRouteCIDRs) ? ' · IPv6' : ''}`}>
             <Toggle label={t.tunnelOnly} hint={t.tunnelOnlyHint} checked={vpnClientTunnelOnly} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('tunnelOnly', checked)} />
-            <Toggle label={t.routeIpv6} checked={vpnClientEnableIPv6} disabled={vpnClientRunning || vpnClientTunnelOnly} onChange={(checked) => setVpnProfileField('routeIpv6', checked)} />
             <div className="field">
               <label htmlFor="vpn-route-cidrs">{t.routeCidrs}</label>
               <textarea
@@ -3545,6 +3539,7 @@ function App() {
                 onChange={(event) => setVpnProfileField('routeCidrs', event.target.value)}
                 placeholder={t.routeCidrsPlaceholder}
               />
+              <div className="field-hint">{t.routeIpv6Hint}</div>
               <div className="quiet-actions">
                 <button type="button" className="quiet-action" disabled={vpnClientRunning || vpnClientTunnelOnly} onClick={() => setVpnProfileField('routeCidrs', defaultVpnRoutes)}>
                   {t.routeFillGlobal}
@@ -4033,13 +4028,17 @@ function latestReport(reports: P2PReport[]) {
   }, null);
 }
 
+function hasIPv6Routes(value: string): boolean {
+  return (value.trim() || defaultVpnRoutes).split(/\s+/).some((line) => line.includes(':') && line.includes('/'));
+}
+
 function defaultVpnProfile(name: string): VPNProfile {
   return {
     name: name || 'Default',
     passphrase: '',
     useUdp: false,
     p2pWithLan: false,
-    routeIpv6: false,
+    routeIpv6: true, // Compatibility field for older importers; not a setting.
     dnsServers: defaultVpnDNS,
     routeCidrs: defaultVpnRoutes,
     linkConfig: '',
@@ -4061,7 +4060,7 @@ function normalizeVpnProfile(profile: Partial<VPNProfile>, t: typeof text.zh): V
     passphrase: String(profile.passphrase || '').trim(),
     useUdp: Boolean(profile.useUdp),
     p2pWithLan: Boolean(profile.p2pWithLan),
-    routeIpv6: Boolean(profile.routeIpv6),
+    routeIpv6: hasIPv6Routes(String(profile.routeCidrs || defaultVpnRoutes)),
     dnsServers: normalizeLines(String(profile.dnsServers || defaultVpnDNS)) || defaultVpnDNS,
     routeCidrs: normalizeLines(String(profile.routeCidrs || defaultVpnRoutes)) || defaultVpnRoutes,
     linkConfig: String(profile.linkConfig || '').trim(),

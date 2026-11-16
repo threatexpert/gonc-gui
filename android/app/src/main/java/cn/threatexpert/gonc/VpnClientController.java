@@ -456,19 +456,6 @@ final class VpnClientController {
         lanHint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(lanHint);
 
-        CheckBox ipv6 = new CheckBox(host.context());
-        ipv6.setText(string(R.string.vpn_route_ipv6));
-        ipv6.setTextColor(Color.rgb(64, 81, 105));
-        ipv6.setTextSize(14);
-        ipv6.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        ipv6.setChecked(currentProfile().routeIpv6);
-        u.setControlEnabled(ipv6, !running);
-        ipv6.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            if (!GoncVpnState.isRunning()) {
-                currentProfile().routeIpv6 = isChecked;
-            }
-        });
-        box.addView(ipv6);
         TextView hint = u.text(string(R.string.vpn_route_ipv6_hint), 12, u.muted(), Typeface.NORMAL);
         hint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(hint);
