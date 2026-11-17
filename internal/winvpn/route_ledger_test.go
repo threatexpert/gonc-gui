@@ -19,6 +19,44 @@ func TestRouteLedgerNeverDeletesPreexistingRoutes(t *testing.T) {
 	}
 }
 
+func TestRouteLedgerRollsBackUnusableOwnedRoute(t *testing.T) {
+	r := ownedRoute{prefix: netip.MustParsePrefix("172.16.88.141/32"), iface: "en0"}
+	present := false
+	var commands []string
+	l := routeLedger{
+		present: func(ownedRoute) (bool, error) { return present, nil },
+		ready:   func(ownedRoute) (bool, error) { return false, nil },
+		command: func(op string, _ ownedRoute) routeMutation {
+			commands = append(commands, op)
+			present = op == "add"
+			return routeMutation{state: routeMutationSucceeded}
+		},
+	}
+	if err := l.add(r); err == nil {
+		t.Fatal("unusable route accepted")
+	}
+	if err := l.cleanup(); err != nil || present || len(l.owned) != 0 {
+		t.Fatal("unusable route leaked", err)
+	}
+	if !reflect.DeepEqual(commands, []string{"add", "delete"}) {
+		t.Fatal(commands)
+	}
+}
+
+func TestRouteLedgerLeavesUnusablePreexistingRoute(t *testing.T) {
+	l := routeLedger{
+		present: func(ownedRoute) (bool, error) { return true, nil },
+		ready:   func(ownedRoute) (bool, error) { return false, nil },
+		command: func(string, ownedRoute) routeMutation { t.Fatal("modified foreign route"); return routeMutation{} },
+	}
+	if err := l.add(ownedRoute{prefix: netip.MustParsePrefix("172.16.88.141/32"), iface: "en0"}); err == nil {
+		t.Fatal("invalid preexisting route reused")
+	}
+	if err := l.cleanup(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRouteLedgerDetectsZeroExitCodeFailure(t *testing.T) {
 	commands := 0
 	l := routeLedger{present: func(ownedRoute) (bool, error) { return false, nil }, command: func(op string, _ ownedRoute) routeMutation {

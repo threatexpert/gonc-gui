@@ -24,20 +24,24 @@ const (
 )
 
 func stableDarwinRoute(flags int, prefix netip.Prefix) bool {
+	return ownedDarwinRoute(flags, prefix) && flags&darwinRouteUp != 0 && flags&(darwinRouteReject|darwinRouteBlackhole) == 0
+}
+
+// Identity/ownership matching deliberately does not require a usable route.
+// An owned route that became REJECT/down must still be found during rollback.
+func ownedDarwinRoute(flags int, prefix netip.Prefix) bool {
 	if !prefix.IsValid() {
 		return false
 	}
 	host := prefix.Bits() == prefix.Addr().BitLen()
-	const required = darwinRouteUp | darwinRouteStatic
-	const excluded = darwinRouteWasCloned | darwinRouteIfScope | darwinRouteDynamic | darwinRouteReject | darwinRouteBlackhole
+	const required = darwinRouteStatic
+	const excluded = darwinRouteWasCloned | darwinRouteIfScope | darwinRouteDynamic
 	if flags&required != required || flags&excluded != 0 {
 		return false
 	}
-	// XNU nd6_rtrequest(RTM_ADD) adds LLINFO even to manually-created IPv6
-	// on-link host routes on point-to-point interfaces. It does not mean that
-	// such a STATIC route is a temporary WASCLONED entry. All other checks,
-	// including exact destination, interface and gateway matching, still apply.
-	if flags&darwinRouteLLInfo != 0 && !(host && prefix.Addr().Is6() && flags&darwinRouteGateway == 0) {
+	// Both ARP (IPv4) and ND (IPv6) attach LLINFO to manual on-link host
+	// routes. STATIC + LLINFO is not the same as a temporary WASCLONED entry.
+	if flags&darwinRouteLLInfo != 0 && !(host && flags&darwinRouteGateway == 0) {
 		return false
 	}
 	if host {
@@ -48,6 +52,19 @@ func stableDarwinRoute(flags int, prefix netip.Prefix) bool {
 
 type darwinRouteLookup struct {
 	iface, gateway string
+}
+
+func darwinRouteSurvivesCapture(peer netip.Addr, native netip.Prefix, capture []netip.Prefix) bool {
+	if !native.IsValid() || !native.Contains(peer) {
+		return false
+	}
+	for _, p := range capture {
+		// Equal specificity is ambiguous; do not rely on insertion order.
+		if p.Contains(peer) && p.Bits() >= native.Bits() {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDarwinRouteLookup(output string) (darwinRouteLookup, error) {

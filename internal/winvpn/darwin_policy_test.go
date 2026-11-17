@@ -45,8 +45,8 @@ func TestDarwinStaticIPv6HostWithLLInfo(t *testing.T) {
 			t.Fatalf("accepted missing required flag: %x", missing)
 		}
 	}
-	if stableDarwinRoute(flags, netip.MustParsePrefix("8.8.8.8/32")) {
-		t.Fatal("IPv4 LLINFO exception unintentionally enabled")
+	if !stableDarwinRoute(flags, netip.MustParsePrefix("172.16.88.141/32")) {
+		t.Fatal("manual IPv4 ARP host route rejected")
 	}
 	if stableDarwinRoute(flags&^darwinRouteHost, netip.MustParsePrefix("2001:4860::/32")) {
 		t.Fatal("network LLINFO exception unintentionally enabled")
@@ -69,6 +69,32 @@ func TestDarwinStaticIPv6HostWithLLInfo(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, []string{"add", "delete"}) {
 		t.Fatal(commands)
+	}
+}
+
+func TestDarwinRouteSurvivesCapture(t *testing.T) {
+	for _, tc := range []struct {
+		peer, native, capture string
+		want                  bool
+	}{
+		{"172.16.88.141", "172.16.88.0/24", "128.0.0.0/1", true},
+		{"172.16.88.141", "172.16.88.0/24", "172.16.0.0/16", true},
+		{"172.16.88.141", "172.16.88.0/24", "172.16.88.0/24", false},
+		{"172.16.88.141", "172.16.88.0/24", "172.16.88.128/25", false},
+		{"172.16.88.141", "172.16.88.0/24", "172.16.88.141/32", false},
+		{"10.1.2.3", "0.0.0.0/0", "0.0.0.0/1", false},
+		{"203.0.113.7", "0.0.0.0/0", "10.0.0.0/8", true},
+		{"2001:db8::7", "2001:db8::/64", "::/1", true},
+		{"2001:db8::7", "2001:db8::/64", "2001:db8::7/128", false},
+	} {
+		t.Run(tc.peer+"/"+tc.capture, func(t *testing.T) {
+			if got := darwinRouteSurvivesCapture(netip.MustParseAddr(tc.peer), netip.MustParsePrefix(tc.native), []netip.Prefix{netip.MustParsePrefix(tc.capture)}); got != tc.want {
+				t.Fatalf("got %t want %t", got, tc.want)
+			}
+		})
+	}
+	if darwinRouteSurvivesCapture(netip.MustParseAddr("172.16.88.141"), netip.Prefix{}, nil) {
+		t.Fatal("missing native route reused")
 	}
 }
 

@@ -3,6 +3,7 @@
 package winvpn
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/netip"
@@ -24,8 +25,38 @@ func ribIP(a route.Addr) net.IP {
 	return nil
 }
 
+func darwinRIBPrefix(m *route.RouteMessage) netip.Prefix {
+	if len(m.Addrs) <= syscall.RTAX_DST {
+		return netip.Prefix{}
+	}
+	addr, ok := netip.AddrFromSlice(ribIP(m.Addrs[syscall.RTAX_DST]))
+	if !ok {
+		return netip.Prefix{}
+	}
+	addr = addr.Unmap()
+	bits := 0
+	if m.Flags&syscall.RTF_HOST != 0 {
+		bits = addr.BitLen()
+	} else if len(m.Addrs) > syscall.RTAX_NETMASK && m.Addrs[syscall.RTAX_NETMASK] != nil {
+		var width int
+		bits, width = net.IPMask(ribIP(m.Addrs[syscall.RTAX_NETMASK])).Size()
+		if width != addr.BitLen() {
+			return netip.Prefix{}
+		}
+	}
+	return netip.PrefixFrom(addr, bits).Masked()
+}
+
 // Read the kernel RIB, not route(8)'s exit status (which can be zero on EEXIST).
 func routeInstalled(r ownedRoute) (bool, error) {
+	return inspectDarwinRoute(r, true)
+}
+
+func routePresent(r ownedRoute) (bool, error) {
+	return inspectDarwinRoute(r, false)
+}
+
+func inspectDarwinRoute(r ownedRoute, requireUsable bool) (bool, error) {
 	if !r.prefix.IsValid() {
 		return false, fmt.Errorf("invalid route prefix")
 	}
@@ -44,37 +75,27 @@ func routeInstalled(r ownedRoute) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return matchesDarwinRoute(r, *iface, msgs), nil
+	return matchesDarwinRouteState(r, *iface, msgs, requireUsable), nil
 }
 
 func matchesDarwinRoute(r ownedRoute, iface net.Interface, msgs []route.Message) bool {
+	return matchesDarwinRouteState(r, iface, msgs, true)
+}
+
+func matchesDarwinRouteState(r ownedRoute, iface net.Interface, msgs []route.Message, requireUsable bool) bool {
 	prefix := r.prefix
 	if !prefix.IsValid() || (r.index != 0 && r.index != iface.Index) {
 		return false
 	}
 	for _, msg := range msgs {
 		m, ok := msg.(*route.RouteMessage)
-		if !ok || m.Index != iface.Index || !stableDarwinRoute(m.Flags, prefix) || len(m.Addrs) <= syscall.RTAX_DST {
+		if !ok || m.Index != iface.Index || !ownedDarwinRoute(m.Flags, prefix) || len(m.Addrs) <= syscall.RTAX_DST {
 			continue
 		}
-		dst := ribIP(m.Addrs[syscall.RTAX_DST])
-		addr, ok := netip.AddrFromSlice(dst)
-		if !ok {
+		if requireUsable && !stableDarwinRoute(m.Flags, prefix) {
 			continue
 		}
-		addr = addr.Unmap()
-		bits := 0
-		if m.Flags&syscall.RTF_HOST != 0 {
-			bits = addr.BitLen()
-		} else if len(m.Addrs) > syscall.RTAX_NETMASK && m.Addrs[syscall.RTAX_NETMASK] != nil {
-			mask := ribIP(m.Addrs[syscall.RTAX_NETMASK])
-			var width int
-			bits, width = net.IPMask(mask).Size()
-			if width != addr.BitLen() {
-				continue
-			}
-		}
-		if netip.PrefixFrom(addr, bits).Masked() != prefix.Masked() {
+		if darwinRIBPrefix(m) != prefix.Masked() {
 			continue
 		}
 		if r.gateway != "" {
@@ -97,10 +118,71 @@ func matchesDarwinRoute(r ownedRoute, iface net.Interface, msgs []route.Message)
 			}
 		} else if m.Flags&syscall.RTF_GATEWAY != 0 {
 			continue
+		} else if requireUsable && prefix.Bits() == prefix.Addr().BitLen() && len(iface.HardwareAddr) != 0 {
+			if len(m.Addrs) <= syscall.RTAX_GATEWAY {
+				continue
+			}
+			link, ok := m.Addrs[syscall.RTAX_GATEWAY].(*route.LinkAddr)
+			// An unresolved neighbour has an empty address and is valid. The
+			// local interface MAC is NEVER the destination of a peer bypass.
+			if !ok || m.Flags&syscall.RTF_LLINFO == 0 || (link.Index != 0 && link.Index != iface.Index) || bytes.Equal(link.Addr, iface.HardwareAddr) {
+				continue
+			}
 		}
 		return true
 	}
 	return false
+}
+
+// Reuse only a stable unscoped RIB route matching the currently selected exit.
+// A scoped ARP/ND clone is not proof that its parent subnet survives capture.
+func reusableDarwinBypass(r ownedRoute, iface net.Interface, messages []route.Message, capture []netip.Prefix) netip.Prefix {
+	var best netip.Prefix
+	for _, message := range messages {
+		m, ok := message.(*route.RouteMessage)
+		if !ok {
+			continue
+		}
+		p := darwinRIBPrefix(m)
+		if !p.IsValid() || !p.Contains(r.prefix.Addr()) {
+			continue
+		}
+		candidate := r
+		candidate.prefix = p
+		if matchesDarwinRoute(candidate, iface, []route.Message{m}) && (!best.IsValid() || p.Bits() > best.Bits()) {
+			best = p
+		}
+	}
+	if !darwinRouteSurvivesCapture(r.prefix.Addr(), best, capture) {
+		return netip.Prefix{}
+	}
+	return best
+}
+
+func (s *Session) ensureDarwinBypass(r ownedRoute, capture []netip.Prefix) error {
+	iface, err := net.InterfaceByName(r.iface)
+	if err != nil {
+		return err
+	}
+	buf, err := route.FetchRIB(syscall.AF_UNSPEC, route.RIBTypeRoute, 0)
+	if err != nil {
+		return err
+	}
+	messages, err := route.ParseRIB(route.RIBTypeRoute, buf)
+	if err != nil {
+		return err
+	}
+	// Do not hide a bad preexisting host route behind a usable parent subnet.
+	if matchesDarwinRouteState(r, *iface, messages, false) && !matchesDarwinRoute(r, *iface, messages) {
+		return fmt.Errorf("existing bypass %s on %s is unusable; left untouched", r.prefix, r.iface)
+	}
+	if p := reusableDarwinBypass(r, *iface, messages, capture); p.IsValid() {
+		if s.trace != nil {
+			s.trace(fmt.Sprintf("VPN bypass %s: reuse native route %s on %s; no route added", r.prefix.Addr(), p, r.iface))
+		}
+		return nil // Not owned: rollback/Stop must not delete this native route.
+	}
+	return s.addOwnedRoute(r)
 }
 
 func (s *Session) addOwnedRoute(r ownedRoute) error {
@@ -110,7 +192,7 @@ func (s *Session) addOwnedRoute(r ownedRoute) error {
 	}
 	r.index = iface.Index
 	if s.routeLedger == nil {
-		s.routeLedger = &routeLedger{present: routeInstalled, command: runDarwinRoute, trace: s.trace, diagnose: diagnoseDarwinRoute}
+		s.routeLedger = &routeLedger{present: routePresent, ready: routeInstalled, command: runDarwinRoute, trace: s.trace, diagnose: diagnoseDarwinRoute}
 	}
 	return s.routeLedger.add(r)
 }
@@ -129,6 +211,16 @@ func nativeRouteTo(ip string) (darwinRouteLookup, error) {
 }
 
 func runDarwinRoute(op string, r ownedRoute) routeMutation {
+	iface, err := net.InterfaceByName(r.iface)
+	if err != nil {
+		return routeMutation{routeMutationFailed, err}
+	}
+	if r.index != 0 && r.index != iface.Index {
+		return routeMutation{routeMutationFailed, fmt.Errorf("interface %s was replaced", r.iface)}
+	}
+	if r.gateway == "" && r.prefix.IsValid() && r.prefix.Bits() == r.prefix.Addr().BitLen() && len(iface.HardwareAddr) > 0 {
+		return mutateDarwinLinkRoute(op, r, *iface)
+	}
 	output, err := exec.Command("route", routeArgs(op, r)...).CombinedOutput()
 	return parseDarwinRouteMutation(op, r, string(output), err)
 }

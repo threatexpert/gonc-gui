@@ -18,6 +18,7 @@ type routeLedger struct {
 	owned     []ownedRoute
 	uncertain []ownedRoute // Never delete without evidence of a successful add.
 	present   func(ownedRoute) (bool, error)
+	ready     func(ownedRoute) (bool, error) // Optional stronger readiness check; never used to decide cleanup.
 	command   func(string, ownedRoute) routeMutation
 	trace     func(string)
 	diagnose  func(ownedRoute) string
@@ -32,13 +33,17 @@ func (l *routeLedger) add(r ownedRoute) error {
 		return fmt.Errorf("inspect route %s: %w", r.prefix, err)
 	}
 	if installed {
+		if ready, err := l.isReady(r); err != nil || !ready {
+			l.logDiagnostics(r)
+			return errors.Join(fmt.Errorf("existing route %s on %s is not usable; left untouched", r.prefix, r.iface), err)
+		}
 		if l.trace != nil {
 			l.trace(fmt.Sprintf("VPN route %s: reuse static route via %s on %s", r.prefix, r.gateway, r.iface))
 		}
 		return nil
 	}
 	result := l.command("add", r)
-	installed, verifyErr := l.present(r)
+	installed, verifyErr := l.isReady(r)
 	// Retain candidates even if verification failed: cleanup must query them
 	// again instead of forgetting possibly-created routes after a partial start.
 	// A failed add (including EEXIST) must never claim someone else's route,
@@ -66,6 +71,13 @@ func (l *routeLedger) add(r ownedRoute) error {
 		l.trace(fmt.Sprintf("VPN route %s: created static route via %s on %s", r.prefix, r.gateway, r.iface))
 	}
 	return nil
+}
+
+func (l *routeLedger) isReady(r ownedRoute) (bool, error) {
+	if l.ready != nil {
+		return l.ready(r)
+	}
+	return l.present(r)
 }
 
 func (l *routeLedger) logDiagnostics(r ownedRoute) {

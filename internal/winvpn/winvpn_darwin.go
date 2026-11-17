@@ -215,11 +215,22 @@ func (s *Session) configureBypassRoutes() error {
 		return err
 	}
 	s.bypassRoutes = routes
+	var capture []netip.Prefix
+	for _, cidr := range s.config.Routes {
+		if strings.TrimSpace(cidr) == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(strings.TrimSpace(cidr))
+		if err != nil {
+			return fmt.Errorf("invalid VPN route %s", cidr)
+		}
+		capture = append(capture, p.Masked())
+	}
 	for _, r := range routes {
 		if s.trace != nil {
 			s.trace(fmt.Sprintf("VPN bypass %s: native interface=%s gateway=%s", r.prefix, r.iface, r.gateway))
 		}
-		if err := s.addOwnedRoute(r); err != nil {
+		if err := s.ensureDarwinBypass(r, capture); err != nil {
 			return fmt.Errorf("add VPN bypass route %s: %w", r.prefix, err)
 		}
 	}
