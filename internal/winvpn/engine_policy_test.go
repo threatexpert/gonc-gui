@@ -16,7 +16,7 @@ func TestEngineIPv6RejectionClearsOnRecovery(t *testing.T) {
 		if key.Device != "tun://gonc" || key.Proxy != "socks5://127.0.0.1:1080" || key.MTU != 1400 || key.LogLevel != "warn" {
 			t.Fatalf("lost engine settings: %+v", key)
 		}
-		if key.DeferredTCP.SOCKSHandshakeTimeout != 0 || key.DeferredTCP.FailureCacheTTL != 0 || key.DeferredTCP.FailureCacheCapacity != 0 {
+		if key.DeferredTCP.ProxyHandshakeTimeout != 0 || key.DeferredTCP.FailureCacheTTL != 0 || key.DeferredTCP.FailureCacheCapacity != 0 {
 			t.Fatalf("desktop should use shared defaults: %+v", key)
 		}
 	}

@@ -7,12 +7,13 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.13-0.20261116125136-ee76a9aa423e
+	github.com/threatexpert/gonc/v2 v2.6.13-0.20261117072154-a5de85effa06
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/image v0.41.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0
+	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 )
 
 require (
@@ -77,10 +78,9 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
-	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f // indirect
 	gvisor.dev/gvisor v0.0.0-20261010064756-cd110d9dec04 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
 
 // Keep upstream import paths, but pin our fork with deferred TCP and IPv6 rejection.
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261116123949-4b0120a38bf2
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261117070555-91168c1220db
