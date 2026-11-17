@@ -9,29 +9,30 @@ import (
 // VPNDetails describes this application's session and route configuration, not
 // an audit of the OS routing table or a measurement of the whole network card.
 type VPNDetails struct {
-	Revision         uint64   `json:"revision"`
-	Running          bool     `json:"running"`
-	Connected        bool     `json:"connected"`
-	Ready            bool     `json:"ready"`
-	EverReady        bool     `json:"everReady"`
-	ConnectionState  string   `json:"connectionState"`
-	TunnelStatus     string   `json:"tunnelStatus"`
-	ConnectionError  string   `json:"connectionError"`
-	RetryRemainingMS int64    `json:"retryRemainingMs"`
-	SessionStartedAt string   `json:"sessionStartedAt"`
-	LastConnectedAt  string   `json:"lastConnectedAt"`
-	DurationSeconds  int64    `json:"durationSeconds"`
-	InBytes          int64    `json:"inBytes"`
-	OutBytes         int64    `json:"outBytes"`
-	InBps            float64  `json:"inBps"`
-	OutBps           float64  `json:"outBps"`
-	TrafficAt        string   `json:"trafficAt"`
-	TunnelOnly       bool     `json:"tunnelOnly"`
-	RouteState       string   `json:"routeState"`
-	ConfiguredRoutes []string `json:"configuredRoutes"`
-	Routes           []string `json:"routes"`
-	BypassIPs        []string `json:"bypassIps"`
-	DNSServers       []string `json:"dnsServers"`
+	Revision           uint64   `json:"revision"`
+	Running            bool     `json:"running"`
+	Connected          bool     `json:"connected"`
+	Ready              bool     `json:"ready"`
+	EverReady          bool     `json:"everReady"`
+	ConnectionState    string   `json:"connectionState"`
+	TunnelStatus       string   `json:"tunnelStatus"`
+	ConnectionError    string   `json:"connectionError"`
+	ConfigurationError string   `json:"configurationError"`
+	RetryRemainingMS   int64    `json:"retryRemainingMs"`
+	SessionStartedAt   string   `json:"sessionStartedAt"`
+	LastConnectedAt    string   `json:"lastConnectedAt"`
+	DurationSeconds    int64    `json:"durationSeconds"`
+	InBytes            int64    `json:"inBytes"`
+	OutBytes           int64    `json:"outBytes"`
+	InBps              float64  `json:"inBps"`
+	OutBps             float64  `json:"outBps"`
+	TrafficAt          string   `json:"trafficAt"`
+	TunnelOnly         bool     `json:"tunnelOnly"`
+	RouteState         string   `json:"routeState"`
+	ConfiguredRoutes   []string `json:"configuredRoutes"`
+	Routes             []string `json:"routes"`
+	BypassIPs          []string `json:"bypassIps"`
+	DNSServers         []string `json:"dnsServers"`
 }
 
 type vpnDetailsTracker struct {
@@ -159,6 +160,21 @@ func (v *vpnDetailsTracker) routes(state string, routes, bypass, dns []string) {
 	}
 	if dns != nil {
 		v.data.DNSServers = append([]string{}, dns...)
+	}
+}
+
+// Keep configuration failures through teardown. A new user connection creates
+// a new tracker; transport status/cleanup must not erase the useful cause.
+func (v *vpnDetailsTracker) configurationFailed(err error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.data.Running || v.stopping {
+		return
+	}
+	v.data.RouteState = "error"
+	v.data.Ready = false
+	if err != nil {
+		v.data.ConfigurationError = err.Error()
 	}
 }
 

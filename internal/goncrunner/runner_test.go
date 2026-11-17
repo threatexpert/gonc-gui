@@ -10,6 +10,22 @@ import (
 	"gonc-gui/internal/sharecontent"
 )
 
+func TestInitialPeerIPv6State(t *testing.T) {
+	for _, tc := range []struct {
+		tunnelOnly, hasRoutes bool
+		want                  string
+	}{
+		{true, true, "tunnel_only"},
+		{true, false, "tunnel_only"},
+		{false, false, "disabled"},
+		{false, true, "waiting"},
+	} {
+		if got := initialPeerIPv6State(tc.tunnelOnly, tc.hasRoutes); got != tc.want {
+			t.Fatalf("%+v: got %s", tc, got)
+		}
+	}
+}
+
 func TestGeneratedShareLifecycleCanListBecomeEmptyAndRelease(t *testing.T) {
 	manager := sharecontent.NewManager()
 	t.Cleanup(func() { _ = manager.Cleanup() })

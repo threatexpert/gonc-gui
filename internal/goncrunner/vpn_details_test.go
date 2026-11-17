@@ -1,10 +1,56 @@
 package goncrunner
 
 import (
+	"encoding/json"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestVPNConfigurationFailureSurvivesTeardown(t *testing.T) {
+	v := newVPNDetailsTracker(Request{}, nil)
+	now := time.Now()
+	v.connection("connected", now)
+	v.routes("applying", nil, nil, nil)
+	reason := "configure VPN DNS route for 2001:4860:4860::8888: route was not installed"
+	v.configurationFailed(errors.New(reason))
+	d := v.snapshot(now)
+	if d.RouteState != "error" || d.Ready || d.ConfigurationError != reason {
+		t.Fatal("configuration failure lost", d)
+	}
+	encoded, err := json.Marshal(d)
+	if err != nil || !strings.Contains(string(encoded), `"configurationError":"`+reason+`"`) {
+		t.Fatal("failure missing from frontend payload", string(encoded), err)
+	}
+	// Duplicate transport reports and explicit stop must not erase the cause.
+	v.connection("connected", now)
+	v.beginStop()
+	v.configurationFailed(errors.New("late failure during cleanup"))
+	v.finish(now)
+	d = v.snapshot(now)
+	if d.ConfigurationError != reason || d.Running || d.Ready {
+		t.Fatal("teardown replaced original failure", d)
+	}
+	next := newVPNDetailsTracker(Request{}, nil).snapshot(now)
+	if next.ConfigurationError != "" || next.RouteState == "error" {
+		t.Fatal("new connection inherited old failure", next)
+	}
+}
+
+func TestVPNConfigurationFailureWithoutReasonAndLateCallback(t *testing.T) {
+	v := newVPNDetailsTracker(Request{}, nil)
+	v.configurationFailed(nil)
+	if d := v.snapshot(time.Now()); d.RouteState != "error" || d.ConfigurationError != "" || d.Ready {
+		t.Fatal(d)
+	}
+	v.finish(time.Now())
+	v.configurationFailed(errors.New("obsolete callback"))
+	if v.snapshot(time.Now()).ConfigurationError != "" {
+		t.Fatal("late callback changed finished session")
+	}
+}
 
 func TestVPNDetailsPublishesOnlyAcceptedTunnelStages(t *testing.T) {
 	lifecycle := newVPNTunnelLifecycle()

@@ -14,6 +14,8 @@ import {ProfileDeleteDialog} from './ProfileDeleteDialog';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
 import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails, type VPNSnapshot} from './vpnDetails';
+import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex, type VPNConfigurationFailure} from './vpnDetails';
+import {initialPeerIPv6State, peerIPv6Label as peerIpv6Label} from './vpnDetails';
 import {
   addedUniquePaths,
   appendUniquePaths,
@@ -306,6 +308,10 @@ const text = {
     vpnConnectionFailed: '连接失败',
     vpnLastFailure: '最近失败原因',
     vpnFailureUnknown: '底层未提供具体原因，请查看活动日志。',
+    vpnConfigurationFailureUnknown: '未能获取失败原因，请查看活动日志。',
+    vpnLastConfigurationFailure: '最近 VPN 配置失败',
+    vpnViewActivityLog: '查看活动日志',
+    vpnFailureDetails: '展开失败详情',
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
@@ -395,11 +401,12 @@ const text = {
     extraArgsHint: '追加到外层 gonc 命令，适合临时使用高级参数。',
     routeIpv6Hint: 'IPv6 接管和出口检测由路由规则决定；未配置 IPv6 路由时使用本地网络。',
     peerIpv6: '对端 IPv6 出口',
-    peerIpv6Disabled: '未配置 IPv6 路由',
-    peerIpv6Waiting: '等待 P2P',
+    peerIpv6Disabled: '未检测（本机未配置 IPv6 路由）',
+    peerIpv6TunnelOnly: '未检测（仅 SOCKS5 模式）',
+    peerIpv6Waiting: '等待隧道连接',
     peerIpv6Checking: '检测中',
     peerIpv6Available: '可用',
-    peerIpv6Unavailable: '不可用',
+    peerIpv6Unavailable: '检测未通过',
     tunnelOnly: '仅 SOCKS5 隧道',
     tunnelOnlyHint: '只建立本地 SOCKS5 隧道，不修改系统路由。',
     vpnDnsServers: 'DNS',
@@ -607,6 +614,10 @@ const text = {
     vpnConnectionFailed: 'Connection failed',
     vpnLastFailure: 'Last failure',
     vpnFailureUnknown: 'No specific reason was reported. Check the activity log.',
+    vpnConfigurationFailureUnknown: 'The failure reason is unavailable. Check the activity log.',
+    vpnLastConfigurationFailure: 'Last VPN configuration failure',
+    vpnViewActivityLog: 'View activity log',
+    vpnFailureDetails: 'Show failure details',
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
@@ -696,11 +707,12 @@ const text = {
     extraArgsHint: 'Appended to the outer gonc command for temporary advanced options.',
     routeIpv6Hint: 'Routes determine IPv6 capture and probing. Without IPv6 routes, IPv6 uses the local network.',
     peerIpv6: 'Peer IPv6 exit',
-    peerIpv6Disabled: 'No IPv6 routes',
-    peerIpv6Waiting: 'Waiting for P2P',
+    peerIpv6Disabled: 'Not checked (no local IPv6 routes configured)',
+    peerIpv6TunnelOnly: 'Not checked (SOCKS5-only mode)',
+    peerIpv6Waiting: 'Waiting for tunnel connection',
     peerIpv6Checking: 'Checking',
     peerIpv6Available: 'Available',
-    peerIpv6Unavailable: 'Unavailable',
+    peerIpv6Unavailable: 'Check failed',
     tunnelOnly: 'Tunnel only',
     tunnelOnlyHint: 'Only create the local SOCKS5 tunnel without changing system routes.',
     vpnDnsServers: 'DNS',
@@ -1050,6 +1062,7 @@ function App() {
   const [startPending, setStartPending] = useState(false);
   const [vpnDisconnectPhase, setVpnDisconnectPhase] = useState<VpnDisconnectPhase>('idle');
   const [vpnSnapshot, setVpnSnapshot] = useState<VPNSnapshot | null>(null);
+  const [vpnConfigurationFailure, setVpnConfigurationFailure] = useState<VPNConfigurationFailure | null>(null);
   const [vpnPathsExpanded, setVpnPathsExpanded] = useState(false);
   const activeVPNRun = useRef(0);
   const [vpnDisconnectCoordinator] = useState(() => createVpnDisconnectCoordinator(setVpnDisconnectPhase));
@@ -1078,7 +1091,7 @@ function App() {
   const [receiveTraffic, setReceiveTraffic] = useState<LogEvent | null>(null);
   const [vpnServerTraffic, setVpnServerTraffic] = useState<LogEvent | null>(null);
   const [vpnClientTraffic, setVpnClientTraffic] = useState<LogEvent | null>(null);
-  const [vpnClientPeerIPv6, setVpnClientPeerIPv6] = useState('disabled');
+  const [vpnClientPeerIPv6, setVpnClientPeerIPv6] = useState('');
   const [vpnClientSocks5Endpoint, setVpnClientSocks5Endpoint] = useState('');
   const [passwordVisibility, setPasswordVisibility] = useState(hiddenPassphraseVisibility);
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -1093,6 +1106,7 @@ function App() {
   const [isAdministrator, setIsAdministrator] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [logFocusTarget, setLogFocusTarget] = useState<LogEvent | null>(null);
   const [securityInfoOpen, setSecurityInfoOpen] = useState(false);
   const [udpHelpOpen, setUdpHelpOpen] = useState(false);
   const [profilesShowAll, setProfilesShowAll] = useState(storedProfilesShowAll);
@@ -1201,11 +1215,19 @@ function App() {
     if (!logOpen) {
       return;
     }
-    const logs = logsRef.current;
-    if (logs) {
-      logs.scrollTop = logs.scrollHeight;
+    const container = logsRef.current;
+    if (container) {
+      const index = logFocusTarget ? logs.indexOf(logFocusTarget) : -1;
+      const target = index >= 0 ? container.querySelector<HTMLElement>(`[data-log-index="${index}"]`) : null;
+      if (target) target.scrollIntoView({block: 'center'});
+      else container.scrollTop = container.scrollHeight;
+      if (logFocusTarget) container.focus({preventScroll: true});
     }
-  }, [logOpen, logs.length]);
+  }, [logOpen, logs, logFocusTarget]);
+
+  useEffect(() => {
+    setVpnConfigurationFailure((current) => retainVPNConfigurationFailure(current, vpnSnapshot?.data, activeVPNRun.current));
+  }, [vpnSnapshot]);
 
   useEffect(() => {
     if (!aboutOpen) {
@@ -1327,6 +1349,9 @@ function App() {
           : vpnConnectionPhase === 'retryWait' || (['connecting', 'reconnecting', 'retrying'].includes(vpnConnectionPhase) && vpnAttempt === 'waitingPeer') ? 'waiting'
           : vpnConnectionPhase === 'idle' ? 'idle' : 'connecting'};
   const vpnShowFailure = vpnDisconnectDisplay === 'idle' && ['failed', 'retryWait', 'retrying'].includes(vpnConnectionPhase);
+  const vpnShowConfigurationFailure = Boolean(vpnConfigurationFailure) || vpnConnectionPhase === 'error';
+  const vpnConfigurationFailureReason = vpnConfigurationFailure?.reason || vpnDetails?.configurationError || '';
+  const vpnConfigurationSummary = vpnConfigurationFailureSummary(vpnConfigurationFailureReason, lang);
   // Keep the session view through reconnects; restore configuration when stopped.
   const vpnClientSessionCompact = vpnClientRunning && (vpnClientHasConnected || vpnClientStatus.tone === 'connected');
   const vpnServerConnectedCount = vpnServerSessions.filter((report) => report.topic && report.status === 'connected').length;
@@ -1673,6 +1698,7 @@ function App() {
   }
 
   function showDownloadWarningLog() {
+    setLogFocusTarget(null);
     setLogOpen(true);
     window.setTimeout(() => {
       const logs = logsRef.current;
@@ -1681,6 +1707,12 @@ function App() {
         logs.focus({preventScroll: true});
       }
     }, 40);
+  }
+
+  function showVPNFailureLog() {
+    const index = vpnFailureLogIndex(logs, vpnConfigurationFailure?.runId ?? activeVPNRun.current);
+    setLogFocusTarget(index >= 0 ? logs[index] : null);
+    setLogOpen(true);
   }
 
   async function addFolder() {
@@ -2166,12 +2198,13 @@ function App() {
         setVpnServerTraffic(null);
       } else {
         activeVPNRun.current = clientRunId;
+        setVpnConfigurationFailure(null);
         setVpnSnapshot(null);
         setVpnPathsExpanded(false);
         setVpnClientHasConnected(false);
         setVpnClientP2PReport(null);
         setVpnClientTraffic(null);
-        setVpnClientPeerIPv6(hasIPv6Routes(vpnClientRouteCIDRs) && !vpnClientTunnelOnly ? 'waiting' : 'disabled');
+        setVpnClientPeerIPv6(initialPeerIPv6State(vpnClientTunnelOnly, hasIPv6Routes(vpnClientRouteCIDRs)));
         setVpnClientSocks5Endpoint('');
         vpnDisconnectNotified.current = false;
         vpnStartedNotified.current = false;
@@ -3460,7 +3493,19 @@ function App() {
             </div>
             <div className="vpn-hero-action">{runButton('compact')}</div>
           </div>
-          {vpnShowFailure && <p className="vpn-connection-error">{t.vpnLastFailure}：{vpnDetails?.connectionError ? localizeError(vpnDetails.connectionError) : t.vpnFailureUnknown}</p>}
+          {vpnShowConfigurationFailure && (
+            <div className="vpn-configuration-failure" role="status">
+              <p>{t.vpnLastConfigurationFailure}：{vpnConfigurationSummary || t.vpnConfigurationFailureUnknown}</p>
+              {vpnConfigurationFailureReason && vpnConfigurationFailureReason !== vpnConfigurationSummary && (
+                <details key={vpnConfigurationFailureReason}>
+                  <summary>{t.vpnFailureDetails}</summary>
+                  <pre>{vpnConfigurationFailureReason}</pre>
+                </details>
+              )}
+              <button type="button" className="ghost" onClick={showVPNFailureLog}>{t.vpnViewActivityLog}</button>
+            </div>
+          )}
+          {!vpnShowConfigurationFailure && vpnShowFailure && <p className="vpn-connection-error">{t.vpnLastFailure}：{vpnDetails?.connectionError ? localizeError(vpnDetails.connectionError) : t.vpnFailureUnknown}</p>}
           {startHint && <p className="vpn-hero-hint">{startHint}</p>}
           {vpnClientRunning && (
             <>
@@ -3782,7 +3827,7 @@ function App() {
             {logs.length === 0 ? (
               <p className="muted">{t.logHint}</p>
             ) : logs.map((log, index) => (
-              <div className={`log-line ${log.level}`} key={`${log.time}-${index}`}>
+              <div className={`log-line ${log.level}${log === logFocusTarget ? ' log-line-focused' : ''}`} data-log-index={index} key={`${log.time}-${index}`}>
                 <time>{new Date(log.time).toLocaleTimeString()}</time>
                 <span>{log.message}</span>
               </div>
@@ -3824,7 +3869,7 @@ function App() {
         <span className="status-divider" />
         <span className="status-segment">{formatRate(transferSpeed)}</span>
         <span className="status-spacer" />
-        <button type="button" className={`statusbar-button${logOpen ? ' active' : ''}`} aria-expanded={logOpen} onClick={() => setLogOpen((value) => !value)}>
+        <button type="button" className={`statusbar-button${logOpen ? ' active' : ''}`} aria-expanded={logOpen} onClick={() => { setLogFocusTarget(null); setLogOpen((value) => !value); }}>
           <Icon name="terminal" />
           {t.activity}
           {logs.length > 0 && <span className="badge">{logs.length}</span>}
@@ -4131,23 +4176,6 @@ function routeLabel(modeValue: string, t: typeof text.zh) {
     return t.lanRoute;
   }
   return '-';
-}
-
-function peerIpv6Label(value: string, t: typeof text.zh) {
-  switch ((value || '').trim().toLowerCase()) {
-    case 'disabled':
-      return t.peerIpv6Disabled;
-    case 'waiting':
-      return t.peerIpv6Waiting;
-    case 'checking':
-      return t.peerIpv6Checking;
-    case 'available':
-      return t.peerIpv6Available;
-    case 'unavailable':
-      return t.peerIpv6Unavailable;
-    default:
-      return value || '-';
-  }
 }
 
 function normalizeP2PStatus(status: string) {

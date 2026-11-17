@@ -402,11 +402,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		}
 		emit(sink, "status", "info", "Elevated VPN helper is ready")
 	}
-	if req.TunnelOnly || !wantsIPv6 {
-		emitPeerIPv6(sink, "disabled")
-	} else {
-		emitPeerIPv6(sink, "waiting")
-	}
+	emitPeerIPv6(sink, initialPeerIPv6State(req.TunnelOnly, wantsIPv6))
 
 	lifecycle := newVPNTunnelLifecycle()
 	cb.onReady = lifecycle.ready
@@ -481,7 +477,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				},
 				paused: func(status string, err error) {
 					if err != nil {
-						cb.vpnDetails.routes("error", nil, nil, nil)
+						cb.vpnDetails.configurationFailed(err)
 						emit(sink, "status", "warn", "System VPN pause failed: "+err.Error())
 					} else {
 						cb.vpnDetails.routes("paused", nil, nil, nil)
@@ -495,7 +491,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				},
 			})
 			if err != nil {
-				cb.vpnDetails.routes("error", nil, nil, nil)
+				cb.vpnDetails.configurationFailed(err)
 				cb.vpnDetails.publish()
 				emit(sink, "status", "error", "System VPN start failed: "+err.Error())
 				session.Stop()
@@ -519,6 +515,16 @@ func systemVPNConfig(req Request, s vpnTunnelSnapshot, routes []string, ipv6Avai
 		BlockDNSLeak:   req.BlockDNSLeak,
 		LogLevel:       "warn",
 	}
+}
+
+func initialPeerIPv6State(tunnelOnly, hasIPv6Routes bool) string {
+	if tunnelOnly {
+		return "tunnel_only"
+	}
+	if !hasIPv6Routes {
+		return "disabled"
+	}
+	return "waiting"
 }
 
 func resolveEffectiveIPv6(parent context.Context, requested bool, socks5Endpoint string, sink Sink) bool {

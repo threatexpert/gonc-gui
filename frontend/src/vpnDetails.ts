@@ -7,6 +7,7 @@ export type VPNDetails = {
   connectionState: string;
   tunnelStatus: string;
   connectionError: string;
+  configurationError?: string;
   retryRemainingMs: number;
   sessionStartedAt: string;
   lastConnectedAt: string;
@@ -25,6 +26,52 @@ export type VPNDetails = {
 };
 
 export type VPNSnapshot = {data: VPNDetails; receivedAt: number};
+
+export function initialPeerIPv6State(tunnelOnly: boolean, hasIPv6Routes: boolean): string {
+  return tunnelOnly ? 'tunnel_only' : hasIPv6Routes ? 'waiting' : 'disabled';
+}
+
+export function peerIPv6Label(value: string, labels: Record<'peerIpv6Disabled' | 'peerIpv6TunnelOnly' | 'peerIpv6Waiting' | 'peerIpv6Checking' | 'peerIpv6Available' | 'peerIpv6Unavailable', string>): string {
+  switch ((value || '').trim().toLowerCase()) {
+    case 'disabled': return labels.peerIpv6Disabled;
+    case 'tunnel_only': return labels.peerIpv6TunnelOnly;
+    case 'waiting': return labels.peerIpv6Waiting;
+    case 'checking': return labels.peerIpv6Checking;
+    case 'available': return labels.peerIpv6Available;
+    case 'unavailable': return labels.peerIpv6Unavailable;
+    default: return value || '-';
+  }
+}
+
+export type VPNConfigurationFailure = {reason: string; runId: number};
+
+// Stored separately from counters/profile selection. Only the next user
+// connection clears it; stopped/idle snapshots cannot erase the last cause.
+export function retainVPNConfigurationFailure(current: VPNConfigurationFailure | null, data: VPNDetails | undefined, runId: number): VPNConfigurationFailure | null {
+  if (runId <= 0 || !data || (data.routeState !== 'error' && !data.configurationError)) return current;
+  const reason = data.configurationError?.trim() || '';
+  if (current?.runId === runId && (!reason || current.reason === reason)) return current;
+  return {reason, runId};
+}
+
+export function vpnConfigurationFailureSummary(reason: string, lang: 'zh' | 'en'): string {
+  const dnsRoute = reason.match(/configure VPN DNS route for ([0-9a-fA-F:.]+): /);
+  if (dnsRoute) return lang === 'zh' ? `无法配置 DNS 路由：${dnsRoute[1]}` : `Could not configure DNS route: ${dnsRoute[1]}`;
+  const route = reason.match(/route ([0-9a-fA-F:./]+) was not installed on ([\w.-]+)/);
+  if (route) return lang === 'zh' ? `路由验证失败：${route[1]}（${route[2]}）` : `Route verification failed: ${route[1]} (${route[2]})`;
+  const firstLine = reason.trim().split(/\r?\n/, 1)[0].replace(/^System VPN start failed:\s*/, '').trim();
+  return firstLine.length > 160 ? firstLine.slice(0, 160) + '…' : firstLine;
+}
+
+type VPNFailureLog = {mode?: string; clientRunId?: number; message: string};
+export function vpnFailureLogIndex(logs: readonly VPNFailureLog[], runId: number): number {
+  if (runId <= 0) return -1;
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const log = logs[i];
+    if (log.mode === 'vpnClient' && log.clientRunId === runId && /^System VPN (start|pause) failed:/.test(log.message)) return i;
+  }
+  return -1;
+}
 
 // Match the file receiver's pre-connection labels. In particular discovering
 // and unknown stages use "establishing"; connected never implies VPN readiness.

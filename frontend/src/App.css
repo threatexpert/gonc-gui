@@ -2092,6 +2092,38 @@ html.profile-dragging * {
   text-align: right;
 }
 
+.vpn-configuration-failure {
+  margin: 0 16px 14px;
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.vpn-configuration-failure p {
+  margin: 0 0 6px;
+}
+
+.vpn-configuration-failure summary {
+  cursor: pointer;
+}
+
+.vpn-configuration-failure pre {
+  max-height: 12em;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+}
+
+.vpn-configuration-failure button {
+  margin-top: 6px;
+}
+
+.log-line.log-line-focused {
+  outline: 1px solid var(--danger);
+  outline-offset: -1px;
+}
+
 .vpn-paths {
   margin-top: 14px;
   font-size: 13px;

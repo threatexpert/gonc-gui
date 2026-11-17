@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails} from '../src/vpnDetails.js';
+import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex} from '../src/vpnDetails.js';
+import {initialPeerIPv6State, peerIPv6Label} from '../src/vpnDetails.js';
 
 const sample = (patch: Partial<VPNDetails> = {}): VPNDetails => ({
   revision: 1, running: true, connected: true, ready: true, everReady: true, sessionStartedAt: '2026-11-15T10:00:00Z',
@@ -9,6 +11,89 @@ const sample = (patch: Partial<VPNDetails> = {}): VPNDetails => ({
   lastConnectedAt: '2026-11-15T10:00:00Z', durationSeconds: 10, inBytes: 123, outBytes: 456,
   inBps: 12, outBps: 45, trafficAt: '2026-11-15T10:00:10Z', tunnelOnly: false,
   routeState: 'applied', configuredRoutes: [], routes: [], bypassIps: [], dnsServers: [], ...patch,
+});
+
+test('IPv6 exit wording distinguishes local routing and SOCKS5-only reasons', () => {
+  assert.equal(initialPeerIPv6State(true, true), 'tunnel_only');
+  assert.equal(initialPeerIPv6State(true, false), 'tunnel_only');
+  assert.equal(initialPeerIPv6State(false, false), 'disabled');
+  assert.equal(initialPeerIPv6State(false, true), 'waiting');
+  const source = readFileSync('src/App.tsx', 'utf8');
+  const labels = {
+    peerIpv6Disabled: '未检测（本机未配置 IPv6 路由）',
+    peerIpv6TunnelOnly: '未检测（仅 SOCKS5 模式）',
+    peerIpv6Waiting: '等待隧道连接',
+    peerIpv6Checking: '检测中',
+    peerIpv6Available: '可用',
+    peerIpv6Unavailable: '检测未通过',
+  };
+  for (const [key, value] of Object.entries(labels)) assert.ok(source.includes(`${key}: '${value}'`));
+  for (const [state, expected] of [
+    ['disabled', labels.peerIpv6Disabled], ['tunnel_only', labels.peerIpv6TunnelOnly],
+    ['waiting', labels.peerIpv6Waiting], ['checking', labels.peerIpv6Checking],
+    ['available', labels.peerIpv6Available], ['unavailable', labels.peerIpv6Unavailable],
+    ['', '-'], ['new-state', 'new-state'], [' TUNNEL_ONLY ', labels.peerIpv6TunnelOnly],
+  ]) assert.equal(peerIPv6Label(state, labels), expected);
+  assert.ok(source.includes("peerIpv6Disabled: 'Not checked (no local IPv6 routes configured)'"));
+  assert.ok(source.includes("peerIpv6TunnelOnly: 'Not checked (SOCKS5-only mode)'"));
+  assert.ok(source.includes("peerIpv6Waiting: 'Waiting for tunnel connection'"));
+  assert.match(source, /setVpnClientPeerIPv6\(initialPeerIPv6State\(vpnClientTunnelOnly, hasIPv6Routes\(vpnClientRouteCIDRs\)\)\)/);
+});
+
+test('configuration failure persists through cleanup and profile changes until the next connection', () => {
+  const failure = retainVPNConfigurationFailure(null, sample({routeState:'error', configurationError:'DNS route failed'}), 7);
+  assert.deepEqual(failure, {reason:'DNS route failed', runId:7});
+  for (const routeState of ['stopping', 'stopped', 'pending']) {
+    assert.strictEqual(retainVPNConfigurationFailure(failure, sample({routeState, running:false}), 7), failure);
+  }
+  assert.strictEqual(retainVPNConfigurationFailure(failure, undefined, 0), failure);
+  assert.strictEqual(retainVPNConfigurationFailure(failure, sample({routeState:'error'}), 7), failure);
+  assert.equal(retainVPNConfigurationFailure(null, sample({routeState:'pending'}), 8), null);
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.match(source, /activeVPNRun.current = clientRunId;\s*setVpnConfigurationFailure\(null\)/);
+  assert.equal((source.match(/setVpnConfigurationFailure\(null\)/g) || []).length, 1);
+  assert.match(source, /retainVPNConfigurationFailure\(current, vpnSnapshot\?\.data, activeVPNRun.current\)/);
+});
+
+test('missing failure reasons still show a log entry point and long details are expandable', () => {
+  assert.deepEqual(retainVPNConfigurationFailure(null, sample({routeState:'error'}), 4), {reason:'', runId:4});
+  assert.equal(vpnConfigurationFailureSummary('', 'zh'), '');
+  const source = readFileSync('src/App.tsx', 'utf8');
+  assert.match(source, /vpnConfigurationSummary \|\| t.vpnConfigurationFailureUnknown/);
+  assert.match(source, /onClick=\{showVPNFailureLog\}.*t.vpnViewActivityLog/);
+  assert.match(source, /<details key=\{vpnConfigurationFailureReason\}>/);
+  assert.match(source, /<pre>\{vpnConfigurationFailureReason\}<\/pre>/);
+  assert.match(source, /setLogOpen\(true\)/);
+});
+
+test('configuration failure summaries retain useful targets without dumping diagnostics', () => {
+  const reason = 'configure DNS: configure VPN DNS route for 2001:4860:4860::8888: route not installed\nRIB: details';
+  assert.equal(vpnConfigurationFailureSummary(reason, 'zh'), '无法配置 DNS 路由：2001:4860:4860::8888');
+  assert.equal(vpnConfigurationFailureSummary(reason, 'en'), 'Could not configure DNS route: 2001:4860:4860::8888');
+  assert.equal(vpnConfigurationFailureSummary('route 0.0.0.0/1 was not installed on utun4; VPN is not ready', 'zh'), '路由验证失败：0.0.0.0/1（utun4）');
+  assert.equal(vpnConfigurationFailureSummary('Permission denied\nlong diagnostic', 'en'), 'Permission denied');
+  assert.equal(vpnConfigurationFailureSummary('x'.repeat(200), 'en'), 'x'.repeat(160) + '…');
+});
+
+test('failure log location is scoped to the failing VPN run, including retained previous profiles', () => {
+  const logs = [
+    {mode:'vpnClient', clientRunId:7, message:'System VPN start failed: DNS'},
+    {mode:'vpnClient', clientRunId:8, message:'System VPN start failed: newer session'},
+    {mode:'send', clientRunId:7, message:'System VPN start failed: wrong mode'},
+    {mode:'vpnClient', clientRunId:7, message:'unrelated cleanup log'},
+  ];
+  assert.equal(vpnFailureLogIndex(logs, 7), 0);
+  assert.equal(vpnFailureLogIndex(logs, 8), 1);
+  assert.equal(vpnFailureLogIndex([], 7), -1);
+  assert.equal(vpnFailureLogIndex(logs, 0), -1);
+  assert.equal(vpnFailureLogIndex(logs, 9), -1);
+  assert.equal(vpnFailureLogIndex([...logs, {mode:'vpnClient', clientRunId:7, message:'System VPN pause failed: cleanup'}], 7), 4);
+});
+
+test('obsolete snapshots cannot replace the current configuration failure', () => {
+  const current = {data:sample({revision:10, routeState:'error', configurationError:'current error'}), receivedAt:1};
+  assert.strictEqual(acceptVPNDetails(current, 8, 7, sample({revision:11, configurationError:'old session'}), 2), current);
+  assert.strictEqual(acceptVPNDetails(current, 8, 8, sample({revision:9, configurationError:'old revision'}), 2), current);
 });
 
 test('VPN attempt labels match file reception, including fallback stages', () => {
@@ -214,8 +299,8 @@ test('IPv6 checkbox is removed and legacy import flags cannot override routes', 
   assert.doesNotMatch(source, /setVpnClientEnableIPv6|label={t.routeIpv6}/);
   assert.match(source, /enableIpv6: hasIPv6Routes\(vpnClientRouteCIDRs\)/);
   assert.match(source, /routeIpv6: hasIPv6Routes\(String\(profile.routeCidrs/);
-  assert.match(source, /peerIpv6Unavailable: '不可用'/);
-  assert.match(source, /peerIpv6Unavailable: 'Unavailable'/);
+  assert.match(source, /peerIpv6Unavailable: '检测未通过'/);
+  assert.match(source, /peerIpv6Unavailable: 'Check failed'/);
   assert.doesNotMatch(source, /保持接管，自动复测|routes retained, retrying/);
 });
 
