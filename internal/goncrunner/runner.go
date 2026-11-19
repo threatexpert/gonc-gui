@@ -33,24 +33,27 @@ const (
 )
 
 type Request struct {
-	Mode            Mode
-	Password        string
-	SharePaths      []string
-	SaveDir         string
-	DownloadSubPath string
-	UseUDP          bool
-	P2PWithLAN      bool
-	Upstream        string
-	DNSForward      string
-	DNSServers      string
-	RouteCIDRs      string
-	LinkConfig      string
-	MTU             int
-	RouteMetric     int
-	BlockDNSLeak    bool
-	EnableIPv6      bool // Legacy input, ignored. IPv6 capture is derived from RouteCIDRs.
-	TunnelOnly      bool
-	ExtraArgs       string
+	DisconnectProtection    bool
+	ReconnectDNS            string
+	BypassOverrideConfirmed bool
+	Mode                    Mode
+	Password                string
+	SharePaths              []string
+	SaveDir                 string
+	DownloadSubPath         string
+	UseUDP                  bool
+	P2PWithLAN              bool
+	Upstream                string
+	DNSForward              string
+	DNSServers              string
+	RouteCIDRs              string
+	LinkConfig              string
+	MTU                     int
+	RouteMetric             int
+	BlockDNSLeak            bool
+	EnableIPv6              bool // Legacy input, ignored. IPv6 capture is derived from RouteCIDRs.
+	TunnelOnly              bool
+	ExtraArgs               string
 }
 
 type Event struct {
@@ -85,14 +88,33 @@ type Sink func(Event)
 
 type ReportSink func(P2PStatusReport)
 
+type vpnCleanup interface {
+	Stop() error
+	Close() error
+}
+
+func cleanupForClient(client *vpnhelper.Client) vpnCleanup {
+	// A nil *Client stored in an interface is non-nil. Helper-less tasks must
+	// neither call its methods nor remain "running" after their session exits.
+	if client == nil {
+		return nil
+	}
+	return client
+}
+
+var ErrNoTask = errors.New("no transfer task is running")
+
 type Runner struct {
+	stopMu        sync.Mutex
+	sink          Sink
 	mu            sync.Mutex
-	session       *goncembed.Session
+	session       runnerSession
 	source        *dynamicFileSource
-	helper        *vpnhelper.Client
+	helper        vpnCleanup
 	stopping      bool
 	vpnDetails    *vpnDetailsTracker
 	stopVPNRoutes func()
+	protection    *vpnProtection
 }
 
 func New() *Runner {
@@ -109,16 +131,21 @@ func fileTransferP2POptions(useUDP bool) goncembed.P2POptions {
 func (r *Runner) IsRunning() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.session != nil
+	return r.session != nil || r.helper != nil
 }
 
 func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSink ReportSink) error {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	if parent == nil {
+		parent = context.Background()
+	}
 	if err := validateRequest(req); err != nil {
 		return err
 	}
 
 	r.mu.Lock()
-	if r.session != nil {
+	if r.session != nil || r.helper != nil {
 		r.mu.Unlock()
 		return errors.New("a transfer task is already running")
 	}
@@ -134,10 +161,11 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	}
 
 	var (
-		session       *goncembed.Session
+		session       runnerSession
 		source        *dynamicFileSource
 		vpnHelper     *vpnhelper.Client
 		stopVPNRoutes func()
+		protection    *vpnProtection
 		err           error
 	)
 	switch req.Mode {
@@ -154,11 +182,18 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	case ModeVPNClient:
 		vpnStart, err := startVPNClient(parent, req, cb, sink)
 		if err != nil {
+			if vpnStart != nil && vpnStart.helper != nil {
+				r.mu.Lock()
+				r.helper, r.vpnDetails, r.sink = vpnStart.helper, cb.vpnDetails, sink
+				r.mu.Unlock()
+				cb.vpnDetails.cleanupFailed(err)
+			}
 			return err
 		}
 		session = vpnStart.session
 		vpnHelper = vpnStart.helper
 		stopVPNRoutes = vpnStart.stopRoutes
+		protection = vpnStart.protection
 	default:
 		err = fmt.Errorf("unknown mode: %s", req.Mode)
 	}
@@ -167,7 +202,7 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	}
 
 	r.mu.Lock()
-	if r.session != nil {
+	if r.session != nil || r.helper != nil {
 		r.mu.Unlock()
 		session.Stop()
 		if stopVPNRoutes != nil {
@@ -180,13 +215,19 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 	}
 	r.session = session
 	r.source = source
-	r.helper = vpnHelper
+	r.helper = cleanupForClient(vpnHelper)
 	r.stopVPNRoutes = stopVPNRoutes
+	r.protection = protection
 	r.stopping = false
 	r.vpnDetails = cb.vpnDetails
+	r.sink = sink
 	r.mu.Unlock()
 	if cb.vpnDetails != nil {
-		go cb.vpnDetails.publishUntil(session.Done())
+		done := session.Done()
+		if protection != nil {
+			done = protection.released
+		}
+		go cb.vpnDetails.publishUntil(done)
 	}
 
 	emit(sink, "status", "info", "gonc embedded session started")
@@ -211,39 +252,56 @@ func (r *Runner) Stop() error {
 }
 
 func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
 	r.mu.Lock()
-	session := r.session
-	helper := r.helper
-	details := r.vpnDetails
-	stopVPNRoutes := r.stopVPNRoutes
-	if session != nil {
-		r.stopping = true
-		r.helper = nil
-		r.stopVPNRoutes = nil
+	session, helper, details, stopRoutes := r.session, r.helper, r.vpnDetails, r.stopVPNRoutes
+	if session == nil && helper == nil {
+		r.mu.Unlock()
+		return true, ErrNoTask
 	}
+	r.stopping = true
+	if r.protection != nil {
+		r.protection.release()
+	}
+	r.stopVPNRoutes = nil
 	r.mu.Unlock()
-	if session == nil {
-		return true, errors.New("no transfer task is running")
-	}
 	if details != nil {
 		details.beginStop()
 	}
-	session.Stop()
-	if stopVPNRoutes != nil {
-		stopVPNRoutes()
+	if session != nil {
+		session.Stop()
+	}
+	if stopRoutes != nil {
+		stopRoutes()
 	}
 	var cleanupErr error
 	if helper != nil {
 		cleanupErr = helper.Stop()
-		_ = helper.Close()
+		if cleanupErr == nil {
+			cleanupErr = helper.Close()
+		}
 	}
-	if details != nil {
+	r.mu.Lock()
+	if cleanupErr == nil {
+		r.helper = nil
+	}
+	r.mu.Unlock()
+	if cleanupErr != nil {
+		cleanupErr = fmt.Errorf("VPN network cleanup failed; retry Stop VPN: %w", cleanupErr)
+		if details != nil {
+			details.cleanupFailed(cleanupErr)
+		}
+		emit(r.sink, "status", "error", cleanupErr.Error())
+	} else if details != nil {
 		details.finish(time.Now())
+	}
+	if session == nil {
+		return true, cleanupErr
 	}
 	if timeout <= 0 {
 		return false, cleanupErr
 	}
-
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -254,29 +312,77 @@ func (r *Runner) StopWait(timeout time.Duration) (bool, error) {
 	}
 }
 
-func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *callback, sink Sink) {
-	<-session.Done()
+func (r *Runner) wait(parent context.Context, session runnerSession, cb *callback, sink Sink) {
+	r.waitForSession(parent, session, cb, sink, session.Done())
+}
+
+func (r *Runner) waitForSession(parent context.Context, session runnerSession, cb *callback, sink Sink, done <-chan struct{}) {
+	<-done
 
 	r.mu.Lock()
-	stopping := false
-	if r.session == session {
-		stopping = r.stopping
-		r.session = nil
-		r.source = nil
+	// Join the route worker before deciding whether a successful capture must
+	// survive an ended gonc session. Explicit Stop owns teardown in that case.
+	if r.session == session && r.protection != nil && !r.stopping {
 		if r.stopVPNRoutes != nil {
 			r.stopVPNRoutes()
 			r.stopVPNRoutes = nil
 		}
-		if r.helper != nil {
-			_ = r.helper.Stop()
-			_ = r.helper.Close()
-			r.helper = nil
+		p := r.protection
+		if p.captured.Load() {
+			r.mu.Unlock()
+			cb.vpnDetails.connectionFailure("Tunnel session ended; network capture remains active until VPN is stopped", true)
+			cb.vpnDetails.publish()
+			emit(sink, "status", "warn", "Tunnel session ended; disconnect protection remains active. Stop VPN to restore local access.")
+			select {
+			case <-p.released:
+			case <-parent.Done():
+			}
+			r.mu.Lock()
 		}
-		r.stopping = false
 	}
 	r.mu.Unlock()
-	if cb.vpnDetails != nil && !stopping {
-		cb.vpnDetails.finish(time.Now())
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	r.mu.Lock()
+	stopping := r.stopping
+	var helper vpnCleanup
+	var stopRoutes func()
+	if r.session == session {
+		r.session, r.source = nil, nil
+		if !stopping {
+			helper, stopRoutes = r.helper, r.stopVPNRoutes
+			r.stopVPNRoutes = nil
+		}
+		if r.protection != nil {
+			r.protection.release()
+			r.protection = nil
+		}
+	}
+	r.mu.Unlock()
+	if stopRoutes != nil {
+		stopRoutes()
+	}
+	var cleanupErr error
+	if helper != nil {
+		cleanupErr = helper.Stop()
+		if cleanupErr == nil {
+			cleanupErr = helper.Close()
+		}
+		if cleanupErr == nil {
+			r.mu.Lock()
+			r.helper = nil
+			r.mu.Unlock()
+		}
+	}
+	if !stopping {
+		if cleanupErr != nil {
+			if cb.vpnDetails != nil {
+				cb.vpnDetails.cleanupFailed(cleanupErr)
+			}
+			emit(sink, "status", "error", "VPN network cleanup failed; retry Stop VPN: "+cleanupErr.Error())
+		} else if cb.vpnDetails != nil {
+			cb.vpnDetails.finish(time.Now())
+		}
 	}
 
 	if stopping || (parent != nil && parent.Err() != nil) {
@@ -290,6 +396,18 @@ func (r *Runner) wait(parent context.Context, session *goncembed.Session, cb *ca
 }
 
 func validateRequest(req Request) error {
+	if req.Mode == ModeVPNClient && req.DisconnectProtection {
+		if req.TunnelOnly {
+			return errors.New("disconnect protection requires system VPN mode")
+		}
+		plan, err := PlanProtection(req)
+		if err != nil {
+			return err
+		}
+		if len(plan.Overrides) > 0 && !req.BypassOverrideConfirmed {
+			return errors.New("advanced DNS/local overrides require confirmation before starting VPN")
+		}
+	}
 	if req.Password == "" {
 		return errors.New("password is required")
 	}
@@ -361,7 +479,8 @@ func buildArgs(req Request) ([]string, error) {
 }
 
 type vpnClientStart struct {
-	session    *goncembed.Session
+	protection *vpnProtection
+	session    runnerSession
 	helper     *vpnhelper.Client
 	stopRoutes func()
 }
@@ -391,6 +510,10 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		return nil, err
 	}
 	var helper *vpnhelper.Client
+	var protection *vpnProtection
+	extraArgs := vpnExtraArgs(req)
+	var initialLocal string
+	var plan ProtectionPlan
 	if !req.TunnelOnly {
 		if err := winvpn.CheckRuntime(); err != nil {
 			return nil, err
@@ -401,18 +524,60 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 			return nil, err
 		}
 		emit(sink, "status", "info", "Elevated VPN helper is ready")
+		if req.DisconnectProtection {
+			plan, _ = PlanProtection(req)
+			requestedLocal, _, _ := net.SplitHostPort(plan.Local)
+			localIP, err := helper.PrepareBypass(plan.DNS, requestedLocal)
+			if err != nil {
+				return failedVPNStart(helper, fmt.Errorf("prepare reconnect bypass: %w", err))
+			}
+			local := plan.Local
+			if local == "" {
+				local = net.JoinHostPort(localIP, "0")
+			}
+			initialLocal = local
+			protection = newVPNProtection()
+			emit(sink, "log", "info", "Reconnect bypass: local="+local+" DNS="+plan.DNS)
+		}
 	}
 	emitPeerIPv6(sink, initialPeerIPv6State(req.TunnelOnly, wantsIPv6))
 
 	lifecycle := newVPNTunnelLifecycle()
 	cb.onReady = lifecycle.ready
 	cb.onP2PReport = lifecycle.report
-	session, err := goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, vpnExtraArgs(req), cb)
+	var session runnerSession
+	if protection != nil {
+		session, err = startReconnectSession(initialLocal, reconnectActions{
+			callback: cb, retry: 2 * time.Second,
+			refresh: func() (string, error) {
+				ip, _, err := helper.RefreshBypass()
+				if err != nil {
+					return "", err
+				}
+				port := "0"
+				if plan.Local != "" {
+					_, port, _ = net.SplitHostPort(plan.Local)
+				}
+				return net.JoinHostPort(ip, port), nil
+			},
+			start: func(local string, attempt goncembed.Callback) (runnerSession, error) {
+				emit(sink, "log", "info", "Reconnect bypass: local="+local+" DNS="+plan.DNS)
+				return goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, extraArgs+" -dns "+plan.DNS+" -local "+local, attempt)
+			},
+			disconnected: func() {
+				cb.vpnEventMu.Lock()
+				defer cb.vpnEventMu.Unlock()
+				lifecycle.disconnect()
+				cb.vpnDetails.connection("disconnected", time.Now())
+				cb.vpnDetails.publish()
+			},
+			report: func(err error) { cb.Error(err.Error()) },
+		})
+	} else {
+		session, err = goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, extraArgs, cb)
+	}
 	if err != nil {
-		if helper != nil {
-			_ = helper.Close()
-		}
-		return nil, err
+		return failedVPNStart(helper, err)
 	}
 	var stopRoutes func()
 	if !req.TunnelOnly {
@@ -433,6 +598,8 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				return systemVPNConfig(req, s, routes, ipv6)
 			}
 			err := runVPNRouteLifecycle(ctx, session.Done(), lifecycle, vpnRouteActions{
+				protect: req.DisconnectProtection,
+				update:  helper.UpdateProxy,
 				probe: func(ctx context.Context, endpoint string) bool {
 					snapshot := lifecycle.snapshot()
 					if !snapshot.ready || snapshot.endpoint != endpoint {
@@ -448,9 +615,13 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				},
 				start: func(s vpnTunnelSnapshot, ipv6 bool) ([]string, error) {
 					logDNSFallback(req.DNSServers, ipv6, sink)
-					return helper.StartWithTrace(configFor(s, ipv6), func(message string) {
+					dns, err := helper.StartWithTrace(configFor(s, ipv6), func(message string) {
 						emit(sink, "log", "info", message)
 					})
+					if err == nil && protection != nil {
+						protection.captured.Store(true)
+					}
+					return dns, err
 				},
 				stop: helper.Stop,
 				applying: func(s vpnTunnelSnapshot, ipv6 bool) {
@@ -460,7 +631,11 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 						return
 					}
 					config := configFor(s, ipv6)
-					cb.vpnDetails.routes("applying", config.Routes, config.BypassIPs, []string{})
+					dns := []string{}
+					if protection != nil && protection.captured.Load() {
+						dns = nil
+					}
+					cb.vpnDetails.routes("applying", config.Routes, config.BypassIPs, dns)
 					cb.vpnDetails.publish()
 					emit(sink, "status", "info", "SOCKS5 endpoint ready; applying system VPN configuration")
 				},
@@ -476,6 +651,12 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					emit(sink, "status", "info", "System VPN started")
 				},
 				paused: func(status string, err error) {
+					if protection != nil && protection.captured.Load() {
+						cb.vpnDetails.routes("protected", nil, nil, nil)
+						cb.vpnDetails.publish()
+						emit(sink, "status", "warn", "Tunnel disconnected; disconnect protection is keeping VPN capture active")
+						return
+					}
 					if err != nil {
 						cb.vpnDetails.configurationFailed(err)
 						emit(sink, "status", "warn", "System VPN pause failed: "+err.Error())
@@ -498,22 +679,26 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 			}
 		}()
 	}
-	return &vpnClientStart{session: session, helper: helper, stopRoutes: stopRoutes}, nil
+	return &vpnClientStart{session: session, helper: helper, stopRoutes: stopRoutes, protection: protection}, nil
 }
 
 func systemVPNConfig(req Request, s vpnTunnelSnapshot, routes []string, ipv6Available bool) vpnconfig.Config {
 	dns, _, _ := vpnconfig.SelectDNS(req.DNSServers, ipv6Available)
+	if req.DisconnectProtection {
+		s.bypass = []string{}
+	}
 	return vpnconfig.Config{
-		SOCKS5Endpoint: s.endpoint,
-		Routes:         routes,
-		DNSServers:     dns,
-		BypassIPs:      s.bypass,
-		EnableIPv6:     vpnconfig.HasIPv6(routes),
-		RejectIPv6:     vpnconfig.ShouldRejectIPv6(routes, ipv6Available),
-		MTU:            normalizeMTU(req.MTU),
-		RouteMetric:    normalizeRouteMetric(req.RouteMetric),
-		BlockDNSLeak:   req.BlockDNSLeak,
-		LogLevel:       "warn",
+		DisconnectProtection: req.DisconnectProtection,
+		SOCKS5Endpoint:       s.endpoint,
+		Routes:               routes,
+		DNSServers:           dns,
+		BypassIPs:            s.bypass,
+		EnableIPv6:           vpnconfig.HasIPv6(routes),
+		RejectIPv6:           vpnconfig.ShouldRejectIPv6(routes, ipv6Available),
+		MTU:                  normalizeMTU(req.MTU),
+		RouteMetric:          normalizeRouteMetric(req.RouteMetric),
+		BlockDNSLeak:         req.BlockDNSLeak || req.DisconnectProtection,
+		LogLevel:             "warn",
 	}
 }
 
@@ -714,15 +899,16 @@ func splitExtraArgs(extraArgs string) []string {
 }
 
 type callback struct {
-	vpnDetails  *vpnDetailsTracker
-	mode        Mode
-	sink        Sink
-	reportSink  ReportSink
-	onReady     func(string) bool
-	onP2PReport func(P2PStatusReport) bool
-	vpnEventMu  sync.Mutex
-	mu          sync.Mutex
-	exitCode    int
+	vpnDetails   *vpnDetailsTracker
+	mode         Mode
+	sink         Sink
+	reportSink   ReportSink
+	onReady      func(string) bool
+	onP2PReport  func(P2PStatusReport) bool
+	onTunnelLost func()
+	vpnEventMu   sync.Mutex
+	mu           sync.Mutex
+	exitCode     int
 }
 
 func (c *callback) Event(level string, message string) {
@@ -745,6 +931,9 @@ func (c *callback) P2PReport(topic string, side string, status string, network s
 	}
 	if c.onP2PReport != nil && !c.onP2PReport(report) {
 		return
+	}
+	if c.onTunnelLost != nil && tunnelDisconnected(status) {
+		c.onTunnelLost()
 	}
 	if c.vpnDetails != nil {
 		c.vpnDetails.connectionReport(report, time.Now())
@@ -1001,4 +1190,13 @@ func newEvent(typ, level, message string) Event {
 		Message: message,
 		Time:    time.Now().Format(time.RFC3339),
 	}
+}
+
+func failedVPNStart(helper *vpnhelper.Client, failure error) (*vpnClientStart, error) {
+	if helper != nil {
+		if err := helper.Close(); err != nil {
+			return &vpnClientStart{helper: helper}, errors.Join(failure, fmt.Errorf("VPN startup rollback failed; retry Stop VPN: %w", err))
+		}
+	}
+	return nil, failure
 }

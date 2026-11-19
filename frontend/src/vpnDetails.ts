@@ -1,4 +1,6 @@
 export type VPNDetails = {
+  disconnectProtection?: boolean;
+  captureActive?: boolean;
   revision: number;
   running: boolean;
   connected: boolean;

@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.send-content-test.json",
+  "compilerOptions": {
+    "outDir": "node_modules/.cache/gonc-receive-comparison-tests"
+  },
+  "include": ["src/receiveComparisonFormat.ts", "tests/receiveComparisonFormat.test.ts"]
+}

@@ -39,14 +39,15 @@ type Server struct {
 	wg   sync.WaitGroup
 	once sync.Once
 
-	assocMu       sync.RWMutex
-	assoc         *udpAssociation
-	reconnect     sync.Mutex
-	mu            sync.Mutex
-	pending       map[uint16]pendingRequest
-	activeUp      int
-	probeAt       time.Time
-	primaryMisses int
+	assocMu         sync.RWMutex
+	assoc           *udpAssociation
+	proxyGeneration uint64
+	reconnect       sync.Mutex
+	mu              sync.Mutex
+	pending         map[uint16]pendingRequest
+	activeUp        int
+	probeAt         time.Time
+	primaryMisses   int
 }
 
 type pendingRequest struct {
@@ -332,6 +333,32 @@ func (s *Server) ensureAssociation() *udpAssociation {
 	return s.currentAssociation()
 }
 
+// UpdateProxy preserves the DNS listener. No direct DNS fallback is introduced.
+// Generation checks prevent an in-flight reconnect from reinstalling an old proxy.
+func (s *Server) UpdateProxy(endpoint string) error {
+	if _, err := parseSocksEndpoint(endpoint); err != nil {
+		return err
+	}
+	s.assocMu.Lock()
+	if s.isDone() {
+		s.assocMu.Unlock()
+		return net.ErrClosed
+	}
+	if s.socks5Endpoint == endpoint {
+		s.assocMu.Unlock()
+		return nil
+	}
+	old := s.assoc
+	s.socks5Endpoint, s.assoc = endpoint, nil
+	s.proxyGeneration++
+	s.clearPending()
+	s.assocMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
+}
+
 func (s *Server) rebuildAssociation(trigger *udpAssociation) bool {
 	if s.isDone() {
 		return false
@@ -353,15 +380,21 @@ func (s *Server) rebuildAssociation(trigger *udpAssociation) bool {
 		s.setAssociation(nil)
 	}
 	s.clearPending()
-	next, err := newUDPAssociation(s.socks5Endpoint)
+	s.assocMu.RLock()
+	endpoint, generation := s.socks5Endpoint, s.proxyGeneration
+	s.assocMu.RUnlock()
+	next, err := newUDPAssociation(endpoint)
 	if err != nil {
 		return false
 	}
-	if s.isDone() {
+	s.assocMu.Lock()
+	if s.isDone() || generation != s.proxyGeneration {
+		s.assocMu.Unlock()
 		_ = next.Close()
 		return false
 	}
-	s.setAssociation(next)
+	s.assoc = next
+	s.assocMu.Unlock()
 	return true
 }
 

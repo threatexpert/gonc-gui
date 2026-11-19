@@ -2,13 +2,14 @@ package vpnhelper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 
 	"gonc-gui/internal/winvpn"
 )
 
-func Run(connectAddr, token string) error {
+func Run(connectAddr, token string) (result error) {
 	if connectAddr == "" || token == "" {
 		return fmt.Errorf("missing helper connection parameters")
 	}
@@ -31,30 +32,79 @@ func Run(connectAddr, token string) error {
 		return fmt.Errorf("helper hello rejected: %s", helloAck.Error)
 	}
 
-	var active *winvpn.Session
+	var resources helperResources
+	defer func() {
+		// EOF/abnormal parent termination still attempts every cleanup and reports
+		// any final failure to the helper's caller instead of silently succeeding.
+		var err error
+		for i := 0; i < 3; i++ {
+			err = resources.cleanup()
+			if err == nil {
+				break
+			}
+		}
+		result = errors.Join(result, err)
+	}()
 	for {
 		var req request
 		if err := dec.Decode(&req); err != nil {
-			if active != nil {
-				_ = active.Stop()
-			}
 			return nil
 		}
 		switch req.Op {
-		case OpDNS:
-			if active == nil {
-				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})
+		case OpPrepare:
+			if resources.active != nil || resources.bypass != nil {
+				_ = enc.Encode(response{OK: false, Error: "VPN bypass already prepared"})
 				continue
 			}
-			if err := active.UpdateDNS(req.Config.DNSServers); err != nil {
+			var err error
+			prepared, prepareErr := winvpn.PrepareBypass(req.Address, req.LocalIP)
+			err = prepareErr
+			if prepared != nil {
+				resources.bypass = prepared
+			}
+			if err != nil {
 				_ = enc.Encode(response{OK: false, Error: err.Error()})
 				continue
 			}
-			_ = enc.Encode(response{OK: true, DNSServers: active.DNSServers()})
+			_ = enc.Encode(response{OK: true, LocalIP: prepared.LocalIP})
+		case OpRefresh:
+			if resources.bypass == nil {
+				_ = enc.Encode(response{Error: "VPN bypass is not prepared"})
+				continue
+			}
+			local, revision, err := resources.bypass.Refresh()
+			if err != nil {
+				_ = enc.Encode(response{Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true, LocalIP: local, Revision: revision})
+		case OpProxy:
+			if resources.active == nil {
+				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})
+				continue
+			}
+			if err := resources.active.UpdateProxy(req.Address); err != nil {
+				_ = enc.Encode(response{OK: false, Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true})
+		case OpDNS:
+			if resources.active == nil {
+				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})
+				continue
+			}
+			if err := resources.active.UpdateDNS(req.Config.DNSServers); err != nil {
+				_ = enc.Encode(response{OK: false, Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true, DNSServers: resources.active.DNSServers()})
 		case OpStart:
-			if active != nil {
-				_ = active.Stop()
-				active = nil
+			if resources.active != nil {
+				if err := resources.active.Stop(); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
+				}
+				resources.active = nil
 			}
 			var trace func(string)
 			if req.Trace {
@@ -63,27 +113,24 @@ func Run(connectAddr, token string) error {
 				}
 			}
 			session, err := winvpn.StartWithTrace(req.Config, trace)
+			if session != nil {
+				resources.active = session
+			}
 			if err != nil {
 				_ = enc.Encode(response{OK: false, Error: err.Error()})
 				continue
 			}
-			active = session
+			resources.active = session
 			_ = enc.Encode(response{OK: true, DNSServers: session.DNSServers()})
-		case OpStop:
-			if active != nil {
-				if err := active.Stop(); err != nil {
-					_ = enc.Encode(response{OK: false, Error: err.Error()})
-					continue
-				}
-				active = nil
+		case OpStop, OpExit:
+			if err := resources.cleanup(); err != nil {
+				_ = enc.Encode(response{Error: err.Error()})
+				continue // Keep IPC and failed resources alive so the user can retry.
 			}
 			_ = enc.Encode(response{OK: true})
-		case OpExit:
-			if active != nil {
-				_ = active.Stop()
+			if req.Op == OpExit {
+				return nil
 			}
-			_ = enc.Encode(response{OK: true})
-			return nil
 		default:
 			_ = enc.Encode(response{OK: false, Error: "unknown helper command"})
 		}

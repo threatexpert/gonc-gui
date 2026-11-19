@@ -106,6 +106,22 @@ func (c *Client) Stop() error {
 	return err
 }
 
+func (c *Client) PrepareBypass(dns, local string) (string, error) {
+	resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
+	return resp.LocalIP, err
+}
+func (c *Client) RefreshBypass() (string, uint64, error) {
+	if c.conn != nil {
+		resp, err := c.call(request{Op: OpRefresh})
+		return resp.LocalIP, resp.Revision, err
+	}
+	return "", 0, fmt.Errorf("VPN helper is not connected")
+}
+func (c *Client) UpdateProxy(endpoint string) error {
+	_, err := c.call(request{Op: OpProxy, Address: endpoint})
+	return err
+}
+
 func (c *Client) UpdateDNS(servers []string) ([]string, error) {
 	resp, err := c.call(request{Op: OpDNS, Config: vpnconfig.Config{DNSServers: servers}})
 	return append([]string{}, resp.DNSServers...), err
@@ -115,7 +131,9 @@ func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
-	_, _ = c.call(request{Op: OpExit})
+	if _, err := c.call(request{Op: OpExit}); err != nil {
+		return err
+	}
 	return c.conn.Close()
 }
 

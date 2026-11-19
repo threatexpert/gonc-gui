@@ -41,6 +41,9 @@ type Config struct {
 	CachedFiles  []FileInfo
 	Concurrency  int
 	Resume       bool
+	// Zero preserves continuous retry for ordinary receive tasks. Comparison
+	// batches use a finite limit so one failed file cannot occupy a worker forever.
+	MaxAttempts int
 }
 
 type Event struct {
@@ -338,6 +341,9 @@ func (d *Downloader) downloadWithRetry(ctx context.Context, client *http.Client,
 			return err
 		}
 		attempt++
+		if d.cfg.MaxAttempts > 0 && attempt >= d.cfg.MaxAttempts {
+			return err
+		}
 		emit(sink, "log", "warn", fmt.Sprintf("download interrupted for %s, retrying: %v", file.Path, err))
 		emitProgress(sink, d.progress, file.Path, true)
 		if err := waitRetry(ctx, attempt); err != nil {

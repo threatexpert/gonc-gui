@@ -19,6 +19,7 @@ import (
 	"gonc-gui/internal/appupdate"
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/receivecompare"
 	"gonc-gui/internal/receivedfile"
 	"gonc-gui/internal/sharecontent"
 	"gonc-gui/internal/taskbar"
@@ -42,6 +43,11 @@ type App struct {
 	downloadCancel        context.CancelFunc
 	downloadDone          chan struct{}
 	downloadID            int64
+	compareJob            *receivecompare.Job
+	compareCancel         context.CancelFunc
+	compareDone           chan struct{}
+	compareSequence       uint64
+	compareURL            string
 	startupSharePaths     []string
 	shareContent          *sharecontent.Manager
 	importNativeClipboard func() (sharecontent.ClipboardResult, error)
@@ -50,25 +56,27 @@ type App struct {
 }
 
 type TransferRequest struct {
-	Mode            string   `json:"mode"`
-	ClientRunID     int64    `json:"clientRunId,omitempty"`
-	Password        string   `json:"password"`
-	SharePaths      []string `json:"sharePaths"`
-	SaveDir         string   `json:"saveDir"`
-	DownloadSubPath string   `json:"downloadSubPath"`
-	UseUDP          bool     `json:"useUDP"`
-	P2PWithLAN      bool     `json:"p2pWithLan"`
-	Upstream        string   `json:"upstream"`
-	DNSForward      string   `json:"dnsForward"`
-	DNSServers      string   `json:"dnsServers"`
-	RouteCIDRs      string   `json:"routeCidrs"`
-	LinkConfig      string   `json:"linkConfig"`
-	MTU             int      `json:"mtu"`
-	RouteMetric     int      `json:"routeMetric"`
-	BlockDNSLeak    bool     `json:"blockDnsLeak"`
-	EnableIPv6      bool     `json:"enableIpv6"`
-	TunnelOnly      bool     `json:"tunnelOnly"`
-	ExtraArgs       string   `json:"extraArgs"`
+	DisconnectProtection bool     `json:"disconnectProtection"`
+	ReconnectDNS         string   `json:"reconnectDns"`
+	Mode                 string   `json:"mode"`
+	ClientRunID          int64    `json:"clientRunId,omitempty"`
+	Password             string   `json:"password"`
+	SharePaths           []string `json:"sharePaths"`
+	SaveDir              string   `json:"saveDir"`
+	DownloadSubPath      string   `json:"downloadSubPath"`
+	UseUDP               bool     `json:"useUDP"`
+	P2PWithLAN           bool     `json:"p2pWithLan"`
+	Upstream             string   `json:"upstream"`
+	DNSForward           string   `json:"dnsForward"`
+	DNSServers           string   `json:"dnsServers"`
+	RouteCIDRs           string   `json:"routeCidrs"`
+	LinkConfig           string   `json:"linkConfig"`
+	MTU                  int      `json:"mtu"`
+	RouteMetric          int      `json:"routeMetric"`
+	BlockDNSLeak         bool     `json:"blockDnsLeak"`
+	EnableIPv6           bool     `json:"enableIpv6"`
+	TunnelOnly           bool     `json:"tunnelOnly"`
+	ExtraArgs            string   `json:"extraArgs"`
 }
 
 type ClientP2PStatusReport struct {
@@ -140,7 +148,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	_ = a.cleanup(ctx)
+	if err := a.cleanup(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "Application cleanup failed:", err)
+	}
 }
 
 func (a *App) SetUILanguage(language string) {
@@ -161,7 +171,22 @@ func (a *App) currentUILanguage() string {
 type closeDialogFunc func(context.Context, wailsruntime.MessageDialogOptions) (string, error)
 
 func (a *App) beforeClose(ctx context.Context) bool {
-	return preventCloseForStatus(ctx, a.Status(), a.currentUILanguage(), wailsruntime.MessageDialog)
+	if preventCloseForStatus(ctx, a.Status(), a.currentUILanguage(), wailsruntime.MessageDialog) {
+		return true
+	}
+	return cleanupBeforeClose(ctx, a.currentUILanguage(), func() error { return a.stopAllTransfers(false) }, wailsruntime.MessageDialog)
+}
+
+func cleanupBeforeClose(ctx context.Context, language string, cleanup func() error, show closeDialogFunc) bool {
+	if err := cleanup(); err != nil {
+		title, message := "VPN cleanup failed", "Network cleanup did not complete. The app will remain open; retry Stop VPN.\n\n"
+		if language == "zh" {
+			title, message = "VPN 清理失败", "网络配置未能完全恢复，程序将保持打开。请重试停止 VPN。\n\n"
+		}
+		_, _ = show(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.ErrorDialog, Title: title, Message: message + err.Error()})
+		return true
+	}
+	return false
 }
 
 func preventCloseForStatus(ctx context.Context, status AppStatus, language string, show closeDialogFunc) bool {
@@ -388,10 +413,29 @@ func (a *App) StartTransfer(req TransferRequest) error {
 	}
 
 	mode := goncrunner.Mode(req.Mode)
+	confirmed := false
+	if mode == goncrunner.ModeVPNClient && req.DisconnectProtection && !req.TunnelOnly {
+		plan, err := goncrunner.PlanProtection(goncrunner.Request{ReconnectDNS: req.ReconnectDNS, ExtraArgs: req.ExtraArgs})
+		if err != nil {
+			return err
+		}
+		if len(plan.Overrides) > 0 {
+			confirmed, err = confirmVPNBypassOverrides(a.ctx, plan, a.currentUILanguage(), wailsruntime.MessageDialog)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				return errors.New("VPN_START_CANCELLED")
+			}
+		}
+	}
 	if err := validateTransferClientRunID(mode, req.ClientRunID); err != nil {
 		return err
 	}
 	if mode == goncrunner.ModeReceive {
+		if err := a.stopReceivedComparison(); err != nil {
+			return err
+		}
 		a.mu.Lock()
 		a.receiveLocalHTTPURL = ""
 		a.mu.Unlock()
@@ -403,24 +447,27 @@ func (a *App) StartTransfer(req TransferRequest) error {
 	}
 
 	err = runner.Start(a.ctx, goncrunner.Request{
-		Mode:            mode,
-		Password:        req.Password,
-		SharePaths:      req.SharePaths,
-		SaveDir:         req.SaveDir,
-		DownloadSubPath: req.DownloadSubPath,
-		UseUDP:          req.UseUDP,
-		P2PWithLAN:      req.P2PWithLAN,
-		Upstream:        req.Upstream,
-		DNSForward:      req.DNSForward,
-		DNSServers:      req.DNSServers,
-		RouteCIDRs:      req.RouteCIDRs,
-		LinkConfig:      req.LinkConfig,
-		MTU:             req.MTU,
-		RouteMetric:     req.RouteMetric,
-		BlockDNSLeak:    req.BlockDNSLeak,
-		EnableIPv6:      req.EnableIPv6,
-		TunnelOnly:      req.TunnelOnly,
-		ExtraArgs:       req.ExtraArgs,
+		Mode:                    mode,
+		Password:                req.Password,
+		SharePaths:              req.SharePaths,
+		SaveDir:                 req.SaveDir,
+		DownloadSubPath:         req.DownloadSubPath,
+		UseUDP:                  req.UseUDP,
+		P2PWithLAN:              req.P2PWithLAN,
+		Upstream:                req.Upstream,
+		DNSForward:              req.DNSForward,
+		DNSServers:              req.DNSServers,
+		RouteCIDRs:              req.RouteCIDRs,
+		LinkConfig:              req.LinkConfig,
+		MTU:                     req.MTU,
+		RouteMetric:             req.RouteMetric,
+		BlockDNSLeak:            req.BlockDNSLeak,
+		DisconnectProtection:    req.DisconnectProtection,
+		ReconnectDNS:            req.ReconnectDNS,
+		BypassOverrideConfirmed: confirmed,
+		EnableIPv6:              req.EnableIPv6,
+		TunnelOnly:              req.TunnelOnly,
+		ExtraArgs:               req.ExtraArgs,
 	}, func(event goncrunner.Event) {
 		event.Mode = string(mode)
 		event.ClientRunID = req.ClientRunID
@@ -450,6 +497,9 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 		return err
 	}
 	if mode == goncrunner.ModeReceive {
+		if err := a.stopReceivedComparison(); err != nil {
+			return err
+		}
 		a.StopHTTPDownload()
 		a.mu.Lock()
 		a.receiveLocalHTTPURL = ""
@@ -457,10 +507,10 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 	}
 	stopped, err := runner.StopWait(5 * time.Second)
 	if err != nil {
-		if requireRunning {
-			return err
+		if !requireRunning && errors.Is(err, goncrunner.ErrNoTask) {
+			return nil
 		}
-		return nil
+		return err
 	}
 	if !stopped {
 		return errors.New("gonc embedded session did not exit within 5 seconds")
@@ -471,8 +521,8 @@ func (a *App) stopTransfer(mode goncrunner.Mode, requireRunning bool) error {
 func (a *App) stopAllTransfers(requireRunning bool) error {
 	var firstErr error
 	for _, mode := range []goncrunner.Mode{goncrunner.ModeSend, goncrunner.ModeReceive, goncrunner.ModeVPNServer, goncrunner.ModeVPNClient} {
-		if err := a.stopTransfer(mode, requireRunning); err != nil && firstErr == nil {
-			firstErr = err
+		if err := a.stopTransfer(mode, requireRunning); err != nil {
+			firstErr = errors.Join(firstErr, err)
 		}
 	}
 	return firstErr
@@ -552,6 +602,17 @@ func (a *App) StartHTTPDownload(saveDir, subPath string, includePaths []string, 
 		a.mu.Unlock()
 		return errors.New("download is already running")
 	}
+	if a.compareCancel != nil {
+		a.mu.Unlock()
+		return errors.New("comparison or deletion is running")
+	}
+	if localURL != a.receiveLocalHTTPURL {
+		a.mu.Unlock()
+		return errors.New("sender connection changed")
+	}
+	// A download can change the files held in a previous comparison snapshot.
+	a.compareJob = nil
+	a.compareURL = ""
 	ctx, cancel := context.WithCancel(a.ctx)
 	done := make(chan struct{})
 	a.downloadCancel = cancel

@@ -8,21 +8,28 @@ import (
 )
 
 const (
-	OpHello = "hello"
-	OpStart = "start"
-	OpDNS   = "dns"
-	OpStop  = "stop"
-	OpExit  = "exit"
+	OpHello   = "hello"
+	OpStart   = "start"
+	OpDNS     = "dns"
+	OpProxy   = "proxy"
+	OpPrepare = "prepare"
+	OpRefresh = "refresh"
+	OpStop    = "stop"
+	OpExit    = "exit"
 )
 
 type request struct {
-	Op     string           `json:"op"`
-	Token  string           `json:"token,omitempty"`
-	Trace  bool             `json:"trace,omitempty"`
-	Config vpnconfig.Config `json:"config,omitempty"`
+	LocalIP string           `json:"localIp,omitempty"`
+	Address string           `json:"address,omitempty"`
+	Op      string           `json:"op"`
+	Token   string           `json:"token,omitempty"`
+	Trace   bool             `json:"trace,omitempty"`
+	Config  vpnconfig.Config `json:"config,omitempty"`
 }
 
 type response struct {
+	Revision   uint64   `json:"revision,omitempty"`
+	LocalIP    string   `json:"localIp,omitempty"`
 	Progress   bool     `json:"progress,omitempty"`
 	OK         bool     `json:"ok"`
 	Error      string   `json:"error,omitempty"`

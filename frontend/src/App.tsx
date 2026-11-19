@@ -11,6 +11,7 @@ import {TransferInlineQr} from './TransferInlineQr';
 import {ConnectionDetails} from './ConnectionDetails';
 import {ProfileStrip} from './ProfileStrip';
 import {ProfileDeleteDialog} from './ProfileDeleteDialog';
+import {ReceiveComparison} from './ReceiveComparison';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
 import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails, type VPNSnapshot} from './vpnDetails';
@@ -179,6 +180,8 @@ type ReceivedLocalState = {
 };
 
 type VPNProfile = {
+  disconnectProtection: boolean;
+  reconnectDns: string;
   name: string;
   passphrase: string;
   useUdp: boolean;
@@ -407,6 +410,11 @@ const text = {
     peerIpv6Checking: '检测中',
     peerIpv6Available: '可用',
     peerIpv6Unavailable: '检测未通过',
+    disconnectProtection: '断网保护',
+    disconnectProtectionHint: '首次连接成功后，隧道断开或重连期间仍保留已配置的网络接管；停止 VPN 后恢复正常网络。未接管的网段不受保护。',
+    reconnectDns: '隧道连接 DNS',
+    reconnectDnsHint: '用于从本地网络解析隧道服务器地址，确保断线后仍可重连。留空使用 8.8.8.8。它也会影响本程序其他使用默认 DNS 的功能；与 VPN 上网 DNS 分开配置。',
+    protectionActive: '断网保护中 · 网络接管仍然有效',
     tunnelOnly: '仅 SOCKS5 隧道',
     tunnelOnlyHint: '只建立本地 SOCKS5 隧道，不修改系统路由。',
     vpnDnsServers: 'DNS',
@@ -713,6 +721,11 @@ const text = {
     peerIpv6Checking: 'Checking',
     peerIpv6Available: 'Available',
     peerIpv6Unavailable: 'Check failed',
+    disconnectProtection: 'Disconnect protection',
+    disconnectProtectionHint: 'After the first successful connection, keep configured traffic capture during outages and reconnects. Stop VPN to restore normal networking. Excluded networks are not protected.',
+    reconnectDns: 'Tunnel connection DNS',
+    reconnectDnsHint: 'Resolves tunnel server names through the local network so reconnection works during outages. Blank uses 8.8.8.8. Also affects other default DNS lookups in this app; configured separately from VPN browsing DNS.',
+    protectionActive: 'Disconnect protection active · traffic capture retained',
     tunnelOnly: 'Tunnel only',
     tunnelOnlyHint: 'Only create the local SOCKS5 tunnel without changing system routes.',
     vpnDnsServers: 'DNS',
@@ -1011,6 +1024,7 @@ function scaleCanvas(source: HTMLCanvasElement, scale: number) {
 
 function App() {
   const [lang] = useState<Lang>(detectLang);
+  const [receiveComparisonOpen, setReceiveComparisonOpen] = useState(false);
   const t = text[lang];
   const [mode, setMode] = useState<Mode>(() => {
     try { return readLastMode(window.localStorage); } catch { return 'send'; }
@@ -1046,6 +1060,8 @@ function App() {
   const [vpnClientUseUDP, setVpnClientUseUDP] = useState(false);
   const [vpnClientP2PWithLAN, setVpnClientP2PWithLAN] = useState(false);
   const [vpnClientTunnelOnly, setVpnClientTunnelOnly] = useState(false);
+  const [vpnClientDisconnectProtection, setVpnClientDisconnectProtection] = useState(false);
+  const [vpnClientReconnectDNS, setVpnClientReconnectDNS] = useState('');
   const [vpnClientDNSServers, setVpnClientDNSServers] = useState('');
   const [vpnClientRouteCIDRs, setVpnClientRouteCIDRs] = useState('');
   const [vpnClientLinkConfig, setVpnClientLinkConfig] = useState('');
@@ -2230,6 +2246,8 @@ function App() {
         blockDnsLeak: isWindows && vpnClientBlockDNSLeak,
         enableIpv6: hasIPv6Routes(vpnClientRouteCIDRs),
         tunnelOnly: vpnClientTunnelOnly,
+        disconnectProtection: mode === 'vpnClient' && !vpnClientTunnelOnly && vpnClientDisconnectProtection,
+        reconnectDns: vpnClientReconnectDNS,
         extraArgs: mode === 'vpnClient' ? vpnClientExtraArgs : vpnServerExtraArgs,
         ...((isFileTransferMode(mode) || mode === 'vpnClient') ? {clientRunId} : {}),
       });
@@ -2248,7 +2266,7 @@ function App() {
         activeVPNRun.current = 0;
         setVpnSnapshot(null);
       }
-      setError(localizeError(String(err)));
+      setError(String(err).includes('VPN_START_CANCELLED') ? '' : localizeError(String(err)));
     } finally {
       startPendingRef.current = false;
       setStartPending(false);
@@ -2379,6 +2397,8 @@ function App() {
     setVpnClientUseUDP(Boolean(profile.useUdp));
     setVpnClientP2PWithLAN(Boolean(profile.p2pWithLan));
     setVpnClientTunnelOnly(Boolean(profile.tunnelOnly));
+    setVpnClientDisconnectProtection(Boolean(profile.disconnectProtection));
+    setVpnClientReconnectDNS(profile.reconnectDns || '');
     setVpnClientDNSServers(profile.dnsServers || defaultVpnDNS);
     setVpnClientRouteCIDRs(profile.routeCidrs || defaultVpnRoutes);
     setVpnClientLinkConfig(profile.linkConfig || '');
@@ -2426,6 +2446,12 @@ function App() {
         break;
       case 'p2pWithLan':
         setVpnClientP2PWithLAN(Boolean(value));
+        break;
+      case 'disconnectProtection':
+        setVpnClientDisconnectProtection(Boolean(value));
+        break;
+      case 'reconnectDns':
+        setVpnClientReconnectDNS(String(value));
         break;
       case 'tunnelOnly':
         setVpnClientTunnelOnly(Boolean(value));
@@ -3276,6 +3302,7 @@ function App() {
 
   const receivePage = (
     <>
+      {receiveComparisonOpen && <ReceiveComparison key={`${saveDir}\0${status.localHTTPUrl}`} saveDir={saveDir} lang={lang} onClose={() => setReceiveComparisonOpen(false)} onChanged={() => { refreshVisibleReceivedFiles(receivedVisibleEntries.current, receivedSaveDir.current).catch(() => undefined); }} />}
       {receiveSessionCompact ? (
         <section className="card receive-session-bar" aria-label={t.connections}>
           <div className="receive-session-info">
@@ -3299,6 +3326,7 @@ function App() {
               <button type="button" className={downloadMode === 'resume' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('resume')}>{t.resumeDownload}</button>
               <button type="button" className={downloadMode === 'overwrite' ? 'active' : ''} disabled={status.downloading} onClick={() => setDownloadMode('overwrite')}>{t.overwriteDownload}</button>
             </div>
+            <button type="button" className="quiet-action" disabled={!status.localHTTPUrl || !saveDir || receivedActionsUnavailable} onClick={() => setReceiveComparisonOpen(true)}>{lang === 'zh' ? '比对目录' : 'Compare folder'}</button>
             <button type="button" className="icon-button" disabled={!status.localHTTPUrl || remoteListLoading} onClick={() => loadRemoteFiles(currentRemotePath, false, true)} aria-label={t.refresh} title={t.refresh}>
               <Icon name="refresh" className={remoteListLoading ? 'spin' : ''} />
             </button>
@@ -3507,6 +3535,7 @@ function App() {
           )}
           {!vpnShowConfigurationFailure && vpnShowFailure && <p className="vpn-connection-error">{t.vpnLastFailure}：{vpnDetails?.connectionError ? localizeError(vpnDetails.connectionError) : t.vpnFailureUnknown}</p>}
           {startHint && <p className="vpn-hero-hint">{startHint}</p>}
+          {vpnDetails?.disconnectProtection && vpnDetails.captureActive && !vpnDetails.ready && <p className="vpn-hero-hint" role="status">{t.protectionActive}</p>}
           {vpnClientRunning && (
             <>
             <section className="vpn-detail-group" aria-label={t.vpnConnectionInfo}>
@@ -3575,6 +3604,14 @@ function App() {
           </SettingsSection>
           <SettingsSection title={t.sectionRouting} summary={vpnClientTunnelOnly ? t.tunnelOnly : `${t.systemVpn}${hasIPv6Routes(vpnClientRouteCIDRs) ? ' · IPv6' : ''}`}>
             <Toggle label={t.tunnelOnly} hint={t.tunnelOnlyHint} checked={vpnClientTunnelOnly} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('tunnelOnly', checked)} />
+            <Toggle label={t.disconnectProtection} hint={t.disconnectProtectionHint} checked={vpnClientDisconnectProtection} disabled={vpnClientRunning || vpnClientTunnelOnly} onChange={(checked) => setVpnProfileField('disconnectProtection', checked)} />
+            {vpnClientDisconnectProtection && !vpnClientTunnelOnly && (
+              <div className="field">
+                <label htmlFor="vpn-reconnect-dns">{t.reconnectDns}</label>
+                <input id="vpn-reconnect-dns" value={vpnClientReconnectDNS} placeholder="8.8.8.8" disabled={vpnClientRunning} onChange={(event) => setVpnProfileField('reconnectDns', event.target.value)} />
+                <p className="field-hint">{t.reconnectDnsHint}</p>
+              </div>
+            )}
             <div className="field">
               <label htmlFor="vpn-route-cidrs">{t.routeCidrs}</label>
               <textarea
@@ -3641,8 +3678,8 @@ function App() {
             <Toggle
               label={t.dnsLeakProtection}
               hint={t.dnsLeakProtectionHint}
-              checked={vpnClientBlockDNSLeak}
-              disabled={vpnClientRunning || vpnClientTunnelOnly}
+              checked={vpnClientBlockDNSLeak || (vpnClientDisconnectProtection && !vpnClientTunnelOnly)}
+              disabled={vpnClientRunning || vpnClientTunnelOnly || vpnClientDisconnectProtection}
               onChange={(checked) => {
                 setVpnClientBlockDNSLeak(checked);
                 updateCurrentVpnProfile({blockDnsLeak: checked});
@@ -4090,6 +4127,8 @@ function defaultVpnProfile(name: string): VPNProfile {
     mtu: defaultVpnMTU,
     routeMetric: defaultVpnRouteMetric,
     blockDnsLeak: false,
+    disconnectProtection: false,
+    reconnectDns: '',
     extraArgs: '',
     tunnelOnly: false,
   };
@@ -4112,6 +4151,8 @@ function normalizeVpnProfile(profile: Partial<VPNProfile>, t: typeof text.zh): V
     mtu: normalizeVpnMTU(profile.mtu),
     routeMetric: normalizeRouteMetric(profile.routeMetric),
     blockDnsLeak: Boolean(profile.blockDnsLeak),
+    disconnectProtection: Boolean(profile.disconnectProtection),
+    reconnectDns: String(profile.reconnectDns || '').trim(),
     extraArgs: String(profile.extraArgs || '').trim(),
     tunnelOnly: Boolean(profile.tunnelOnly),
   };

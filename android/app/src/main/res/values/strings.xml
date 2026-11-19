@@ -294,4 +294,12 @@
     <string name="file_info_size">Size: %1$s</string>
     <string name="file_info_modified">Modified: %1$s</string>
     <string name="file_info_save_location">Save location: %1$s</string>
+    <string name="vpn_disconnect_protection">Disconnect protection</string>
+    <string name="vpn_disconnect_protection_hint">After VPN capture starts, keep configured routes captured while reconnecting. Traffic outside those routes and this app remain excluded. No periodic network checks while connected.</string>
+    <string name="vpn_reconnect_dns">Reconnect DNS</string>
+    <string name="vpn_reconnect_dns_hint">Used by gonc to establish and rebuild tunnels outside the VPN; blank uses 8.8.8.8. Accepts an IP with an optional port. This DNS setting affects other gonc tasks in this app process; VPN DNS for captured apps is unchanged.</string>
+    <string name="vpn_protection_confirm_dns">The effective gonc DNS will be %1$s. Any -dns in advanced arguments will be replaced. Continue?</string>
+    <string name="vpn_protection_confirm_local">Advanced arguments contain -local. That explicit binding is preserved and may prevent reconnection after an IP change or a Wi-Fi/mobile network switch. Remove it to let Android select the network automatically.</string>
+    <string name="vpn_protection_waiting">Traffic blocked; reconnecting</string>
+    <string name="vpn_cleanup_failed">VPN cleanup failed; tap Disconnect to retry</string>
 </resources>

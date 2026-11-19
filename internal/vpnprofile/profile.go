@@ -18,19 +18,21 @@ const (
 )
 
 type Profile struct {
-	Name         string `json:"name"`
-	Passphrase   string `json:"passphrase"`
-	UseUDP       bool   `json:"useUdp"`
-	P2PWithLAN   bool   `json:"p2pWithLan"`
-	RouteIPv6    bool   `json:"routeIpv6"`
-	DNSServers   string `json:"dnsServers"`
-	RouteCIDRs   string `json:"routeCidrs"`
-	LinkConfig   string `json:"linkConfig"`
-	MTU          int    `json:"mtu"`
-	RouteMetric  int    `json:"routeMetric"`
-	BlockDNSLeak bool   `json:"blockDnsLeak"`
-	ExtraArgs    string `json:"extraArgs"`
-	TunnelOnly   bool   `json:"tunnelOnly"`
+	DisconnectProtection bool   `json:"disconnectProtection"`
+	ReconnectDNS         string `json:"reconnectDns"`
+	Name                 string `json:"name"`
+	Passphrase           string `json:"passphrase"`
+	UseUDP               bool   `json:"useUdp"`
+	P2PWithLAN           bool   `json:"p2pWithLan"`
+	RouteIPv6            bool   `json:"routeIpv6"`
+	DNSServers           string `json:"dnsServers"`
+	RouteCIDRs           string `json:"routeCidrs"`
+	LinkConfig           string `json:"linkConfig"`
+	MTU                  int    `json:"mtu"`
+	RouteMetric          int    `json:"routeMetric"`
+	BlockDNSLeak         bool   `json:"blockDnsLeak"`
+	ExtraArgs            string `json:"extraArgs"`
+	TunnelOnly           bool   `json:"tunnelOnly"`
 }
 
 type Store struct {
@@ -149,6 +151,7 @@ func normalize(store *Store) {
 		profile.Passphrase = strings.TrimSpace(profile.Passphrase)
 		profile.LinkConfig = strings.TrimSpace(profile.LinkConfig)
 		profile.ExtraArgs = strings.TrimSpace(profile.ExtraArgs)
+		profile.ReconnectDNS = strings.TrimSpace(profile.ReconnectDNS)
 		profile.MTU = normalizeMTU(profile.MTU)
 		profile.RouteMetric = normalizeRouteMetric(profile.RouteMetric)
 		profile.DNSServers = normalizeLines(profile.DNSServers)

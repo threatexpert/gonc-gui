@@ -41,10 +41,10 @@ final class VpnQrPayload {
             JSONObject profile = root.optJSONObject("profile");
             if (profile == null || !(profile.opt("passphrase") instanceof String)
                     || profile.getString("passphrase").trim().isEmpty()) return result(Kind.INVALID);
-            for (String key : new String[]{"name", "dnsServers", "routeCidrs", "linkConfig", "socks5Address", "extraArgs"}) {
+            for (String key : new String[]{"name", "dnsServers", "routeCidrs", "linkConfig", "socks5Address", "extraArgs", "reconnectDns"}) {
                 if (profile.has(key) && !(profile.opt(key) instanceof String)) return result(Kind.INVALID);
             }
-            for (String key : new String[]{"useUdp", "routeIpv6", "tunnelOnly", "blockDnsLeak", "p2pWithLan"}) {
+            for (String key : new String[]{"useUdp", "routeIpv6", "tunnelOnly", "blockDnsLeak", "p2pWithLan", "disconnectProtection"}) {
                 if (profile.has(key) && !(profile.opt(key) instanceof Boolean)) return result(Kind.INVALID);
             }
             if (profile.has("mtu")) {

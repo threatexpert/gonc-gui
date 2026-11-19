@@ -2301,7 +2301,7 @@ html.profile-dragging * {
 
 .log-line {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
+  grid-template-columns: minmax(78px, max-content) minmax(0, 1fr);
   gap: 10px;
   line-height: 1.5;
   user-select: text;
@@ -2309,6 +2309,7 @@ html.profile-dragging * {
 
 .log-line time {
   color: var(--text-faint);
+  white-space: nowrap;
 }
 
 .log-line.warn span {

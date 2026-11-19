@@ -27,6 +27,8 @@ final class VpnProfile {
     boolean tunnelOnly;
     /** Preserved for Windows clients; Android does not enforce this option. */
     boolean blockDnsLeak;
+    boolean disconnectProtection;
+    String reconnectDns;
 
     static VpnProfile defaults(String name) {
         VpnProfile profile = new VpnProfile();
@@ -41,11 +43,17 @@ final class VpnProfile {
         profile.extraArgs = "";
         profile.tunnelOnly = false;
         profile.blockDnsLeak = false;
+        profile.disconnectProtection = false;
+        profile.reconnectDns = "";
         return profile;
     }
 
     static VpnProfile fromJson(JSONObject object, Context context) {
-        VpnProfile profile = defaults(context.getString(R.string.vpn_profile_default_name));
+        return fromJson(object, context.getString(R.string.vpn_profile_default_name));
+    }
+
+    static VpnProfile fromJson(JSONObject object, String defaultName) {
+        VpnProfile profile = defaults(defaultName);
         profile.name = object.optString("name", profile.name);
         profile.passphrase = object.optString("passphrase", "");
         profile.useUdp = object.optBoolean("useUdp", false);
@@ -58,6 +66,8 @@ final class VpnProfile {
         profile.extraArgs = object.optString("extraArgs", "");
         profile.tunnelOnly = object.optBoolean("tunnelOnly", false);
         profile.blockDnsLeak = object.optBoolean("blockDnsLeak", false);
+        profile.disconnectProtection = object.optBoolean("disconnectProtection", false);
+        profile.reconnectDns = object.optString("reconnectDns", "");
         return profile;
     }
 
@@ -77,6 +87,8 @@ final class VpnProfile {
             object.put("extraArgs", extraArgs == null ? "" : extraArgs);
             object.put("tunnelOnly", tunnelOnly);
             object.put("blockDnsLeak", blockDnsLeak);
+            object.put("disconnectProtection", disconnectProtection);
+            object.put("reconnectDns", reconnectDns == null ? "" : reconnectDns);
         } catch (JSONException ignored) {
         }
         return object;

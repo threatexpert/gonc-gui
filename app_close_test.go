@@ -85,3 +85,24 @@ func TestSetUILanguageNormalizesToSupportedLanguages(t *testing.T) {
 		t.Fatalf("language=%q, want en fallback", got)
 	}
 }
+
+func TestCloseWaitsForNetworkCleanupAndPreventsExitOnFailure(t *testing.T) {
+	failure := errors.New("scoped route cleanup failed")
+	shown := 0
+	show := func(_ context.Context, o wailsruntime.MessageDialogOptions) (string, error) {
+		shown++
+		if !strings.Contains(o.Message, failure.Error()) {
+			t.Fatal("cleanup reason not shown")
+		}
+		return "", nil
+	}
+	if !cleanupBeforeClose(context.Background(), "zh", func() error { return failure }, show) {
+		t.Fatal("exit allowed with failed network cleanup")
+	}
+	if cleanupBeforeClose(context.Background(), "zh", func() error { return nil }, show) {
+		t.Fatal("exit blocked after successful retry")
+	}
+	if shown != 1 {
+		t.Fatal(shown)
+	}
+}

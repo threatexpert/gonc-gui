@@ -884,6 +884,22 @@ public final class MainActivity extends Activity implements ModuleHost {
             stopVpnService();
         }
 
+        awaitVpnCleanupBeforeExit(android.os.SystemClock.elapsedRealtime() + 20000);
+    }
+
+    private void awaitVpnCleanupBeforeExit(long deadline) {
+        if (GoncVpnState.isRunning()) {
+            if (GoncVpnState.cleanupPending() || android.os.SystemClock.elapsedRealtime() >= deadline) {
+                exiting = false;
+                new AlertDialog.Builder(this).setTitle(R.string.vpn_cleanup_failed)
+                        .setMessage(GoncVpnState.error().isEmpty() ? getString(R.string.vpn_cleanup_failed) : GoncVpnState.error())
+                        .setPositiveButton(android.R.string.ok, null).show();
+                render();
+                return;
+            }
+            mainHandler.postDelayed(() -> awaitVpnCleanupBeforeExit(deadline), 200);
+            return;
+        }
         resetTransientStateForFreshLaunch();
         GoncForegroundService.clear(this);
         finish();
@@ -995,7 +1011,30 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void startVpnService() {
+        startVpnService(false);
+    }
+
+    private void startVpnService(boolean protectionConfirmed) {
         VpnProfile profile = vpnClient.currentProfile();
+        if (profile.disconnectProtection && !profile.tunnelOnly) {
+            try {
+                VpnProtection.Options options = VpnProtection.options(profile.extraArgs, profile.reconnectDns);
+                if (!protectionConfirmed && (options.hadDns || options.hasLocal)) {
+                    String message = getString(R.string.vpn_protection_confirm_dns, options.dns);
+                    if (options.hasLocal) message += "\n\n" + getString(R.string.vpn_protection_confirm_local);
+                    new AlertDialog.Builder(this)
+                            .setTitle(R.string.vpn_disconnect_protection)
+                            .setMessage(message)
+                            .setNegativeButton(R.string.cancel, null)
+                            .setPositiveButton(R.string.continue_anyway, (dialog, which) -> startVpnService(true))
+                            .show();
+                    return;
+                }
+            } catch (IllegalArgumentException error) {
+                Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
         vpnClient.normalizeAndSaveCurrent();
         Intent intent = new Intent(this, GoncVpnService.class);
         intent.setAction(GoncVpnService.ACTION_START);
@@ -1008,6 +1047,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         intent.putExtra(GoncVpnService.EXTRA_MTU, VpnProfile.normalizeMtu(profile.mtu));
         intent.putExtra(GoncVpnService.EXTRA_EXTRA_ARGS, profile.extraArgs == null ? "" : profile.extraArgs.trim());
         intent.putExtra(GoncVpnService.EXTRA_TUNNEL_ONLY, profile.tunnelOnly);
+        intent.putExtra(GoncVpnService.EXTRA_DISCONNECT_PROTECTION, profile.disconnectProtection);
+        intent.putExtra(GoncVpnService.EXTRA_RECONNECT_DNS, profile.reconnectDns);
+        intent.putExtra(GoncVpnService.EXTRA_PROTECTION_CONFIRMED, protectionConfirmed);
         appendLog("info", "VPN start requested: " + profile.displayName(this) + (profile.tunnelOnly ? " (tunnel only)" : ""));
         GoncVpnState.startConnecting(profile.displayName(this), profile.tunnelOnly);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

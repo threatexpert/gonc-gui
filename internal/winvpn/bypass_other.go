@@ -1,0 +1,48 @@
+//go:build !darwin
+
+package winvpn
+
+import (
+	"fmt"
+	"net"
+	"time"
+)
+
+func prepareInterfaceBypass(_ bypassSelection) (*bypassRoute, error) {
+	return &bypassRoute{ready: func() (bool, error) { return true, nil }}, nil
+}
+
+func selectBypassExit(dns, requested string, previous bypassSelection) (bypassSelection, error) {
+	host, _, _ := net.SplitHostPort(dns)
+	ipv4 := net.ParseIP(host).To4() != nil
+	// Once TUN captures traffic, global route selection can point at TUN.
+	// Re-read the physical interface addresses instead of reusing the old IP.
+	if previous.Name != "" {
+		iface, err := net.InterfaceByName(previous.Name)
+		if err != nil {
+			return bypassSelection{}, err
+		}
+		ip, err := interfaceSource(*iface, ipv4, previous.IP, requested)
+		return bypassSelection{Name: iface.Name, Index: iface.Index, IP: ip}, err
+	}
+	local := requested
+	if local == "" {
+		conn, err := net.DialTimeout("udp", dns, 3*time.Second)
+		if err != nil {
+			return bypassSelection{}, err
+		}
+		local = conn.LocalAddr().(*net.UDPAddr).IP.String()
+		_ = conn.Close()
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return bypassSelection{}, err
+	}
+	for _, iface := range interfaces {
+		ip, err := interfaceSource(iface, ipv4, "", local)
+		if err == nil {
+			return bypassSelection{Name: iface.Name, Index: iface.Index, IP: ip}, nil
+		}
+	}
+	return bypassSelection{}, fmt.Errorf("cannot identify physical interface for source %s", local)
+}

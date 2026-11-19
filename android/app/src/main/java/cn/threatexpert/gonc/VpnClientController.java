@@ -470,6 +470,8 @@ final class VpnClientController {
         tunnelOnly.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (!GoncVpnState.isRunning()) {
                 currentProfile().tunnelOnly = isChecked;
+                saveProfiles();
+                host.requestRender();
             }
         });
         LinearLayout.LayoutParams tunnelOnlyParams = new LinearLayout.LayoutParams(
@@ -479,6 +481,26 @@ final class VpnClientController {
         TextView tunnelOnlyHint = u.text(string(R.string.vpn_tunnel_only_hint), 12, u.muted(), Typeface.NORMAL);
         tunnelOnlyHint.setPadding(u.dp(4), 0, 0, 0);
         box.addView(tunnelOnlyHint);
+
+        CheckBox protection = new CheckBox(host.context());
+        protection.setText(string(R.string.vpn_disconnect_protection));
+        protection.setChecked(currentProfile().disconnectProtection);
+        u.setControlEnabled(protection, !running && !currentProfile().tunnelOnly);
+        protection.setOnCheckedChangeListener((button, checked) -> {
+            if (!GoncVpnState.isRunning()) {
+                currentProfile().disconnectProtection = checked;
+                saveProfiles();
+                host.requestRender();
+            }
+        });
+        box.addView(protection);
+        box.addView(u.text(string(R.string.vpn_disconnect_protection_hint), 12, u.muted(), Typeface.NORMAL));
+        if (currentProfile().disconnectProtection && !currentProfile().tunnelOnly) {
+            box.addView(labeledSingleLineField(string(R.string.vpn_reconnect_dns),
+                    currentProfile().reconnectDns, "8.8.8.8",
+                    value -> currentProfile().reconnectDns = value));
+            box.addView(u.text(string(R.string.vpn_reconnect_dns_hint), 12, u.muted(), Typeface.NORMAL));
+        }
 
         CheckBox blockDnsLeak = new CheckBox(host.context());
         blockDnsLeak.setText(string(R.string.vpn_dns_leak_protection));
@@ -693,6 +715,9 @@ final class VpnClientController {
         }
         if (GoncVpnState.STOPPING.equals(status)) {
             return string(R.string.vpn_service_stopping);
+        }
+        if (GoncVpnState.protectionWaiting()) {
+            return string(R.string.vpn_protection_waiting);
         }
         if (GoncVpnState.systemVpnReady()) {
             return string(R.string.vpn_service_enabled);

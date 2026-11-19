@@ -5,6 +5,9 @@ import {httpdownload} from '../models';
 import {main} from '../models';
 import {sharecontent} from '../models';
 import {vpnprofile} from '../models';
+import {receivecompare} from '../models';
+
+export function CancelReceivedComparison(arg1:string,arg2:boolean):Promise<void>;
 
 export function CaptureScreen():Promise<string>;
 
@@ -15,6 +18,8 @@ export function CheckReceivedFiles(arg1:string,arg2:Array<httpdownload.FileInfo>
 export function ClearTaskbarProgress():Promise<void>;
 
 export function CreateTextShare(arg1:string):Promise<string>;
+
+export function DeleteReceivedComparison(arg1:string,arg2:string):Promise<void>;
 
 export function FitStartupWindow(arg1:number,arg2:number):Promise<void>;
 
@@ -27,6 +32,10 @@ export function IsAdministrator():Promise<boolean>;
 export function LoadVPNProfiles():Promise<vpnprofile.Store>;
 
 export function OpenSaveDir(arg1:string):Promise<string>;
+
+export function ReceiveReceivedComparison(arg1:string):Promise<void>;
+
+export function ReceivedComparisonPage(arg1:string,arg2:string,arg3:number):Promise<receivecompare.Snapshot>;
 
 export function ReleaseGeneratedSharePaths(arg1:Array<string>):Promise<void>;
 
@@ -42,11 +51,15 @@ export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder(arg1:string):Promise<string>;
 
+export function SelectReceivedComparison(arg1:string,arg2:string,arg3:Array<number>,arg4:boolean,arg5:boolean):Promise<void>;
+
 export function SetTaskbarProgress(arg1:number,arg2:number):Promise<void>;
 
 export function SetUILanguage(arg1:string):Promise<void>;
 
 export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>,arg4:Array<string>,arg5:Array<httpdownload.FileInfo>,arg6:boolean,arg7:number):Promise<void>;
+
+export function StartReceivedComparison(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function StartTransfer(arg1:main.TransferRequest):Promise<void>;
 

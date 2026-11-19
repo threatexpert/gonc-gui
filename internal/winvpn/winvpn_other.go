@@ -22,7 +22,8 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 	return Start(config)
 }
 
-func (s *Session) Stop() error { return nil }
+func (s *Session) Stop() error              { return nil }
+func (s *Session) UpdateProxy(string) error { return fmt.Errorf("unsupported platform") }
 
 func (s *Session) DNSServers() []string     { return []string{} }
 func (s *Session) UpdateDNS([]string) error { return fmt.Errorf("unsupported platform") }

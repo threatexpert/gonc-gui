@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -27,6 +28,7 @@ type Client struct {
 	enc          *json.Encoder
 	dec          *json.Decoder
 	local        *winvpn.Session
+	bypass       *winvpn.BypassSession
 	mu           sync.Mutex
 	cancelLaunch context.CancelFunc
 }
@@ -78,14 +80,16 @@ func (c *Client) StartWithTrace(config vpnconfig.Config, trace func(string)) ([]
 		return append([]string{}, resp.DNSServers...), nil
 	}
 	if c.local != nil {
-		_ = c.local.Stop()
+		if err := c.local.Stop(); err != nil {
+			return nil, err
+		}
 		c.local = nil
 	}
 	session, err := winvpn.StartWithTrace(config, trace)
+	c.local = session
 	if err != nil {
 		return nil, err
 	}
-	c.local = session
 	return session.DNSServers(), nil
 }
 
@@ -94,12 +98,57 @@ func (c *Client) Stop() error {
 		_, err := c.call(request{Op: OpStop})
 		return err
 	}
+	var err error
 	if c.local != nil {
-		err := c.local.Stop()
-		c.local = nil
+		err = c.local.Stop()
+		if err == nil {
+			c.local = nil
+		}
+	}
+	if c.bypass != nil {
+		cleanupErr := c.bypass.Close()
+		err = errors.Join(err, cleanupErr)
+		if cleanupErr == nil {
+			c.bypass = nil
+		}
+	}
+	return err
+}
+
+func (c *Client) PrepareBypass(dns, local string) (string, error) {
+	if c.conn != nil {
+		resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
+		return resp.LocalIP, err
+	}
+	if c.bypass != nil {
+		return "", fmt.Errorf("VPN bypass already prepared")
+	}
+	b, err := winvpn.PrepareBypass(dns, local)
+	c.bypass = b
+	if err != nil {
+		return "", err
+	}
+	return b.LocalIP, nil
+}
+func (c *Client) RefreshBypass() (string, uint64, error) {
+	if c.conn != nil {
+		resp, err := c.call(request{Op: OpRefresh})
+		return resp.LocalIP, resp.Revision, err
+	}
+	if c.bypass == nil {
+		return "", 0, fmt.Errorf("VPN bypass is not prepared")
+	}
+	return c.bypass.Refresh()
+}
+func (c *Client) UpdateProxy(endpoint string) error {
+	if c.conn != nil {
+		_, err := c.call(request{Op: OpProxy, Address: endpoint})
 		return err
 	}
-	return nil
+	if c.local == nil {
+		return fmt.Errorf("VPN is not running")
+	}
+	return c.local.UpdateProxy(endpoint)
 }
 
 func (c *Client) UpdateDNS(servers []string) ([]string, error) {
@@ -120,12 +169,15 @@ func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
-	if c.cancelLaunch != nil {
-		defer c.cancelLaunch()
-	}
 	if c.conn != nil {
-		_, _ = c.call(request{Op: OpExit})
-		return c.conn.Close()
+		if _, err := c.call(request{Op: OpExit}); err != nil {
+			return err
+		}
+		err := c.conn.Close()
+		if c.cancelLaunch != nil {
+			c.cancelLaunch()
+		}
+		return err
 	}
 	return c.Stop()
 }

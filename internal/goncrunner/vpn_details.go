@@ -9,30 +9,32 @@ import (
 // VPNDetails describes this application's session and route configuration, not
 // an audit of the OS routing table or a measurement of the whole network card.
 type VPNDetails struct {
-	Revision           uint64   `json:"revision"`
-	Running            bool     `json:"running"`
-	Connected          bool     `json:"connected"`
-	Ready              bool     `json:"ready"`
-	EverReady          bool     `json:"everReady"`
-	ConnectionState    string   `json:"connectionState"`
-	TunnelStatus       string   `json:"tunnelStatus"`
-	ConnectionError    string   `json:"connectionError"`
-	ConfigurationError string   `json:"configurationError"`
-	RetryRemainingMS   int64    `json:"retryRemainingMs"`
-	SessionStartedAt   string   `json:"sessionStartedAt"`
-	LastConnectedAt    string   `json:"lastConnectedAt"`
-	DurationSeconds    int64    `json:"durationSeconds"`
-	InBytes            int64    `json:"inBytes"`
-	OutBytes           int64    `json:"outBytes"`
-	InBps              float64  `json:"inBps"`
-	OutBps             float64  `json:"outBps"`
-	TrafficAt          string   `json:"trafficAt"`
-	TunnelOnly         bool     `json:"tunnelOnly"`
-	RouteState         string   `json:"routeState"`
-	ConfiguredRoutes   []string `json:"configuredRoutes"`
-	Routes             []string `json:"routes"`
-	BypassIPs          []string `json:"bypassIps"`
-	DNSServers         []string `json:"dnsServers"`
+	DisconnectProtection bool     `json:"disconnectProtection"`
+	CaptureActive        bool     `json:"captureActive"`
+	Revision             uint64   `json:"revision"`
+	Running              bool     `json:"running"`
+	Connected            bool     `json:"connected"`
+	Ready                bool     `json:"ready"`
+	EverReady            bool     `json:"everReady"`
+	ConnectionState      string   `json:"connectionState"`
+	TunnelStatus         string   `json:"tunnelStatus"`
+	ConnectionError      string   `json:"connectionError"`
+	ConfigurationError   string   `json:"configurationError"`
+	RetryRemainingMS     int64    `json:"retryRemainingMs"`
+	SessionStartedAt     string   `json:"sessionStartedAt"`
+	LastConnectedAt      string   `json:"lastConnectedAt"`
+	DurationSeconds      int64    `json:"durationSeconds"`
+	InBytes              int64    `json:"inBytes"`
+	OutBytes             int64    `json:"outBytes"`
+	InBps                float64  `json:"inBps"`
+	OutBps               float64  `json:"outBps"`
+	TrafficAt            string   `json:"trafficAt"`
+	TunnelOnly           bool     `json:"tunnelOnly"`
+	RouteState           string   `json:"routeState"`
+	ConfiguredRoutes     []string `json:"configuredRoutes"`
+	Routes               []string `json:"routes"`
+	BypassIPs            []string `json:"bypassIps"`
+	DNSServers           []string `json:"dnsServers"`
 }
 
 type vpnDetailsTracker struct {
@@ -54,7 +56,8 @@ func newVPNDetailsTracker(req Request, sink Sink) *vpnDetailsTracker {
 		state = "tunnelOnly"
 	}
 	return &vpnDetailsTracker{sink: sink, data: VPNDetails{
-		Running: true, TunnelOnly: req.TunnelOnly, RouteState: state,
+		DisconnectProtection: req.DisconnectProtection && !req.TunnelOnly,
+		Running:              true, TunnelOnly: req.TunnelOnly, RouteState: state,
 		ConfiguredRoutes: routes, Routes: routes,
 		DNSServers: []string{},
 	}}
@@ -96,6 +99,11 @@ func (v *vpnDetailsTracker) connectionReport(report P2PStatusReport, now time.Ti
 	}
 	if !connected || newConnection {
 		v.data.Ready = false
+		if v.data.DisconnectProtection && v.data.CaptureActive {
+			v.data.RouteState = "protected"
+			v.data.Connected = connected
+			return
+		}
 		v.data.DNSServers = []string{}
 		if v.data.RouteState != "error" {
 			v.data.RouteState = "pending"
@@ -116,6 +124,10 @@ func (v *vpnDetailsTracker) socksReady() {
 		return
 	}
 	v.data.Ready = v.data.TunnelOnly && v.data.Connected
+	if v.data.DisconnectProtection && v.data.CaptureActive {
+		v.data.RouteState = "protected"
+		return
+	}
 	v.data.EverReady = v.data.EverReady || v.data.Ready
 	v.data.DNSServers = []string{}
 	v.data.RouteState = "pending"
@@ -150,6 +162,12 @@ func (v *vpnDetailsTracker) routes(state string, routes, bypass, dns []string) {
 		return
 	}
 	v.data.RouteState = state
+	if state == "applied" || state == "protected" {
+		v.data.CaptureActive = true
+	}
+	if state == "paused" {
+		v.data.CaptureActive = false
+	}
 	v.data.Ready = state == "applied" && v.data.Connected
 	v.data.EverReady = v.data.EverReady || v.data.Ready
 	if routes != nil {
@@ -198,6 +216,7 @@ func (v *vpnDetailsTracker) finish(now time.Time) {
 		v.ended = now
 		v.data.TunnelStatus = "stopped"
 		v.data.Running, v.data.Connected = false, false
+		v.data.CaptureActive = false
 		v.data.Ready = false
 		if !v.stopping && v.data.ConnectionState != "" {
 			v.data.ConnectionState = "failed"
@@ -259,4 +278,16 @@ func (v *vpnDetailsTracker) publishUntil(done <-chan struct{}) {
 			return
 		}
 	}
+}
+
+// Cleanup failures retain a running task so Stop remains available for retry.
+func (v *vpnDetailsTracker) cleanupFailed(err error) {
+	v.mu.Lock()
+	v.stopping = false
+	v.data.Running = true
+	v.data.Connected, v.data.Ready = false, false
+	v.data.RouteState = "error"
+	v.data.ConfigurationError = err.Error()
+	v.mu.Unlock()
+	v.publish()
 }

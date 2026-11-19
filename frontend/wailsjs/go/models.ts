@@ -160,6 +160,8 @@ export namespace main {
 		}
 	}
 	export class TransferRequest {
+	    disconnectProtection: boolean;
+	    reconnectDns: string;
 	    mode: string;
 	    clientRunId?: number;
 	    password: string;
@@ -186,6 +188,8 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.disconnectProtection = source["disconnectProtection"];
+	        this.reconnectDns = source["reconnectDns"];
 	        this.mode = source["mode"];
 	        this.clientRunId = source["clientRunId"];
 	        this.password = source["password"];
@@ -206,6 +210,123 @@ export namespace main {
 	        this.tunnelOnly = source["tunnelOnly"];
 	        this.extraArgs = source["extraArgs"];
 	    }
+	}
+
+}
+
+export namespace receivecompare {
+
+	export class Item {
+	    id: number;
+	    path: string;
+	    size: number;
+	    localSize?: number;
+	    remoteSize?: number;
+	    modified: string;
+	    localModified: string;
+	    remoteModified: string;
+	    selected: boolean;
+	    outcome: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Item(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.localSize = source["localSize"];
+	        this.remoteSize = source["remoteSize"];
+	        this.modified = source["modified"];
+	        this.localModified = source["localModified"];
+	        this.remoteModified = source["remoteModified"];
+	        this.selected = source["selected"];
+	        this.outcome = source["outcome"];
+	        this.error = source["error"];
+	    }
+	}
+	export class Snapshot {
+	    id: string;
+	    root: string;
+	    scope: string;
+	    kind: string;
+	    phase: string;
+	    error: string;
+	    remote: number;
+	    scanned: number;
+	    candidates: number;
+	    bytes: number;
+	    unchecked: number;
+	    warnings: string[];
+	    matched: number;
+	    selected: number;
+	    selectedBytes: number;
+	    selectedLocalOnly: number;
+	    selectedLocalOnlyBytes: number;
+	    selectedReceive: number;
+	    selectedReceiveBytes: number;
+	    deleted: number;
+	    received: number;
+	    skipped: number;
+	    failed: number;
+	    deleteMode: string;
+	    page: number;
+	    items: Item[];
+
+	    static createFrom(source: any = {}) {
+	        return new Snapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.root = source["root"];
+	        this.scope = source["scope"];
+	        this.kind = source["kind"];
+	        this.phase = source["phase"];
+	        this.error = source["error"];
+	        this.remote = source["remote"];
+	        this.scanned = source["scanned"];
+	        this.candidates = source["candidates"];
+	        this.bytes = source["bytes"];
+	        this.unchecked = source["unchecked"];
+	        this.warnings = source["warnings"];
+	        this.matched = source["matched"];
+	        this.selected = source["selected"];
+	        this.selectedBytes = source["selectedBytes"];
+	        this.selectedLocalOnly = source["selectedLocalOnly"];
+	        this.selectedLocalOnlyBytes = source["selectedLocalOnlyBytes"];
+	        this.selectedReceive = source["selectedReceive"];
+	        this.selectedReceiveBytes = source["selectedReceiveBytes"];
+	        this.deleted = source["deleted"];
+	        this.received = source["received"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.deleteMode = source["deleteMode"];
+	        this.page = source["page"];
+	        this.items = this.convertValues(source["items"], Item);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -232,6 +353,8 @@ export namespace sharecontent {
 export namespace vpnprofile {
 	
 	export class Profile {
+	    disconnectProtection: boolean;
+	    reconnectDns: string;
 	    name: string;
 	    passphrase: string;
 	    useUdp: boolean;
@@ -252,6 +375,8 @@ export namespace vpnprofile {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.disconnectProtection = source["disconnectProtection"];
+	        this.reconnectDns = source["reconnectDns"];
 	        this.name = source["name"];
 	        this.passphrase = source["passphrase"];
 	        this.useUdp = source["useUdp"];

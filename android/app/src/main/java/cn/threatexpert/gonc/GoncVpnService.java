@@ -37,6 +37,9 @@ public final class GoncVpnService extends VpnService {
     static final String EXTRA_MTU = "mtu";
     static final String EXTRA_EXTRA_ARGS = "extra_args";
     static final String EXTRA_TUNNEL_ONLY = "tunnel_only";
+    static final String EXTRA_DISCONNECT_PROTECTION = "disconnect_protection";
+    static final String EXTRA_RECONNECT_DNS = "reconnect_dns";
+    static final String EXTRA_PROTECTION_CONFIRMED = "protection_confirmed";
 
     private static final int NOTIFICATION_ID = 2001;
     private static final String CHANNEL_ID = "gonc_vpn";
@@ -55,6 +58,8 @@ public final class GoncVpnService extends VpnService {
     private boolean stopRequested;
     private boolean stopWorkerRunning;
     private volatile String lastGoncMessage = "";
+    private volatile boolean disconnectProtection;
+    private volatile ProtectedTunnelAttempt protectedAttempt;
 
     @Override
     public void onCreate() {
@@ -91,13 +96,15 @@ public final class GoncVpnService extends VpnService {
             int mtu = intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU);
             String extraArgs = intent.getStringExtra(EXTRA_EXTRA_ARGS);
             boolean tunnelOnly = intent.getBooleanExtra(EXTRA_TUNNEL_ONLY, false);
-            startVpn(password, useUdp, p2pWithLan, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly);
+            startVpn(password, useUdp, p2pWithLan, dnsServers, routeCidrs, linkConfig, mtu, extraArgs, tunnelOnly,
+                    intent.getBooleanExtra(EXTRA_DISCONNECT_PROTECTION, false),
+                    intent.getStringExtra(EXTRA_RECONNECT_DNS), intent.getBooleanExtra(EXTRA_PROTECTION_CONFIRMED, false));
             return START_STICKY;
         }
         return START_NOT_STICKY;
     }
 
-    private void startVpn(String password, boolean useUdp, boolean p2pWithLan, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly) {
+    private void startVpn(String password, boolean useUdp, boolean p2pWithLan, String dnsServers, String routeCidrs, String linkConfig, int mtu, String extraArgs, boolean tunnelOnly, boolean protection, String reconnectDns, boolean confirmed) {
         boolean enableIpv6 = VpnRoutePolicy.hasIpv6(routeCidrs);
         synchronized (lock) {
             if (goncSession != null || vpnInterface != null || tun2socksRunning || vpnWorker != null || stopWorkerRunning) {
@@ -105,6 +112,7 @@ public final class GoncVpnService extends VpnService {
                 return;
             }
             stopRequested = false;
+            disconnectProtection = protection && !tunnelOnly;
         }
         lastGoncMessage = "";
         GoncVpnState.setStatus(GoncVpnState.CONNECTING);
@@ -126,6 +134,19 @@ public final class GoncVpnService extends VpnService {
                 log("info", "Using link config " + effectiveLink);
 
                 if (isStopRequested()) {
+                    return;
+                }
+                if (disconnectProtection) {
+                    VpnProtection.Options options = VpnProtection.options(extraArgs, reconnectDns);
+                    if ((options.hadDns || options.hasLocal) && !confirmed) {
+                        throw new IllegalArgumentException("Confirm advanced -dns/-local arguments before enabling VPN protection");
+                    }
+                    synchronized (lock) {
+                        if (stopRequested) return;
+                        releaseMulticast = VpnDiscovery.acquireMulticast(this, p2pWithLan, message -> log("warn", message));
+                    }
+                    runProtectedTunnel(password, useUdp, effectiveLink, VpnDiscovery.extraArgs(options.arguments, p2pWithLan),
+                            enableIpv6, dnsServers, routeCidrs, effectiveMtu);
                     return;
                 }
                 GoncCrashReporter.stage(this, "start gonc tunnel");
@@ -194,6 +215,134 @@ public final class GoncVpnService extends VpnService {
         worker.start();
     }
 
+    private boolean hasCapture() {
+        synchronized (lock) { return vpnInterface != null; }
+    }
+
+    private void protectionWaiting(String reason) {
+        if (isStopRequested()) return;
+        GoncVpnState.setProtectionWaiting(hasCapture(), reason);
+        updateNotification(notificationStatusText());
+    }
+
+    // A live attempt waits on callbacks, with no timer/network inspection. The
+    // retry delay exists only after a reported failure or completed session.
+    private void runProtectedTunnel(String password, boolean udp, String link, String args,
+                                    boolean captureIpv6, String dns, String routes, int mtu) throws Exception {
+        String activeEndpoint = "";
+        boolean policyChosen = false, rejectIpv6 = false;
+        List<String> activeDns = null;
+        while (!isStopRequested()) {
+            ProtectedTunnelAttempt attempt = new ProtectedTunnelAttempt();
+            protectedAttempt = attempt;
+            TunnelReadySignal ready = new TunnelReadySignal();
+            mobilegonc.Session session = null;
+            try {
+                if (isStopRequested()) return;
+                session = Mobilegonc.startP2PTunnel(password, udp, link, args, protectedCallback(attempt, ready));
+                synchronized (lock) { goncSession = session; }
+                long seen = 0;
+                while (!isStopRequested() && !attempt.lost()) {
+                    attempt.awaitChange(seen);
+                    if (isStopRequested() || attempt.lost() || !attempt.active()) break;
+                    seen = attempt.revision();
+                    String endpoint = attempt.endpoint();
+                    if (endpoint.isEmpty()) continue;
+                    if (!policyChosen) {
+                        boolean available = resolveEffectiveIpv6(captureIpv6, endpoint, ready, ready.revision());
+                        if (isStopRequested() || attempt.lost()) continue;
+                        activeDns = selectedDns(dns, available);
+                        rejectIpv6 = VpnRoutePolicy.rejectIpv6(routes, available);
+                        policyChosen = true;
+                    }
+                    synchronized (engineLock) {
+                        if (isStopRequested() || attempt.lost()) continue;
+                        if (!hasCapture()) {
+                            installInterface(captureIpv6, activeDns, routes, mtu, endpoint, rejectIpv6);
+                        } else if (!tun2socksRunning) {
+                            restartEngine(endpoint, mtu, rejectIpv6);
+                        } else if (!endpoint.equals(activeEndpoint)) {
+                            Mobilegonc.updateTun2SocksProxy(endpoint);
+                            log("info", "Updated SOCKS5 endpoint without restarting TUN");
+                        }
+                        activeEndpoint = endpoint;
+                        // Serializes with loss callbacks, avoiding a late Connected
+                        // after a loss received during interface/engine setup.
+                        synchronized (attempt) {
+                            if (attempt.active() && !attempt.lost() && !isStopRequested()) markConnected();
+                        }
+                    }
+                }
+            } catch (Exception error) {
+                if (isStopRequested()) return;
+                if (!hasCapture()) throw error;
+                log("error", "Protected reconnect failed: " + error.getMessage());
+                protectionWaiting(error.getMessage());
+            } finally {
+                attempt.retire();
+                if (session != null) {
+                    session.stop();
+                    // Wait for old Go globals/listeners to be released before a new
+                    // session starts. Explicit Stop can hand cleanup to stopVpn.
+                    boolean done;
+                    do { done = session.awaitDone(1000); }
+                    while (!done && !isStopRequested());
+                    if (done) {
+                        synchronized (lock) { if (goncSession == session) goncSession = null; }
+                    }
+                }
+                if (protectedAttempt == attempt) protectedAttempt = null;
+            }
+            if (!isStopRequested()) {
+                protectionWaiting(lastGoncMessage);
+                synchronized (lock) { if (!stopRequested) lock.wait(2000); }
+            }
+        }
+    }
+
+    private Callback protectedCallback(ProtectedTunnelAttempt attempt, TunnelReadySignal ready) {
+        return new Callback() {
+            @Override public void event(String level, String message) {
+                synchronized (attempt) {
+                    if (!attempt.active() || isStopRequested()) return;
+                    lastGoncMessage = message == null ? "" : message;
+                    log(level, lastGoncMessage);
+                }
+            }
+            @Override public void p2PReport(String topic, String side, String status, String network, String mode, String peer, long at, long pid) {
+                synchronized (attempt) {
+                    if (isStopRequested() || !attempt.report(topic, status)) return;
+                    GoncVpnState.setP2PReport(status, network, mode, peer);
+                    if (attempt.lost()) protectionWaiting(status);
+                    else updateNotification(notificationStatusText());
+                }
+            }
+            @Override public void ready(String endpoint) {
+                synchronized (attempt) {
+                    if (isStopRequested() || !attempt.ready(endpoint)) return;
+                    GoncVpnState.setEndpoint(endpoint);
+                    ready.markReady(endpoint);
+                }
+            }
+            @Override public void traffic(String side, long in, long out, double ib, double ob, long elapsed, long count, boolean last) {
+                synchronized (attempt) {
+                    if (attempt.active() && !isStopRequested()) GoncVpnState.setTraffic(in, out, ib, ob);
+                }
+            }
+            @Override public void stopped(long code) { lost("gonc session stopped: " + code); }
+            @Override public void error(String message) { lost(message); }
+            private void lost(String reason) {
+                synchronized (attempt) {
+                    if (!attempt.active() || isStopRequested()) return;
+                    lastGoncMessage = reason == null ? "" : reason;
+                    log("warn", lastGoncMessage);
+                    attempt.fail();
+                    protectionWaiting(lastGoncMessage);
+                }
+            }
+        };
+    }
+
     // The Java-owned descriptor remains open for the entire VPN lifetime. The
     // engine receives a detached duplicate, preserving the existing fdsan-safe
     // transfer convention and preventing a route gap during DNS reconfiguration.
@@ -232,7 +381,8 @@ public final class GoncVpnService extends VpnService {
             }
             if (tun == null) throw new IllegalStateException("VPN interface is not available");
             if (wasRunning) {
-                Mobilegonc.stopTun2Socks();
+                if (disconnectProtection) Mobilegonc.stopTun2SocksWithError();
+                else Mobilegonc.stopTun2Socks();
                 synchronized (lock) { tun2socksRunning = false; }
             }
             int fd = -1;
@@ -242,7 +392,7 @@ public final class GoncVpnService extends VpnService {
                 Mobilegonc.startTun2SocksWithPolicy(fd, endpoint, "tun0", mtu, "warn", true, rejectIpv6);
                 synchronized (lock) { tun2socksRunning = true; }
                 log("info", "tun2socks started; deferred TCP handshake enabled; local IPv6 rejection=" + rejectIpv6);
-                if (!isStopRequested()) markConnected();
+                if (!isStopRequested() && !disconnectProtection) markConnected();
             } finally {
                 closeDetachedFd(fd);
             }
@@ -474,7 +624,7 @@ public final class GoncVpnService extends VpnService {
         if (enableIpv6) {
             GoncCrashReporter.stage(this, "vpn builder add ipv6 address");
             builder.addAddress("fd60:173:33::2", 128);
-        } else {
+        } else if (!disconnectProtection) {
             // Without an IPv6 route this family is intentionally outside the VPN.
             builder.allowFamily(OsConstants.AF_INET6);
         }
@@ -485,8 +635,10 @@ public final class GoncVpnService extends VpnService {
             GoncCrashReporter.stage(this, "vpn builder disallow self");
             builder.addDisallowedApplication(getPackageName());
         } catch (PackageManager.NameNotFoundException ignored) {
+            if (disconnectProtection) throw new IllegalStateException("Cannot prepare VPN bypass", ignored);
             GoncCrashReporter.appendLog(this, "warn", "Cannot exclude self package from VPN");
         } catch (RuntimeException error) {
+            if (disconnectProtection) throw new IllegalStateException("Cannot prepare VPN bypass", error);
             GoncCrashReporter.recordNonFatal(this, "Cannot exclude self package from VPN", error);
             log("warn", "Cannot exclude self package from VPN: " + (error.getMessage() == null ? error.toString() : error.getMessage()));
         }
@@ -646,6 +798,7 @@ public final class GoncVpnService extends VpnService {
 
     private String notificationStatusText() {
         String status = GoncVpnState.status();
+        if (GoncVpnState.protectionWaiting()) return yellowText(R.string.vpn_protection_waiting);
         if (GoncVpnState.ERROR.equals(status)) {
             return redText(R.string.vpn_service_error);
         }
@@ -695,7 +848,7 @@ public final class GoncVpnService extends VpnService {
     }
 
     private void stopVpn(boolean stopSelfWhenDone) {
-        boolean keepError = GoncVpnState.ERROR.equals(GoncVpnState.status());
+        boolean keepError = GoncVpnState.ERROR.equals(GoncVpnState.status()) && !GoncVpnState.cleanupPending();
         boolean nothingToStop;
         synchronized (lock) {
             if (stopWorkerRunning) {
@@ -715,6 +868,9 @@ public final class GoncVpnService extends VpnService {
                 stopWorkerRunning = true;
             }
         }
+        ProtectedTunnelAttempt attempt = protectedAttempt;
+        if (attempt != null) attempt.retire();
+        synchronized (lock) { lock.notifyAll(); }
         if (nothingToStop) {
             GoncCrashReporter.stage(this, "vpn stop no active resources");
             finishStopped(keepError, stopSelfWhenDone);
@@ -724,6 +880,10 @@ public final class GoncVpnService extends VpnService {
             GoncVpnState.setStatus(GoncVpnState.STOPPING);
         }
         Thread worker = new Thread(() -> {
+            if (disconnectProtection) {
+                stopProtectedVpn(keepError, stopSelfWhenDone);
+                return;
+            }
             Thread starting;
             synchronized (lock) { starting = vpnWorker; }
             if (starting != null) {
@@ -777,7 +937,60 @@ public final class GoncVpnService extends VpnService {
         worker.start();
     }
 
+    private void stopProtectedVpn(boolean keepError, boolean stopSelfWhenDone) {
+        StringBuilder failures = new StringBuilder();
+        Thread starting;
+        synchronized (lock) { starting = vpnWorker; }
+        try {
+            if (starting != null) starting.join(10000);
+            if (starting != null && starting.isAlive()) {
+                throw new IllegalStateException("Tunnel worker has not stopped; resources retained for retry");
+            }
+            mobilegonc.Session session;
+            synchronized (lock) { session = goncSession; }
+            if (session != null) {
+                try {
+                    session.stop();
+                    if (!session.awaitDone(5000)) throw new IllegalStateException("gonc stop timed out");
+                    synchronized (lock) { if (goncSession == session) goncSession = null; }
+                } catch (Exception error) { failures.append("gonc: ").append(error).append("\n"); }
+            }
+            synchronized (engineLock) {
+                try {
+                    Mobilegonc.stopTun2SocksWithError();
+                    synchronized (lock) { tun2socksRunning = false; }
+                } catch (Exception error) { failures.append("tun2socks: ").append(error).append("\n"); }
+                // Retain Java's fd if the engine failed to stop; its duplicated fd
+                // may still be alive, so reporting full cleanup would be misleading.
+                if (!tun2socksRunning) {
+                    ParcelFileDescriptor tun;
+                    synchronized (lock) { tun = vpnInterface; }
+                    if (tun != null) {
+                        try {
+                            tun.close();
+                            synchronized (lock) { if (vpnInterface == tun) vpnInterface = null; }
+                        } catch (Exception error) { failures.append("TUN: ").append(error).append("\n"); }
+                    }
+                }
+            }
+        } catch (Exception error) {
+            failures.append(error);
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+        }
+        if (failures.length() > 0) {
+            String message = getString(R.string.vpn_cleanup_failed) + "\n" + failures;
+            log("error", message);
+            GoncVpnState.setCleanupPending(message);
+            updateNotification(redText(R.string.vpn_cleanup_failed));
+            synchronized (lock) { stopWorkerRunning = false; }
+            return;
+        }
+        synchronized (lock) { stopWorkerRunning = false; }
+        finishStopped(keepError, stopSelfWhenDone);
+    }
+
     private void finishStopped(boolean keepError, boolean stopSelfWhenDone) {
+        GoncVpnState.clearProtection();
         GoncVpnState.setEndpoint("");
         if (!keepError) {
             GoncVpnState.setStatus(GoncVpnState.DISCONNECTED);
@@ -801,6 +1014,11 @@ public final class GoncVpnService extends VpnService {
         if (manager != null) {
             manager.cancel(NOTIFICATION_ID);
         }
+    }
+
+    @Override
+    public void onRevoke() {
+        stopVpn();
     }
 
     @Override

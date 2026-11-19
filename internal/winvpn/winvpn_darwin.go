@@ -98,7 +98,10 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 	}
 	session := &Session{config: config, ifaceName: actualName, nameFile: nameFile, trace: trace}
 	if err := session.configure(); err != nil {
-		return nil, errors.Join(err, session.Stop())
+		if cleanupErr := session.Stop(); cleanupErr != nil {
+			return session, errors.Join(err, cleanupErr)
+		}
+		return nil, err
 	}
 	return session, nil
 }
@@ -209,6 +212,11 @@ func (s *Session) configureDNS() error {
 }
 
 func (s *Session) configureBypassRoutes() error {
+	if s.config.DisconnectProtection {
+		// PrepareBypass already prepared the interface-scoped exit used by
+		// gonc's bound sockets. Global peer routes would also bypass other apps.
+		return nil
+	}
 	// Snapshot all native exits before installing any capture or DNS route.
 	routes, err := planDarwinBypass(s.config.BypassIPs, s.ifaceName, nativeRouteTo)
 	if err != nil {

@@ -40,6 +40,8 @@ final class GoncVpnState {
     private static String profileName = "";
     private static boolean tunnelOnly;
     private static boolean systemVpnReady;
+    private static boolean protectionWaiting;
+    private static boolean cleanupPending;
     private static long p2pReportVersion;
     private static long inBytes;
     private static long outBytes;
@@ -146,8 +148,14 @@ final class GoncVpnState {
         return lastTrafficMs;
     }
 
+    static synchronized boolean protectionWaiting() { return protectionWaiting; }
+    static synchronized boolean cleanupPending() { return cleanupPending; }
+    static synchronized void clearProtection() {
+        protectionWaiting = false; cleanupPending = false; systemVpnReady = false;
+    }
+
     static synchronized boolean isRunning() {
-        return CONNECTING.equals(status) || CONNECTED.equals(status) || STOPPING.equals(status);
+        return protectionWaiting || cleanupPending || CONNECTING.equals(status) || CONNECTED.equals(status) || STOPPING.equals(status);
     }
 
     static synchronized List<LogEntry> logsAfter(long lastId) {
@@ -164,6 +172,8 @@ final class GoncVpnState {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             status = CONNECTING;
+            protectionWaiting = false;
+            cleanupPending = false;
             endpoint = "";
             error = "";
             // Match the file modules' TransferMetrics.reset() so the initial label
@@ -192,10 +202,13 @@ final class GoncVpnState {
         Listener snapshot;
         synchronized (GoncVpnState.class) {
             status = nextStatus;
+            if (STOPPING.equals(nextStatus)) { protectionWaiting = false; cleanupPending = false; }
             if (!ERROR.equals(nextStatus)) {
                 error = "";
             }
             if (DISCONNECTED.equals(nextStatus)) {
+                protectionWaiting = false;
+                cleanupPending = false;
                 endpoint = "";
                 p2pStatus = "idle";
                 network = "-";
@@ -285,6 +298,8 @@ final class GoncVpnState {
         synchronized (GoncVpnState.class) {
             systemVpnReady = ready;
             if (ready) {
+                protectionWaiting = false;
+                error = "";
                 status = CONNECTED;
             }
             snapshot = listener;
@@ -292,6 +307,34 @@ final class GoncVpnState {
         if (snapshot != null) {
             snapshot.onVpnStateChanged();
         }
+    }
+
+    static void setProtectionWaiting(boolean captured, String reason) {
+        synchronized (GoncVpnState.class) {
+            protectionWaiting = captured;
+            status = CONNECTING;
+            systemVpnReady = false;
+            endpoint = "";
+            p2pStatus = "reconnecting";
+            error = reason == null ? "" : reason;
+        }
+        notifyState();
+    }
+
+    static void setCleanupPending(String message) {
+        synchronized (GoncVpnState.class) {
+            cleanupPending = true;
+            protectionWaiting = false;
+            status = ERROR;
+            error = message;
+        }
+        notifyState();
+    }
+
+    private static void notifyState() {
+        Listener snapshot;
+        synchronized (GoncVpnState.class) { snapshot = listener; }
+        if (snapshot != null) snapshot.onVpnStateChanged();
     }
 
     static void setError(String message) {

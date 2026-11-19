@@ -124,6 +124,8 @@ func (v *vpnTunnelLifecycle) current(s vpnTunnelSnapshot) bool {
 }
 
 type vpnRouteActions struct {
+	protect  bool
+	update   func(string) error
 	probe    func(context.Context, string) bool
 	start    func(vpnTunnelSnapshot, bool) ([]string, error)
 	stop     func() error
@@ -138,6 +140,8 @@ type vpnRouteActions struct {
 func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunnelLifecycle, a vpnRouteActions) error {
 	var processed, probedReady uint64
 	var applied, configuring, ipv6 bool
+	var endpoint string
+	var appliedDNS []string
 	stopped := func() bool {
 		select {
 		case <-ctx.Done():
@@ -175,6 +179,10 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 			if !v.current(s) {
 				continue
 			}
+			if a.protect {
+				a.paused(s.status, nil)
+				continue
+			}
 			err := a.stop()
 			if err == nil {
 				applied = false
@@ -185,7 +193,8 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 			}
 			continue
 		}
-		if s.readyID != probedReady {
+		// Retain the initial stack's IPv6 policy while capture remains active.
+		if s.readyID != probedReady && !(a.protect && applied) {
 			ipv6 = a.probe(ctx, s.endpoint)
 			probedReady = s.readyID
 		}
@@ -197,6 +206,23 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 		}
 		configuring = true
 		a.applying(s, ipv6)
+		if a.protect && applied {
+			if s.endpoint != endpoint {
+				if err := a.update(s.endpoint); err != nil {
+					if !v.current(s) {
+						continue
+					}
+					return err
+				}
+				endpoint = s.endpoint
+			}
+			processed = s.revision
+			configuring = false
+			if !stopped() && v.current(s) {
+				a.applied(s, ipv6, appliedDNS)
+			}
+			continue
+		}
 		if applied {
 			if err := a.stop(); err != nil {
 				if stopped() {
@@ -214,6 +240,9 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 		}
 		dns, err := a.start(s, ipv6)
 		applied = err == nil
+		if applied {
+			endpoint, appliedDNS = s.endpoint, dns
+		}
 		processed = s.revision
 		if stopped() {
 			return nil
@@ -227,4 +256,12 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 		configuring = false
 		a.applied(s, ipv6, dns)
 	}
+}
+
+func (v *vpnTunnelLifecycle) disconnect() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.connected = false
+	v.state.ready, v.state.status = false, "disconnected"
+	v.notifyLocked()
 }
