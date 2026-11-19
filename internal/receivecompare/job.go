@@ -28,19 +28,20 @@ const Differences = "differences"
 const maxIndexBytes = 256 << 20 // conservative accounting; fail closed on oversized jobs
 
 type Item struct {
-	LinkTarget     string `json:"linkTarget,omitempty"`
-	PreserveLink   bool   `json:"preserveLink,omitempty"`
-	ID             int    `json:"id"`
-	Path           string `json:"path"`
-	Size           int64  `json:"size"`
-	LocalSize      *int64 `json:"localSize"`
-	RemoteSize     *int64 `json:"remoteSize"`
-	Modified       string `json:"modified"`
-	LocalModified  string `json:"localModified"`
-	RemoteModified string `json:"remoteModified"`
-	Selected       bool   `json:"selected"`
-	Outcome        string `json:"outcome"`
-	Error          string `json:"error"`
+	LinkTarget        string `json:"linkTarget,omitempty"`
+	PreserveLink      bool   `json:"preserveLink,omitempty"`
+	PermissionsDiffer bool   `json:"permissionsDiffer,omitempty"`
+	ID                int    `json:"id"`
+	Path              string `json:"path"`
+	Size              int64  `json:"size"`
+	LocalSize         *int64 `json:"localSize"`
+	RemoteSize        *int64 `json:"remoteSize"`
+	Modified          string `json:"modified"`
+	LocalModified     string `json:"localModified"`
+	RemoteModified    string `json:"remoteModified"`
+	Selected          bool   `json:"selected"`
+	Outcome           string `json:"outcome"`
+	Error             string `json:"error"`
 }
 
 type ActiveReceive struct {

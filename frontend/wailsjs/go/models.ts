@@ -243,6 +243,7 @@ export namespace receivecompare {
 	export class Item {
 	    linkTarget?: string;
 	    preserveLink?: boolean;
+	    permissionsDiffer?: boolean;
 	    id: number;
 	    path: string;
 	    size: number;
@@ -263,6 +264,7 @@ export namespace receivecompare {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.linkTarget = source["linkTarget"];
 	        this.preserveLink = source["preserveLink"];
+	        this.permissionsDiffer = source["permissionsDiffer"];
 	        this.id = source["id"];
 	        this.path = source["path"];
 	        this.size = source["size"];

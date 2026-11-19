@@ -265,7 +265,11 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
               const queued = phase === 'receiving' && item.selected && remoteSize != null;
               return <tr key={item.id}>
                 <td><input type="checkbox" checked={item.selected} disabled={locked || !selectable(item)} aria-label={item.path} onChange={event => select([item.id], false, event.target.checked)} /></td>
-                <td title={item.path}>{item.path.replace(/^\//, '')}{item.linkTarget && <small title={item.linkTarget}>{item.preserveLink ? (zh ? '接收为链接' : 'Receive as link') : (zh ? '接收目标内容' : 'Receive target contents')} → {item.linkTarget}</small>}</td>
+                <td title={item.path}>
+                  {item.path.replace(/^\//, '')}
+                  {item.permissionsDiffer && <small>{zh ? '权限不同' : 'Permissions differ'}</small>}
+                  {item.linkTarget && <small title={item.linkTarget}>{item.preserveLink ? (zh ? '接收为链接' : 'Receive as link') : (zh ? '接收目标内容' : 'Receive target contents')} → {item.linkTarget}</small>}
+                </td>
                 <td><ComparisonValue local={localSizeText} remote={remoteSizeText} equal={both && localSize === remoteSize} different={both && localSize !== remoteSize} zh={zh} /></td>
                 <td><ComparisonValue local={localSize == null ? undefined : times.local || unknown} remote={remoteSize == null ? undefined : times.remote || unknown} equal={both && times.equal} different={both && !!times.local && !!times.remote && !times.equal} zh={zh} /></td>
                 <td>{transfer ? <span className="compare-active">{transferStatus(transfer, zh)}{!transfer.checking && transfer.totalBytes > 0 && <small>{bytes(transfer.doneBytes)} / {bytes(transfer.totalBytes)}</small>}</span>

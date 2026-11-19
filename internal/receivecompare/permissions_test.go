@@ -54,8 +54,14 @@ func TestComparisonReceivePermissionOnlyAndMissingDirectory(t *testing.T) {
 		{Path: "/scripts", IsDir: true, Mode: &dirMode},
 	}
 	job := scanPurpose(t, root, "/", Differences, files...)
-	if s := job.Page("", 0); s.Candidates != 3 || s.Bytes != 3 {
+	s := job.Page("", 0)
+	if s.Candidates != 3 || s.Bytes != 3 {
 		t.Fatalf("scan: %+v", s)
+	}
+	for _, item := range s.Items {
+		if item.PermissionsDiffer != (item.Path == "/build.sh") {
+			t.Errorf("%s: unexpected permissionsDiffer=%t", item.Path, item.PermissionsDiffer)
+		}
 	}
 	if err := job.Select("", nil, true, true); err != nil {
 		t.Fatal(err)

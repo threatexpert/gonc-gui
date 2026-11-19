@@ -68,7 +68,7 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 		localLink := !missing && info.Mode()&os.ModeSymlink != 0
 		typeDifferent := !missing && (file.PreserveLink() != localLink)
 		materializeDir := file.IsDir && !file.PreserveLink()
-		modeDifferent := !missing && !localLink && httpfileshare.PermissionsDiffer(file.Mode, info.Mode())
+		modeDifferent := !missing && !localLink && !file.PreserveLink() && httpfileshare.PermissionsDiffer(file.Mode, info.Mode())
 		finalizeDirectory := materializeDir && file.Mode != nil && (missing || (info.IsDir() && modeDifferent))
 		if file.IsDir && file.LinkTarget == "" && !finalizeDirectory {
 			continue
@@ -115,7 +115,10 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 		if file.PreserveLink() || file.IsDir || (compareContent && !sizeDifferent && !timeDifferent && !file.ModTime.IsZero()) {
 			transferSize = 0
 		}
-		item := Item{Path: file.Path, Size: transferSize, RemoteSize: &file.Size, LinkTarget: file.LinkTarget, PreserveLink: file.PreserveLink()}
+		item := Item{
+			Path: file.Path, Size: transferSize, RemoteSize: &file.Size,
+			LinkTarget: file.LinkTarget, PreserveLink: file.PreserveLink(), PermissionsDiffer: modeDifferent,
+		}
 		if !file.ModTime.IsZero() {
 			item.Modified = file.ModTime.Format(time.RFC3339Nano)
 			item.RemoteModified = item.Modified
