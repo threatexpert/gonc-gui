@@ -572,7 +572,9 @@ func (a *App) RemoteFiles(subPath string) (RemoteListResponse, error) {
 			resp.DirCount++
 		} else {
 			resp.FileCount++
-			resp.TotalSize += file.Size
+			if file.Size > 0 {
+				resp.TotalSize += file.Size
+			}
 		}
 	}
 	return resp, nil

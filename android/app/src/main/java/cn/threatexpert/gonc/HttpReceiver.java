@@ -22,6 +22,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
@@ -156,19 +157,21 @@ final class HttpReceiver {
     private static void run(Context context, String serverUrl, Uri saveTreeUri, List<RemoteFile> requestedFiles, boolean resume, int concurrency, Session session, Callback callback) {
         int workers = Math.max(1, Math.min(ReceiveWorkerPool.MAX_WORKERS, concurrency));
         try {
-            List<RemoteFile> files = requestedFiles == null ? dropRootDirectories(list(serverUrl, "", session).files) : new ArrayList<>(requestedFiles);
+            List<RemoteFile> files = requestedFiles == null ? dropRootDirectories(listMany(serverUrl, null, session).files) : new ArrayList<>(requestedFiles);
             List<RemoteFile> jobs = new ArrayList<>();
             Set<String> paths = new HashSet<>();
             TargetResolver targetResolver = new TargetResolver(context, saveTreeUri);
             for (RemoteFile file : files) {
                 checkStopped(session);
-                if (file.isDir) {
+                if (file.isDir && file.linkError == null) {
                     targetResolver.ensureDirectory(file.path);
                 } else if (paths.add(normalizePath(file.path))) {
                     // Repair can update metadata: keep it private to this download worker.
                     RemoteFile copy = new RemoteFile();
                     copy.path = file.path;
                     copy.name = file.name;
+                    copy.linkTarget = file.linkTarget;
+                    copy.linkError = file.linkError;
                     copy.size = file.size;
                     copy.modifiedMs = file.modifiedMs;
                     jobs.add(copy);
@@ -193,6 +196,8 @@ final class HttpReceiver {
                 long started = System.nanoTime();
                 try {
                     checkStopped(session);
+                    if (file.linkError != null) throw new IOException(file.linkError);
+                    if (!file.linkTarget.isEmpty() && file.size < 0) throw new IOException("Link target unavailable: " + file.path);
                     DownloadResult result = downloadOne(context, serverUrl, file, targetResolver, resume, session,
                             fileCallback, clock, 0, jobs.size(), 0, 0, Math.max(0, file.size));
                     if (!session.isStopped()) batch.finish(index, file, result.doneBytes, clock.networkBytes,
@@ -300,6 +305,38 @@ final class HttpReceiver {
                 }
             }
         }
+        // A document tree cannot store filesystem symlinks. Expand directory
+        // targets before selection so excluding a child remains effective.
+        List<RemoteFile> pending = new ArrayList<>(merged.values());
+        for (int depth = 0; !pending.isEmpty(); depth++) {
+            List<RemoteFile> next = new ArrayList<>();
+            for (RemoteFile dir : pending) {
+                if (!dir.isDir || dir.linkTarget.isEmpty()) continue;
+                checkStopped(session);
+                try {
+                    if (depth >= 64) throw new IOException("Directory link expansion too deep: " + dir.path);
+                    ListResult listing = list(serverUrl, dir.path, session);
+                    boolean hasRoot = false;
+                    for (RemoteFile child : listing.files) {
+                        if (dir.path.equals(child.path) && child.isDir && child.linkTarget.isEmpty() && !hasRoot) {
+                            hasRoot = true;
+                        } else if (!child.path.startsWith(dir.path + "/") || child.path.contains("/../")
+                                || child.path.endsWith("/..") || child.path.indexOf('\\') >= 0) {
+                            throw new IOException("Invalid directory link listing: " + dir.path);
+                        }
+                    }
+                    if (!hasRoot) throw new IOException("Directory link target unavailable: " + dir.path);
+                    for (RemoteFile child : listing.files) {
+                        if (merged.putIfAbsent(normalizePath(child.path), child) == null && child.isDir && !child.linkTarget.isEmpty()) next.add(child);
+                    }
+                } catch (Exception err) {
+                    checkStopped(session);
+                    dir.linkError = err.toString();
+                    dir.size = -1;
+                }
+            }
+            pending = next;
+        }
         return new ListResult(new ArrayList<>(merged.values()), requested > 0 && missing == requested);
     }
 
@@ -327,6 +364,7 @@ final class HttpReceiver {
                     RemoteFile file = new RemoteFile();
                     file.name = json.optString("name");
                     file.isDir = json.optBoolean("is_dir");
+                    file.linkTarget = json.optString("link_target");
                     file.size = json.optLong("size");
                     file.path = json.optString("path");
                     file.modifiedMs = parseModTime(json.optString("mod_time"));
@@ -1794,6 +1832,8 @@ final class HttpReceiver {
     }
 
     static final class RemoteFile {
+        String linkTarget = "";
+        String linkError;
         String name;
         boolean isDir;
         long size;

@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,8 @@ const Differences = "differences"
 const maxIndexBytes = 256 << 20 // conservative accounting; fail closed on oversized jobs
 
 type Item struct {
+	LinkTarget     string `json:"linkTarget,omitempty"`
+	PreserveLink   bool   `json:"preserveLink,omitempty"`
 	ID             int    `json:"id"`
 	Path           string `json:"path"`
 	Size           int64  `json:"size"`
@@ -40,33 +43,44 @@ type Item struct {
 	Error          string `json:"error"`
 }
 
+type ActiveReceive struct {
+	ID         int    `json:"id"`
+	Path       string `json:"path"`
+	Checking   bool   `json:"checking"`
+	DoneBytes  int64  `json:"doneBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+}
+
 type Snapshot struct {
-	ID                     string   `json:"id"`
-	Root                   string   `json:"root"`
-	Scope                  string   `json:"scope"`
-	Kind                   string   `json:"kind"`
-	Phase                  string   `json:"phase"`
-	Error                  string   `json:"error"`
-	Remote                 int      `json:"remote"`
-	Scanned                int      `json:"scanned"`
-	Candidates             int      `json:"candidates"`
-	Bytes                  int64    `json:"bytes"`
-	Unchecked              int      `json:"unchecked"`
-	Warnings               []string `json:"warnings"`
-	Matched                int      `json:"matched"`
-	Selected               int      `json:"selected"`
-	SelectedBytes          int64    `json:"selectedBytes"`
-	SelectedLocalOnly      int      `json:"selectedLocalOnly"`
-	SelectedLocalOnlyBytes int64    `json:"selectedLocalOnlyBytes"`
-	SelectedReceive        int      `json:"selectedReceive"`
-	SelectedReceiveBytes   int64    `json:"selectedReceiveBytes"`
-	Deleted                int      `json:"deleted"`
-	Received               int      `json:"received"`
-	Skipped                int      `json:"skipped"`
-	Failed                 int      `json:"failed"`
-	DeleteMode             string   `json:"deleteMode"`
-	Page                   int      `json:"page"`
-	Items                  []Item   `json:"items"`
+	BatchTotal             int             `json:"batchTotal"`
+	BatchFinished          int             `json:"batchFinished"`
+	ActiveReceives         []ActiveReceive `json:"activeReceives"`
+	ID                     string          `json:"id"`
+	Root                   string          `json:"root"`
+	Scope                  string          `json:"scope"`
+	Kind                   string          `json:"kind"`
+	Phase                  string          `json:"phase"`
+	Error                  string          `json:"error"`
+	Remote                 int             `json:"remote"`
+	Scanned                int             `json:"scanned"`
+	Candidates             int             `json:"candidates"`
+	Bytes                  int64           `json:"bytes"`
+	Unchecked              int             `json:"unchecked"`
+	Warnings               []string        `json:"warnings"`
+	Matched                int             `json:"matched"`
+	Selected               int             `json:"selected"`
+	SelectedBytes          int64           `json:"selectedBytes"`
+	SelectedLocalOnly      int             `json:"selectedLocalOnly"`
+	SelectedLocalOnlyBytes int64           `json:"selectedLocalOnlyBytes"`
+	SelectedReceive        int             `json:"selectedReceive"`
+	SelectedReceiveBytes   int64           `json:"selectedReceiveBytes"`
+	Deleted                int             `json:"deleted"`
+	Received               int             `json:"received"`
+	Skipped                int             `json:"skipped"`
+	Failed                 int             `json:"failed"`
+	DeleteMode             string          `json:"deleteMode"`
+	Page                   int             `json:"page"`
+	Items                  []Item          `json:"items"`
 }
 
 type entry struct {
@@ -75,17 +89,19 @@ type entry struct {
 	file httpdownload.FileInfo
 }
 type Job struct {
-	mu          sync.Mutex
-	state       Snapshot
-	entries     []entry
-	rootInfo    os.FileInfo
-	remote      map[string]bool // all paths, including directories and implicit ancestors
-	remoteFiles []httpdownload.FileInfo
-	indexBytes  int
-	query       string
-	matched     []int
-	queryValid  bool
-	cancel      context.CancelFunc
+	activeReceives map[string]*ActiveReceive
+	mu             sync.Mutex
+	state          Snapshot
+	entries        []entry
+	rootInfo       os.FileInfo
+	remote         map[string]bool // all paths, including directories and implicit ancestors
+	links          map[string]bool
+	remoteFiles    []httpdownload.FileInfo
+	indexBytes     int
+	query          string
+	matched        []int
+	queryValid     bool
+	cancel         context.CancelFunc
 }
 
 func New(id, root, scope, mode string, kinds ...string) (*Job, error) {
@@ -118,7 +134,7 @@ func New(id, root, scope, mode string, kinds ...string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Job{state: Snapshot{ID: id, Root: abs, Scope: scope, Kind: kind, Phase: "remote", DeleteMode: mode, Warnings: []string{}, Items: []Item{}}, rootInfo: info, remote: make(map[string]bool)}, nil
+	return &Job{state: Snapshot{ID: id, Root: abs, Scope: scope, Kind: kind, Phase: "remote", DeleteMode: mode, Warnings: []string{}, Items: []Item{}}, rootInfo: info, links: make(map[string]bool), remote: make(map[string]bool)}, nil
 }
 
 func cleanRemote(p string) (string, error) {
@@ -155,6 +171,9 @@ func key(p string) string {
 	return p
 }
 
+func (j *Job) Scope() string { return j.state.Scope }
+func (j *Job) Root() string  { return j.state.Root }
+
 func (j *Job) Cancel() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -182,7 +201,16 @@ func (j *Job) Scan(ctx context.Context, list func(context.Context, func(httpdown
 		if scope != "/" && key(p) != scope && !strings.HasPrefix(key(p), scope+"/") {
 			return ctx.Err()
 		}
-		if j.state.Kind != LocalOnly && !file.IsDir {
+		if file.LinkTarget != "" {
+			j.links[key(p)] = file.PreserveLink() || file.Unavailable()
+		}
+		if file.Unavailable() {
+			j.state.Unchecked++
+			if len(j.state.Warnings) < 20 {
+				j.state.Warnings = append(j.state.Warnings, p+": link target unavailable")
+			}
+		}
+		if j.state.Kind != LocalOnly && !file.Unavailable() && (!file.IsDir || file.LinkTarget != "") {
 			if file.Size < 0 {
 				return errors.New("remote file size is missing or invalid")
 			}
@@ -227,6 +255,7 @@ func (j *Job) Scan(ctx context.Context, list func(context.Context, func(httpdown
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.links = nil
 	j.remote = nil // release the large index before the review/delete phase
 	j.remoteFiles = nil
 	j.cancel = nil
@@ -280,6 +309,9 @@ func (j *Job) walk(ctx context.Context, remoteDir string) error {
 			p := path.Join(remoteDir, de.Name())
 			if _, err := cleanRemote(p); err != nil {
 				j.warn(p, err)
+				continue
+			}
+			if opaque, linked := j.links[key(p)]; opaque || linked && de.Type()&os.ModeSymlink != 0 {
 				continue
 			}
 			if de.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
@@ -385,6 +417,11 @@ func (j *Job) Page(query string, page int) Snapshot {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	s := j.state
+	s.ActiveReceives = make([]ActiveReceive, 0, len(j.activeReceives))
+	for _, active := range j.activeReceives {
+		s.ActiveReceives = append(s.ActiveReceives, *active)
+	}
+	sort.Slice(s.ActiveReceives, func(i, k int) bool { return s.ActiveReceives[i].ID < s.ActiveReceives[k].ID })
 	s.Warnings = append([]string{}, j.state.Warnings...)
 	s.Items = []Item{}
 	if s.Phase == "remote" || s.Phase == "local" {

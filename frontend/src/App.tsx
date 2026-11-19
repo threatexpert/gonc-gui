@@ -144,6 +144,7 @@ type DownloadWarning = {
 };
 
 type RemoteFile = {
+  link_target?: string;
   name: string;
   is_dir: boolean;
   mod_time: string;
@@ -2378,6 +2379,10 @@ function App() {
   }
 
   function browseRemotePath(path: string) {
+    if (remoteFiles.some(file => file.path === path && file.is_dir && file.link_target)) {
+      void loadRemoteFiles(path);
+      return;
+    }
     setError('');
     setDownloadError('');
     setCurrentRemotePath(normalizeRemotePath(path));
@@ -3403,10 +3408,11 @@ function App() {
                       ) : (
                         <strong className={local ? 'local-filename' : ''} title={file.name}>{file.name}</strong>
                       )}
+                      {file.link_target && <small title={file.link_target}>{file.size < 0 ? (lang === 'zh' ? '链接目标不可用' : 'Link target unavailable') : (lang === 'zh' ? '链接' : 'Link')}</small>}
                       {local && <span className="local-tag"><Icon name="check" />{t.localAvailable}</span>}
                     </span>
-                    <em>{formatModTime(file.mod_time)}</em>
-                    <em>{file.is_dir ? '' : formatBytes(file.size)}</em>
+                    <em>{file.link_target && file.size < 0 ? '—' : formatModTime(file.mod_time)}</em>
+                    <em>{file.is_dir || file.size < 0 ? '' : formatBytes(file.size)}</em>
                     <span className="remote-row-action">
                       {local && (
                         <button className="reveal-received-file" aria-label={revealFileLabel} title={revealFileLabel} disabled={receivedActionsUnavailable} onClick={() => revealReceivedFile(file)}>
@@ -4360,9 +4366,11 @@ function mergeRemoteList(current: RemoteList | null, fresh: RemoteList, refreshP
   }
   const target = normalizeRemotePath(refreshPath);
   const byPath = new Map<string, RemoteFile>();
+  let directoryLink: string | undefined;
   for (const item of remoteListFiles(current)) {
     const file = normalizeRemoteFile(item);
     const path = normalizeRemotePath(file.path);
+    if (path === target && file.is_dir) directoryLink = file.link_target;
     if (path === target || path.startsWith(`${target}/`)) {
       continue;
     }
@@ -4371,7 +4379,7 @@ function mergeRemoteList(current: RemoteList | null, fresh: RemoteList, refreshP
   for (const item of freshFiles) {
     const file = normalizeRemoteFile(item);
     const path = normalizeRemotePath(file.path);
-    byPath.set(path, {...file, path});
+    byPath.set(path, {...file, path, link_target: file.link_target || (path === target ? directoryLink : undefined)});
   }
   return recalculateRemoteList(fresh?.serverUrl || current.serverUrl, Array.from(byPath.values()));
 }
@@ -4386,7 +4394,7 @@ function recalculateRemoteList(serverUrl: string, files: RemoteFile[]): RemoteLi
       dirCount += 1;
     } else {
       fileCount += 1;
-      totalSize += file.size || 0;
+      totalSize += Math.max(file.size || 0, 0);
     }
   }
   return {serverUrl, files: normalizedFiles, fileCount, dirCount, totalSize};
@@ -4403,6 +4411,7 @@ function normalizeRemoteFile(file: RemoteFile): RemoteFile {
   return {
     name: String(item.name ?? item.Name ?? remoteBaseName(path)),
     is_dir: Boolean(item.is_dir ?? item.IsDir),
+    link_target: item.link_target ?? item.LinkTarget,
     mod_time: item.mod_time ?? item.ModTime ?? '',
     size: Number(item.size ?? item.Size ?? 0),
     path,

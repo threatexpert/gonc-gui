@@ -302,4 +302,6 @@
     <string name="vpn_protection_confirm_local">Advanced arguments contain -local. That explicit binding is preserved and may prevent reconnection after an IP change or a Wi-Fi/mobile network switch. Remove it to let Android select the network automatically.</string>
     <string name="vpn_protection_waiting">Traffic blocked; reconnecting</string>
     <string name="vpn_cleanup_failed">VPN cleanup failed; tap Disconnect to retry</string>
+    <string name="symbolic_link">Symbolic link</string>
+    <string name="link_target_unavailable">Link target unavailable</string>
 </resources>

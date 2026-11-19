@@ -2,17 +2,35 @@ import {useEffect, useRef, useState} from 'react';
 import {CancelReceivedComparison, DeleteReceivedComparison, ReceiveReceivedComparison, ReceivedComparisonPage, SelectReceivedComparison, StartReceivedComparison} from '../wailsjs/go/main/App';
 import {ProfileDeleteDialog} from './ProfileDeleteDialog';
 import './ReceiveComparison.css';
-import {comparisonTime} from './receiveComparisonFormat';
+import {comparisonTimes} from './receiveComparisonFormat';
 
 type Purpose = 'localOnly' | 'localMissing' | 'differences';
-type Item = {id: number; path: string; size: number; localSize?: number | null; remoteSize?: number | null; modified: string; localModified: string; remoteModified: string; selected: boolean; outcome: string; error: string};
-type Snapshot = {id: string; root: string; scope: string; kind: string; phase: string; error: string; remote: number; scanned: number; candidates: number; bytes: number; unchecked: number; warnings: string[]; matched: number; selected: number; selectedBytes: number; selectedLocalOnly: number; selectedLocalOnlyBytes: number; selectedReceive: number; selectedReceiveBytes: number; deleted: number; received: number; skipped: number; failed: number; deleteMode: string; page: number; items: Item[]};
+type Snapshot = Omit<Awaited<ReturnType<typeof ReceivedComparisonPage>>, 'convertValues'>;
+type Item = Snapshot['items'][number];
+type ActiveReceive = Snapshot['activeReceives'][number];
 type Props = {saveDir: string; lang: 'zh' | 'en'; onClose: () => void; onChanged: () => void};
 
 function bytes(n: number) {
   if (n < 1024) return `${n} B`;
   const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 4);
   return `${(n / 1024 ** i).toFixed(1)} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
+}
+
+function ComparisonValue({local, remote, equal, different, zh}: {
+  local?: string; remote?: string; equal: boolean; different: boolean; zh: boolean;
+}) {
+  if (equal) return <span className="compare-equal" title={zh ? '本地与对方相同' : 'Local and sender match'}>✓ {local}</span>;
+  return <>
+    {local != null && <div className={different ? 'compare-different' : undefined}><span className="compare-side">{zh ? '本地' : 'Local'}</span>{local}</div>}
+    {remote != null && <div><span className="compare-side">{zh ? '对方' : 'Sender'}</span>{remote}</div>}
+  </>;
+}
+
+function transferStatus(file: ActiveReceive, zh: boolean) {
+  if (file.checking) return zh ? '复核中' : 'Checking';
+  const label = zh ? '接收中' : 'Receiving';
+  if (file.totalBytes <= 0) return label;
+  return `${label} ${Math.min(100, Math.floor(file.doneBytes * 100 / file.totalBytes))}%`;
 }
 
 export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
@@ -35,6 +53,7 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
       'wait for the current download or comparison task': '请等待当前下载或比对任务结束。',
       'comparison path must stay within the save directory': '比对范围必须是接收目录中的相对目录。',
     };
+    if (message.endsWith(': link target unavailable')) return message.slice(0, -'link target unavailable'.length) + '链接目标不可用';
     return translations[message] || message;
   }
   const [id, setId] = useState('');
@@ -154,16 +173,9 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
   const purposes: Record<Purpose, string> = zh
     ? {localOnly: '本地多出', localMissing: '本地缺少', differences: '有差异'}
     : {localOnly: 'Extra on local', localMissing: 'Missing on local', differences: 'Differences'};
-  const hints: Record<Purpose, string> = zh ? {
-    localOnly: '找出对方当前列表中没有的本地文件，按需清理。也可能包含你自行添加的文件。',
-    localMissing: '找出对方有、本地没有的文件，勾选后接收。',
-    differences: '找出本地多出、缺少，以及大小或修改时间不同的文件。修改时间按获取到的完整精度比较，包含秒以下差异。不比较文件内容；大小和时间相同的文件，内容仍可能不同。',
-  } : {
-    localOnly: 'Find local files absent from the sender list for optional cleanup. This can include files you added yourself.',
-    localMissing: 'Find files the sender has that are missing locally, then select files to receive.',
-    differences: 'Find extra, missing, or changed files by existence, size and modification time, using all available timestamp precision including subsecond differences. File contents are not compared. Files with the same size and time may still have different contents.',
-  };
-
+  const hints: Record<Purpose, string> = zh
+    ? {localOnly: '仅本地存在，可勾选清理。', localMissing: '仅对方存在，可勾选接收。', differences: '对比文件有无、大小、修改时间和链接目标。'}
+    : {localOnly: 'Find local files you can remove.', localMissing: 'Find missing files to receive.', differences: 'Compare presence, size, modification time and link targets.'};
   const phase = data?.phase ?? '';
   const phaseText: Record<string, string> = zh
     ? {remote: '正在读取对方列表…', local: '正在筛查本地文件…', ready: '筛查完成', done: '处理结束', error: '筛查未完成，无法操作', cancelled: '筛查已取消', deleting: '正在复核并删除…', receiving: '正在接收所选文件…'}
@@ -176,13 +188,14 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
   const actionCount = deleting ? data?.selectedLocalOnly ?? 0 : data?.selectedReceive ?? 0;
   const actionBytes = deleting ? data?.selectedLocalOnlyBytes ?? 0 : data?.selectedReceiveBytes ?? 0;
   const canDelete = purpose === 'localOnly' || purpose === 'differences';
-  const fileSize = (size: number | null | undefined) => size == null ? (zh ? '无' : 'Absent') : <>{bytes(size)}{size >= 1024 && <small>{size.toLocaleString()} B</small>}</>;
-  const fileTime = (size: number | null | undefined, modified: string) => size == null ? (zh ? '无' : 'Absent') : modified ? comparisonTime(modified, lang) : (zh ? '未知' : 'Unknown');
+  const transfers = data?.activeReceives ?? [];
+  const hasList = ready || phase === 'deleting' || phase === 'receiving';
+  const unknown = zh ? '未知' : 'Unknown';
   const selectable = (item: Item) => !['deleted', 'received', 'skipped'].includes(item.outcome);
 
   return <>
     <div className="qr-backdrop receive-compare-backdrop">
-      <section ref={panel} className="receive-compare" role="dialog" aria-modal="true" aria-labelledby="receive-compare-title" tabIndex={-1} onKeyDown={event => {
+      <section ref={panel} className={`receive-compare${hasList ? ' has-list' : ''}`} role="dialog" aria-modal="true" aria-labelledby="receive-compare-title" tabIndex={-1} onKeyDown={event => {
         if (confirm) return;
         if (event.key === 'Escape' && !busy) {event.preventDefault(); onClose();}
         if (event.key === 'Tab') {
@@ -194,57 +207,77 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
       }}>
         <header className="receive-compare-head">
           <h2 id="receive-compare-title">{zh ? '比对目录' : 'Compare folder'}</h2>
+          <span className="receive-compare-root" title={saveDir}>{saveDir}</span>
           <button type="button" disabled={busy} onClick={onClose}>{zh ? '关闭' : 'Close'}</button>
         </header>
-        <div className="receive-compare-root" title={saveDir}>{zh ? '接收目录：' : 'Receive folder: '}{saveDir}</div>
         <div className="receive-compare-controls">
-          <label>{zh ? '比对范围' : 'Subfolder'}<input value={scope} disabled={busy} onChange={event => setScope(event.target.value)} placeholder="/" aria-label={zh ? '相对目录，/ 表示整个接收目录' : 'Relative folder; / means the whole receive folder'} /></label>
+          <label>{zh ? '比对范围' : 'Subfolder'}<input value={scope} disabled={busy} onChange={event => setScope(event.target.value)} placeholder="/" title={zh ? '/ 表示整个接收目录' : '/ covers the entire receive folder'} /></label>
+          <div className="receive-compare-purposes" role="group" aria-label={zh ? '开始比对' : 'Start comparison'}>
+            {(Object.keys(purposes) as Purpose[]).map(value => <button key={value} type="button" title={hints[value]} aria-pressed={purpose === value} disabled={busy || !saveDir} onClick={() => start(value)}>{purposes[value]}</button>)}
+          </div>
         </div>
-        <div className="receive-compare-purposes" role="group" aria-label={zh ? '筛查内容' : 'What to find'}>
-          {(Object.keys(purposes) as Purpose[]).map(value => <button key={value} type="button" aria-pressed={purpose === value} disabled={busy || !saveDir} onClick={() => start(value)}>{purposes[value]}</button>)}
-        </div>
-        <p className="receive-compare-hint">{purpose ? hints[purpose] : (zh ? '点击上方任一按钮，立即开始对应筛查。' : 'Click any option above to start that search.')}</p>
-        <div className="receive-compare-summary" role="status" aria-live="polite">
-          <strong>{pending && !id ? (zh ? '正在启动…' : 'Starting…') : phaseText[phase]}</strong>
-          {data && <span>{zh ? '已检查' : 'Checked'} {data.scanned.toLocaleString()} · {zh ? '找到' : 'Found'} {data.candidates.toLocaleString()} ({bytes(data.bytes)})</span>}
-          {data?.scope && <span>{zh ? '本次范围：' : 'Compared scope: '}{data.scope}</span>}
+        <div className="receive-compare-summary" role="status">
+          {pending && !id || phase ? <strong>{pending && !id ? (zh ? '正在启动…' : 'Starting…') : phaseText[phase]}</strong> : <span>{zh ? '选择要查找的差异即可开始。/ 表示整个接收目录。' : 'Choose a comparison to start. / covers the entire receive folder.'}</span>}
+          {data && (phase === 'receiving'
+            ? <><progress value={data.batchFinished} max={data.batchTotal || 1} aria-label={zh ? '批次进度' : 'Batch progress'} /><span>{zh ? '已处理' : 'Processed'} {data.batchFinished} / {data.batchTotal}</span></>
+            : <span>{zh ? '已检查' : 'Checked'} {data.scanned.toLocaleString()} · {zh ? '找到' : 'Found'} {data.candidates.toLocaleString()} ({bytes(data.bytes)})</span>)}
+          {data && data.scope !== scope && <span>{zh ? '本次范围' : 'Compared scope'} {data.scope || '/'}</span>}
+          {phase === 'done' && data && <span>{zh ? `已接收 ${data.received} · 已删除 ${data.deleted} · 已跳过 ${data.skipped} · 失败 ${data.failed}` : `Received ${data.received} · Deleted ${data.deleted} · Skipped ${data.skipped} · Failed ${data.failed}`}</span>}
           {active && <button type="button" disabled={pending} onClick={async () => {
             setPending(true);
             try {await CancelReceivedComparison(id, false);} catch (err) {setError(String(err));}
             finally {setPending(false); setRevision(value => value + 1);}
           }}>{zh ? '取消任务' : 'Cancel task'}</button>}
         </div>
+        {phase === 'receiving' && transfers.length > 0 && <ul className="receive-compare-transfers" aria-label={zh ? '正在处理的文件' : 'Active files'}>
+          {transfers.map(file => <li key={file.id}><span title={file.path}>{file.path}</span><strong>{transferStatus(file, zh)}</strong></li>)}
+        </ul>}
         {(error || data?.error) && <div className="remote-error" role="alert">{explain(error || data?.error || '')}</div>}
-        {!!data?.unchecked && <details className="receive-compare-warning"><summary>{zh ? `有 ${data.unchecked} 项未完整检查（链接、权限、类型冲突或时间缺失），结果可能不完整` : `${data.unchecked} entries not fully checked (links, permissions, type conflicts or missing timestamps); results may be incomplete`}</summary>{data.warnings.map((warning, index) => <div key={index}>{warning.replace('sender modification time unavailable; time comparison skipped', zh ? '对方未提供修改时间，已跳过时间比较' : 'sender modification time unavailable; time comparison skipped')}</div>)}</details>}
-        {data && (ready || phase === 'deleting' || phase === 'receiving') && <>
+        {!!data?.unchecked && <details className="receive-compare-warning"><summary>{zh ? `有 ${data.unchecked} 项未完整检查（链接、权限、类型冲突或时间缺失），结果可能不完整` : `${data.unchecked} entries not fully checked (links, permissions, type conflicts or missing timestamps); results may be incomplete`}</summary>{data.warnings.map((warning, index) => <div key={index}>{explain(warning.replace('sender modification time unavailable; time comparison skipped', zh ? '对方未提供修改时间，已跳过时间比较' : 'sender modification time unavailable; time comparison skipped'))}</div>)}</details>}
+        {data && hasList && <>
           <div className="receive-compare-controls">
-            <input className="receive-compare-search" value={input} disabled={busy} onChange={event => setInput(event.target.value)} placeholder={zh ? '按相对路径筛选，例如 old/ 或 .zip' : 'Filter path, e.g. old/ or .zip'} aria-label={zh ? '筛选相对路径' : 'Filter relative path'} />
-            <button type="button" disabled={locked || !data.matched} onClick={() => select([], true, true)}>{zh ? '选择全部筛选结果' : 'Select all matches'}</button>
+            <input className="receive-compare-search" value={input} disabled={busy} onChange={event => setInput(event.target.value)} placeholder={zh ? '筛选相对路径' : 'Filter paths'} aria-label={zh ? '筛选相对路径' : 'Filter relative path'} />
+            <button type="button" disabled={locked || !data.matched} onClick={() => select([], true, true)}>{zh ? '全选匹配项' : 'Select all matches'}</button>
             <button type="button" disabled={locked || !data.selected} onClick={() => select([], true, false, '')}>{zh ? '清空选择' : 'Clear selection'}</button>
+            <div className="receive-compare-pagination">
+              <span>{zh ? '筛选结果' : 'Matches'} {data.matched.toLocaleString()} · {data.page + 1} / {Math.max(1, Math.ceil(data.matched / 200))}</span>
+              <button type="button" disabled={locked || data.page === 0} onClick={() => setPage(data.page - 1)}>{zh ? '上一页' : 'Previous'}</button>
+              <button type="button" disabled={locked || (data.page + 1) * 200 >= data.matched} onClick={() => setPage(data.page + 1)}>{zh ? '下一页' : 'Next'}</button>
+            </div>
           </div>
           <div className="receive-compare-table-wrap">
             <table className="receive-compare-table"><thead><tr>
               <th><input type="checkbox" aria-label={zh ? '选择当前页' : 'Select this page'} disabled={locked || !data.items.some(selectable)} checked={data.items.some(selectable) && data.items.filter(selectable).every(item => item.selected)} onChange={event => select(data.items.map(item => item.id), false, event.target.checked)} /></th>
               <th>{zh ? '相对路径' : 'Relative path'}</th>
-              {purpose !== 'localMissing' && <th className="receive-compare-size-col">{zh ? '本地大小' : 'Local size'}</th>}
-              {purpose !== 'localOnly' && <th className="receive-compare-size-col">{zh ? '对方大小' : 'Sender size'}</th>}
-              <th className="receive-compare-detail-col">{zh ? '修改时间 / 结果' : 'Modified / result'}</th>
-            </tr></thead><tbody>{data.items.map(item => <tr key={item.id}>
-              <td><input type="checkbox" checked={item.selected} disabled={locked || !selectable(item)} aria-label={item.path} onChange={event => select([item.id], false, event.target.checked)} /></td>
-              <td title={item.path}>{item.path.replace(/^\//, '')}</td>
-              {purpose !== 'localMissing' && <td>{fileSize(item.localSize)}</td>}
-              {purpose !== 'localOnly' && <td>{fileSize(item.remoteSize)}</td>}
-              <td>{purpose !== 'localMissing' && <div>{zh ? '本地：' : 'Local: '}{fileTime(item.localSize, item.localModified)}</div>}{purpose !== 'localOnly' && <div>{zh ? '对方：' : 'Sender: '}{fileTime(item.remoteSize, item.remoteModified)}</div>}{item.outcome && <><strong>{outcomes[item.outcome]}</strong>{item.error && <small>{explain(item.error)}</small>}</>}</td>
-            </tr>)}</tbody></table>
+              <th className="receive-compare-size-col">{zh ? '大小' : 'Size'}</th>
+              <th className="receive-compare-time-col">{zh ? '修改时间' : 'Modified'}</th>
+              <th className="receive-compare-status-col">{zh ? '操作状态' : 'Action status'}</th>
+            </tr></thead><tbody>{data.items.map(item => {
+              const {localSize, remoteSize} = item;
+              const both = localSize != null && remoteSize != null;
+              const times = comparisonTimes(item.localModified, item.remoteModified, lang);
+              let localSizeText = localSize == null ? undefined : bytes(localSize);
+              const remoteSizeText = remoteSize == null ? undefined : bytes(remoteSize);
+              if (both && localSize !== remoteSize && localSizeText === remoteSizeText) {
+                localSizeText += ` (${localSize > remoteSize ? '+' : '−'}${bytes(Math.abs(localSize - remoteSize))})`;
+              }
+              const transfer = transfers.find(file => file.id === item.id);
+              const queued = phase === 'receiving' && item.selected && remoteSize != null;
+              return <tr key={item.id}>
+                <td><input type="checkbox" checked={item.selected} disabled={locked || !selectable(item)} aria-label={item.path} onChange={event => select([item.id], false, event.target.checked)} /></td>
+                <td title={item.path}>{item.path.replace(/^\//, '')}{item.linkTarget && <small title={item.linkTarget}>{item.preserveLink ? (zh ? '接收为链接' : 'Receive as link') : (zh ? '接收目标内容' : 'Receive target contents')} → {item.linkTarget}</small>}</td>
+                <td><ComparisonValue local={localSizeText} remote={remoteSizeText} equal={both && localSize === remoteSize} different={both && localSize !== remoteSize} zh={zh} /></td>
+                <td><ComparisonValue local={localSize == null ? undefined : times.local || unknown} remote={remoteSize == null ? undefined : times.remote || unknown} equal={both && times.equal} different={both && !!times.local && !!times.remote && !times.equal} zh={zh} /></td>
+                <td>{transfer ? <span className="compare-active">{transferStatus(transfer, zh)}{!transfer.checking && transfer.totalBytes > 0 && <small>{bytes(transfer.doneBytes)} / {bytes(transfer.totalBytes)}</small>}</span>
+                  : queued ? (zh ? '等待接收' : 'Queued')
+                  : item.outcome ? <span className={`compare-${item.outcome}`}>{outcomes[item.outcome]}{item.error && <small>{explain(item.error)}</small>}</span>
+                  : <span className="compare-idle">{zh ? '未操作' : 'No action'}</span>}</td>
+              </tr>;
+            })}</tbody></table>
             {!data.items.length && <p className="receive-compare-empty">{zh ? '没有符合条件的文件。' : 'No matching files.'}</p>}
           </div>
-          <div className="receive-compare-pagination">
-            <span>{zh ? '筛选结果' : 'Matches'} {data.matched.toLocaleString()} · {data.page + 1} / {Math.max(1, Math.ceil(data.matched / 200))}</span>
-            <button type="button" disabled={locked || data.page === 0} onClick={() => setPage(data.page - 1)}>{zh ? '上一页' : 'Previous'}</button>
-            <button type="button" disabled={locked || (data.page + 1) * 200 >= data.matched} onClick={() => setPage(data.page + 1)}>{zh ? '下一页' : 'Next'}</button>
-          </div>
           <footer className="receive-compare-footer">
-            <span>{zh ? '已选' : 'Selected'} {data.selected.toLocaleString()} · {bytes(data.selectedBytes)}</span>
+            <span title={zh ? '跨页和筛选保留选择' : 'Selections persist across pages and filters'}>{zh ? '已选' : 'Selected'} {data.selected.toLocaleString()} · {bytes(data.selectedBytes)}</span>
             {canDelete && <select aria-label={zh ? '删除方式' : 'Deletion method'} value={mode} disabled={locked} onChange={event => setMode(event.target.value)}>
               {data.deleteMode === 'trash' && <option value="trash">{zh ? '移入系统回收站（推荐）' : 'System Trash (recommended)'}</option>}
               <option value="permanent">{zh ? '永久删除（不可恢复）' : 'Permanent deletion (cannot undo)'}</option>
@@ -252,10 +285,6 @@ export function ReceiveComparison({saveDir, lang, onClose, onChanged}: Props) {
             {canDelete && <button ref={deleteButton} type="button" className="danger" disabled={locked || !data.selectedLocalOnly} onClick={() => setConfirm('delete')}>{deleteAction}{purpose === 'differences' && ` (${data.selectedLocalOnly})`}</button>}
             {purpose !== 'localOnly' && <button ref={receiveButton} type="button" className="primary" disabled={locked || !data.selectedReceive} onClick={() => setConfirm('receive')}>{receiveAction}{purpose === 'differences' && ` (${data.selectedReceive})`}</button>}
           </footer>
-          <p className="receive-compare-hint">{zh ? '选择跨页保留；修改筛选不会清空已选项。' : 'Selections persist across pages and filter changes.'}</p>
-          {purpose === 'differences' && <p className="receive-compare-hint">{zh ? '删除仅处理已选的本地多出文件；接收 / 修复仅处理已选的本地缺少、大小或时间不同的文件。修复会以对方为准，可能覆盖本地修改。' : 'Delete only handles selected extra local files. Receive / repair only handles selected missing files or files with different sizes or times. Repair uses the sender version and may overwrite local edits.'}</p>}
-          {canDelete && mode === 'permanent' && <p className="receive-compare-warning">{data.deleteMode !== 'trash' ? (zh ? '当前系统未提供可用的回收站接口。' : 'A system Trash interface is unavailable. ') : ''}{zh ? '当前选择永久删除，不经过回收站。' : 'Permanent deletion is selected; files will not go to Trash.'}</p>}
-          {(phase === 'receiving' || data.deleted + data.received + data.skipped + data.failed > 0) && <p role="status">{zh ? `已删除 ${data.deleted} · 已接收 ${data.received} · 已跳过 ${data.skipped} · 失败 ${data.failed}。失败项可重新勾选重试。` : `Deleted ${data.deleted} · Received ${data.received} · Skipped ${data.skipped} · Failed ${data.failed}. Failed entries can be selected for retry.`}</p>}
         </>}
       </section>
     </div>

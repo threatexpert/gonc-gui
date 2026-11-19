@@ -193,3 +193,31 @@ func TestReceiveSkipsLinksAndCancellation(t *testing.T) {
 		t.Fatalf("cancel: %+v", s)
 	}
 }
+
+func TestReceiveProgressVisibleOutsideCurrentFilter(t *testing.T) {
+	file := httpdownload.FileInfo{Path: "/large.bin", Size: 10}
+	j := scanPurpose(t, t.TempDir(), "/", LocalMissing, file)
+	j.Select("", nil, true, true)
+	ctx, err := j.BeginReceive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Receive(ctx, func(_ context.Context, file httpdownload.FileInfo) (httpdownload.FileInfo, error) {
+		s := j.Page("other", 0)
+		if len(s.Items) != 0 || s.BatchTotal != 1 || s.BatchFinished != 0 || len(s.ActiveReceives) != 1 || !s.ActiveReceives[0].Checking {
+			t.Errorf("checking file: %+v", s)
+		}
+		return file, nil
+	}, func(_ context.Context, _ string, file httpdownload.FileInfo) error {
+		j.RecordReceiveProgress(file.Path, httpdownload.Event{Type: "progress", DoneBytes: 4, TotalBytes: 10})
+		s := j.Page("other", 0)
+		want := ActiveReceive{ID: 0, Path: file.Path, DoneBytes: 4, TotalBytes: 10}
+		if len(s.ActiveReceives) != 1 || s.ActiveReceives[0] != want {
+			t.Errorf("transfer: %+v", s)
+		}
+		return nil
+	})
+	if s := j.Page("", 0); s.BatchFinished != 1 || len(s.ActiveReceives) != 0 || s.Items[0].Outcome != "received" {
+		t.Fatalf("completed: %+v", s)
+	}
+}

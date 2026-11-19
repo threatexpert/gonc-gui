@@ -46,7 +46,7 @@ func (a *App) StartReceivedComparison(saveDir, scope, kind string) (string, erro
 		defer a.finishComparison(done, cancel)
 		// A long tree scan must not inherit RemoteFiles' 30-second UI timeout.
 		job.Scan(ctx, func(ctx context.Context, visit func(httpdownload.FileInfo) error) error {
-			return httpdownload.ListForComparison(ctx, serverURL, visit)
+			return httpdownload.ListComparisonScope(ctx, serverURL, job.Scope(), job.Root(), visit)
 		})
 	}()
 	return id, nil
@@ -183,7 +183,7 @@ func (a *App) ReceiveReceivedComparison(id string) error {
 			if err != nil {
 				return err
 			}
-			return downloader.Start(ctx, nil)
+			return downloader.Start(ctx, func(event httpdownload.Event) { job.RecordReceiveProgress(file.Path, event) })
 		})
 	}()
 	return nil

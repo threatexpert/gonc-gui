@@ -550,6 +550,7 @@ final class ReceiveController {
         name.setSingleLine(true);
         labels.addView(name);
         String detail = file.isDir ? string(R.string.folder) : formatBytes(file.size);
+        if (!file.linkTarget.isEmpty()) detail = file.size < 0 ? string(R.string.link_target_unavailable) : detail + " · " + string(R.string.symbolic_link);
         if (!file.isDir && file.modifiedMs > 0) {
             detail = detail + "  ·  " + formatTimestamp(file.modifiedMs);
         }

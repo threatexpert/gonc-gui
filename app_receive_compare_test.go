@@ -211,3 +211,67 @@ func TestComparisonReceivesOnlySelectedFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestComparisonReportsLiveHTTPReceive(t *testing.T) {
+	const chunk = 16 * 1024
+	const size = 32 * chunk
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			json.NewEncoder(w).Encode(httpdownload.FileInfo{Path: "/live.bin", Size: size})
+			return
+		}
+		if r.URL.Query().Get("manifest") != "" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprint(size))
+		if r.Method == http.MethodHead {
+			return
+		}
+		block := make([]byte, chunk)
+		for i := 0; i < size/chunk; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			if _, err := w.Write(block); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer s.Close()
+	root := t.TempDir()
+	a := &App{ctx: context.Background(), receiveLocalHTTPURL: s.URL}
+	id, err := a.StartReceivedComparison(root, "/", "localMissing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.stopReceivedComparison()
+	waitCompare(t, a, id)
+	if err = a.SelectReceivedComparison(id, "", nil, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.ReceiveReceivedComparison(id); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(6 * time.Second); time.Now().Before(deadline); {
+		snapshot, err := a.ReceivedComparisonPage(id, "not-on-page", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.ActiveReceives) == 1 {
+			f := snapshot.ActiveReceives[0]
+			if !f.Checking && f.Path == "/live.bin" && f.TotalBytes == size && f.DoneBytes > 0 && f.DoneBytes < size {
+				return
+			}
+		}
+		if snapshot.Phase == "done" {
+			t.Fatalf("download ended without observable partial progress: %+v", snapshot)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("no live HTTP progress")
+}

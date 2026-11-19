@@ -1036,6 +1036,8 @@ type dynamicFileSource struct {
 	source *httpfileshare.OSFileSource
 }
 
+var _ httpfileshare.LinkFileSource = (*dynamicFileSource)(nil)
+
 func newDynamicFileSource(paths []string) (*dynamicFileSource, error) {
 	source := &dynamicFileSource{}
 	if err := source.UpdatePaths(paths); err != nil {
@@ -1081,6 +1083,30 @@ func (s *dynamicFileSource) Stat(name string) (fs.FileInfo, error) {
 		return nil, os.ErrNotExist
 	}
 	return source.Stat(name)
+}
+
+func (s *dynamicFileSource) Lstat(name string) (fs.FileInfo, error) {
+	source := s.snapshot()
+	if source == nil {
+		return nil, os.ErrNotExist
+	}
+	return source.Lstat(name)
+}
+
+func (s *dynamicFileSource) Readlink(name string) (string, error) {
+	source := s.snapshot()
+	if source == nil {
+		return "", os.ErrNotExist
+	}
+	return source.Readlink(name)
+}
+
+func (s *dynamicFileSource) ValidateDirectory(name string) error {
+	source := s.snapshot()
+	if source == nil {
+		return os.ErrNotExist
+	}
+	return source.ValidateDirectory(name)
 }
 
 func (s *dynamicFileSource) Open(name string) (fs.File, error) {

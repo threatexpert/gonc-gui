@@ -295,4 +295,6 @@
     <string name="vpn_protection_confirm_local">高级参数包含 -local，将保留该固定出口绑定。IP 变化或 Wi-Fi／移动网络切换后可能无法重连。移除该参数可让安卓自动选择出口。</string>
     <string name="vpn_protection_waiting">网络已阻断，正在重连</string>
     <string name="vpn_cleanup_failed">VPN 清理失败，请点击断开重试</string>
+    <string name="symbolic_link">符号链接</string>
+    <string name="link_target_unavailable">链接目标不可用</string>
 </resources>

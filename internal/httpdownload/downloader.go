@@ -2,6 +2,7 @@ package httpdownload
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/hex"
@@ -21,15 +22,18 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/threatexpert/gonc/v2/httpfileshare"
 	"github.com/zeebo/blake3"
 )
 
 type FileInfo struct {
-	Name    string    `json:"name"`
-	IsDir   bool      `json:"is_dir"`
-	ModTime time.Time `json:"mod_time"`
-	Size    int64     `json:"size"`
-	Path    string    `json:"path"`
+	LinkTarget string `json:"link_target,omitempty"`
+	action     httpfileshare.ReceiveAction
+	Name       string    `json:"name"`
+	IsDir      bool      `json:"is_dir"`
+	ModTime    time.Time `json:"mod_time"`
+	Size       int64     `json:"size"`
+	Path       string    `json:"path"`
 }
 
 type Config struct {
@@ -103,6 +107,7 @@ func (e httpStatusError) Error() string {
 }
 
 var (
+	errLocalWrite          = errors.New("cannot update local file")
 	errManifestUnsupported = errors.New("BLAKE3 manifest unsupported")
 	errRangeUnsupported    = errors.New("range repair unsupported")
 	errUnsupportedEncoding = errors.New("unsupported content encoding")
@@ -212,6 +217,14 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 			return err
 		}
 	}
+	if err := os.MkdirAll(d.root, 0755); err != nil {
+		return err
+	}
+	var err error
+	files, err = planLinks(ctx, d.root, files, normalizePathSet(d.cfg.IncludePaths), func(ctx context.Context, name string) ([]FileInfo, error) { return List(ctx, d.cfg.ServerURL, name) }, func(p string, err error) { emit(sink, "log", "warn", fmt.Sprintf("Skipping %s: %v", p, err)) })
+	if err != nil {
+		return err
+	}
 	files = filterFiles(files, d.cfg.IncludePaths, d.cfg.ExcludePaths)
 	files = dropRootDirectoryEntries(files)
 	d.files = files
@@ -220,15 +233,13 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 			d.progress.totalDirs.Add(1)
 		} else {
 			d.progress.totalFiles.Add(1)
-			d.progress.totalBytes.Add(file.Size)
+			if !file.PreserveLink() && file.Size > 0 {
+				d.progress.totalBytes.Add(file.Size)
+			}
 		}
 	}
 	d.progress.lastSpeedNanos.Store(time.Now().UnixNano())
 	emitProgress(sink, d.progress, "", true)
-
-	if err := os.MkdirAll(d.root, 0755); err != nil {
-		return err
-	}
 
 	queue := make(chan FileInfo, d.cfg.Concurrency*2)
 	var wg sync.WaitGroup
@@ -271,7 +282,21 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 		}()
 	}
 
+	// Materialize directories before writing any child, especially when replacing
+	// an older link at the same path.
 	for _, file := range files {
+		if file.IsDir && !file.PreserveLink() {
+			if err := d.downloadWithRetry(ctx, receiverHTTPClient, file, sink); err != nil {
+				setWorkerErr(err)
+			} else {
+				d.progress.doneDirs.Add(1)
+			}
+		}
+	}
+	for _, file := range files {
+		if file.IsDir && !file.PreserveLink() {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			close(queue)
@@ -320,7 +345,10 @@ func (d *Downloader) fetchListWithRetry(ctx context.Context, sink Sink) ([]FileI
 }
 
 func (d *Downloader) downloadWithRetry(ctx context.Context, client *http.Client, file FileInfo, sink Sink) error {
-	if file.IsDir {
+	if file.Unavailable() {
+		return fmt.Errorf("%s: link target unavailable", file.Path)
+	}
+	if file.IsDir || file.PreserveLink() {
 		return d.downloadOne(ctx, client, file, sink)
 	}
 	attempt := 0
@@ -336,7 +364,7 @@ func (d *Downloader) downloadWithRetry(ctx context.Context, client *http.Client,
 			return ctx.Err()
 		}
 		var statusErr httpStatusError
-		if errors.As(err, &statusErr) {
+		if errors.As(err, &statusErr) || errors.Is(err, errLocalConflict) || errors.Is(err, errLocalWrite) {
 			emit(sink, "log", "error", fmt.Sprintf("download failed for %s: %v", file.Path, err))
 			return err
 		}
@@ -372,6 +400,27 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	if err != nil {
 		return err
 	}
+	if err := checkParents(d.root, localPath); err != nil {
+		return err
+	}
+	info, statErr := os.Lstat(localPath)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if file.PreserveLink() {
+		return d.receiveLink(ctx, client, file, localPath, info, sink)
+	}
+	if info != nil && info.Mode()&os.ModeSymlink != 0 {
+		if file.IsDir {
+			if err := os.Remove(localPath); err != nil {
+				return err
+			}
+		} else {
+			return d.contentOverLink(ctx, client, file, localPath, sink)
+		}
+	} else if info != nil && (file.IsDir != info.IsDir() || !info.IsDir() && !info.Mode().IsRegular()) {
+		return fmt.Errorf("%w: %s", errLocalConflict, localPath)
+	}
 	if file.IsDir {
 		return os.MkdirAll(localPath, 0755)
 	}
@@ -400,6 +449,9 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 
 	if d.cfg.Resume && localExists {
 		repaired, downloadedBytes, err := d.repairFile(ctx, client, downloadURL, localPath, file, localSize, sink)
+		if errors.Is(err, errManifestUnsupported) {
+			return d.downloadFullFile(ctx, client, downloadURL, localPath, file, localSize == file.Size, sink)
+		}
 		if err != nil {
 			return err
 		}
@@ -414,10 +466,10 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		emit(sink, "log", "info", fmt.Sprintf("BLAKE3 repair unavailable or inefficient for %s; re-downloading full file", file.Path))
 	}
 
-	return d.downloadFullFile(ctx, client, downloadURL, localPath, file, sink)
+	return d.downloadFullFile(ctx, client, downloadURL, localPath, file, false, sink)
 }
 
-func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, sink Sink) error {
+func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, downloadURL, localPath string, file FileInfo, compareExisting bool, sink Sink) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return err
@@ -435,15 +487,6 @@ func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, 
 	}
 	d.setFileProgress(file.Path, 0)
 
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
 	reader, closeReader, err := responseReader(resp)
 	if err != nil {
 		return err
@@ -452,23 +495,98 @@ func (d *Downloader) downloadFullFile(ctx context.Context, client *http.Client, 
 		defer closeReader()
 	}
 
-	copied, err := io.Copy(&progressWriter{
-		writer:     out,
-		downloader: d,
-		sink:       sink,
-		file:       file.Path,
-	}, reader)
+	// Count the body once, including any prefix verified against an old sender.
+	progress := &progressWriter{writer: io.Discard, downloader: d, file: file.Path, sink: sink}
+	var offset int64
+	if compareExisting {
+		buffered := bufio.NewReaderSize(reader, 32*1024)
+		offset, err = matchingPrefix(buffered, localPath, file.Size, progress)
+		if err != nil {
+			return err
+		}
+		if offset == file.Size {
+			if _, err := buffered.Peek(1); err != io.EOF {
+				if err != nil {
+					return err
+				}
+				return fmt.Errorf("download exceeds expected size %d", file.Size)
+			}
+			if err := setReceivedModTime(localPath, file.ModTime); err != nil {
+				return err
+			}
+			d.progress.skippedFiles.Add(1)
+			return nil
+		}
+		reader = buffered
+	}
+
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return fmt.Errorf("%w: %w", errLocalWrite, err)
+	}
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	out, err := os.OpenFile(localPath, flags, 0644)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errLocalWrite, err)
+	}
+	defer out.Close()
+	if offset > 0 {
+		if _, err := out.Seek(offset, io.SeekStart); err != nil {
+			return fmt.Errorf("%w: %w", errLocalWrite, err)
+		}
+	}
+	progress.writer = out
+	copied, err := io.Copy(progress, reader)
 	if err != nil {
 		return err
 	}
-
-	if copied != file.Size {
-		return fmt.Errorf("downloaded size mismatch for %s: got %d, expected %d", file.Path, copied, file.Size)
+	if offset+copied != file.Size {
+		return fmt.Errorf("downloaded size mismatch for %s: got %d, expected %d", file.Path, offset+copied, file.Size)
 	}
-	if !file.ModTime.IsZero() {
-		_ = os.Chtimes(localPath, time.Now(), file.ModTime)
+	if err := setReceivedModTime(localPath, file.ModTime); err != nil {
+		return err
 	}
 	d.setFileProgress(file.Path, file.Size)
+	return nil
+}
+
+// Leave the first unequal chunk buffered so a fallback GET can finish the
+// download from the same response without writing any verified prefix.
+func matchingPrefix(remote *bufio.Reader, path string, size int64, progress *progressWriter) (int64, error) {
+	local, err := os.Open(path)
+	if err != nil {
+		return 0, nil // Fall back to writing for a write-only destination.
+	}
+	defer local.Close()
+	buf := make([]byte, remote.Size())
+	var offset int64
+	for offset < size {
+		n := int(min(int64(len(buf)), size-offset))
+		chunk, err := remote.Peek(n)
+		if err != nil {
+			return offset, err
+		}
+		if _, err := io.ReadFull(local, buf[:n]); err != nil {
+			break
+		}
+		if !bytes.Equal(chunk, buf[:n]) {
+			break
+		}
+		remote.Discard(n) // Peek already buffered these bytes.
+		progress.Write(chunk)
+		offset += int64(n)
+	}
+	return offset, nil
+}
+
+func setReceivedModTime(path string, modified time.Time) error {
+	if !modified.IsZero() {
+		if err := os.Chtimes(path, time.Time{}, modified); err != nil {
+			return fmt.Errorf("%w: %w", errLocalWrite, err)
+		}
+	}
 	return nil
 }
 
@@ -520,10 +638,17 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	if err != nil {
 		if errors.Is(err, errManifestUnsupported) {
 			emit(sink, "log", "info", fmt.Sprintf("Repair check unavailable for %s: server does not provide BLAKE3 manifest; falling back to full download", file.Path))
-			return false, 0, nil
 		}
 		return false, 0, err
 	}
+	if localSize == manifest.Size && len(plan.Ranges) == 0 {
+		if err := setReceivedModTime(localPath, manifest.ModTime); err != nil {
+			return false, 0, err
+		}
+		d.setFileProgress(file.Path, manifest.Size)
+		return true, 0, nil
+	}
+
 	if plan.Kind == repairPlanSparse && shouldRedownload(manifest.Size, plan.DirtyBytes, plan.DirtyRangeCount) {
 		emit(sink, "log", "info", fmt.Sprintf("Repair check for %s: local=%s remote=%s, %d dirty range(s) totaling %s; full download selected",
 			file.Path, formatBytes(localSize), formatBytes(manifest.Size), plan.DirtyRangeCount, formatBytes(plan.DirtyBytes)))
@@ -546,7 +671,7 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	}
 	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return false, 0, err
+		return false, 0, fmt.Errorf("%w: %w", errLocalWrite, err)
 	}
 	defer out.Close()
 	d.setFileProgress(file.Path, keptBytes)
@@ -563,8 +688,8 @@ func (d *Downloader) repairFile(ctx context.Context, client *http.Client, downlo
 	if err := out.Truncate(manifest.Size); err != nil {
 		return false, 0, err
 	}
-	if !manifest.ModTime.IsZero() {
-		_ = os.Chtimes(localPath, time.Now(), manifest.ModTime)
+	if err := setReceivedModTime(localPath, manifest.ModTime); err != nil {
+		return false, 0, err
 	}
 	d.setFileProgress(file.Path, manifest.Size)
 	emit(sink, "log", "info", fmt.Sprintf("Repair completed for %s: %d range request(s), downloaded %s, final size %s",
@@ -714,7 +839,21 @@ func (d *Downloader) fetchManifest(ctx context.Context, client *http.Client, dow
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if manifest.BlockSize <= 0 && manifest.Size > 0 {
+	if manifest.BlockSize <= 0 || manifest.Size < 0 || manifest.ManifestSize > manifest.Size || manifest.ManifestSize < 0 {
+		return nil, errManifestUnsupported
+	}
+	covered := manifest.Size
+	if manifest.ManifestSize > 0 {
+		covered = manifest.ManifestSize
+	}
+	var offset int64
+	for i, block := range manifest.Blocks {
+		if offset >= covered || block.Index != i || block.Offset != offset || block.Size != min(manifest.BlockSize, covered-offset) {
+			return nil, errManifestUnsupported
+		}
+		offset += block.Size
+	}
+	if offset != covered || (covered < manifest.Size && (limitSize == 0 || covered < limitSize)) {
 		return nil, errManifestUnsupported
 	}
 	return &manifest, nil

@@ -62,12 +62,32 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 			j.warn(file.Path, err)
 			continue
 		}
-		if !missing && !info.Mode().IsRegular() {
+		localLink := !missing && info.Mode()&os.ModeSymlink != 0
+		typeDifferent := !missing && (file.PreserveLink() != localLink)
+		if file.LinkTarget != "" && !missing && file.IsDir && !file.PreserveLink() && info.IsDir() {
+			continue
+		}
+		if !missing && file.IsDir && !file.PreserveLink() && info.Mode().IsRegular() {
 			j.warn(file.Path, errors.New("link or file/directory conflict skipped"))
 			continue
 		}
+		if !missing && !info.Mode().IsRegular() && !(localLink && file.LinkTarget != "") {
+			j.warn(file.Path, errors.New("link or file/directory conflict skipped"))
+			continue
+		}
+		linkDifferent := false
+		if file.PreserveLink() && localLink {
+			target, err := os.Readlink(full)
+			if err != nil {
+				j.warn(file.Path, err)
+				continue
+			}
+			linkDifferent = filepath.ToSlash(target) != file.LinkTarget
+		}
+		compareContent := !missing && !file.IsDir && !file.PreserveLink() && !localLink
+		sizeDifferent := compareContent && info.Size() != file.Size
 		timeDifferent := false
-		if j.state.Kind == Differences && !missing {
+		if j.state.Kind == Differences && compareContent {
 			if file.ModTime.IsZero() {
 				j.warn(file.Path, errors.New("sender modification time unavailable; time comparison skipped"))
 			} else {
@@ -77,12 +97,16 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 			}
 		}
 		match := j.state.Kind == LocalMissing && missing ||
-			j.state.Kind == SizeDifferent && !missing && info.Size() != file.Size ||
-			j.state.Kind == Differences && (missing || info.Size() != file.Size || timeDifferent)
+			j.state.Kind == SizeDifferent && sizeDifferent ||
+			j.state.Kind == Differences && (missing || sizeDifferent || timeDifferent || typeDifferent || linkDifferent)
 		if !match {
 			continue
 		}
-		item := Item{Path: file.Path, Size: file.Size, RemoteSize: &file.Size}
+		transferSize := file.Size
+		if file.PreserveLink() || file.IsDir {
+			transferSize = 0
+		}
+		item := Item{Path: file.Path, Size: transferSize, RemoteSize: &file.Size, LinkTarget: file.LinkTarget, PreserveLink: file.PreserveLink()}
 		if !file.ModTime.IsZero() {
 			item.Modified = file.ModTime.Format(time.RFC3339Nano)
 			item.RemoteModified = item.Modified
@@ -101,7 +125,7 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 		item.ID = len(j.entries)
 		j.entries = append(j.entries, entry{Item: item, info: info, file: file})
 		j.state.Candidates++
-		j.state.Bytes += file.Size
+		j.state.Bytes += transferSize
 		j.queryValid = false
 		j.mu.Unlock()
 	}
@@ -121,6 +145,9 @@ func (j *Job) BeginReceive(ctx context.Context) (context.Context, error) {
 		return nil, errors.New("no files selected")
 	}
 	ctx, j.cancel = context.WithCancel(ctx)
+	j.state.BatchTotal = j.state.SelectedReceive
+	j.state.BatchFinished = 0
+	j.activeReceives = make(map[string]*ActiveReceive, 4)
 	j.state.Phase = "receiving"
 	j.state.Error = ""
 	return ctx, nil
@@ -162,6 +189,7 @@ func (j *Job) Receive(ctx context.Context, refresh func(context.Context, httpdow
 	if ctx.Err() != nil {
 		j.state.Error = "receiving cancelled; completed actions are preserved"
 	}
+	j.activeReceives = nil
 	j.state.Phase = "done"
 	if j.cancel != nil {
 		j.cancel()
@@ -205,6 +233,8 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 	}
 	j.mu.Lock()
 	e := j.entries[id]
+	active := &ActiveReceive{ID: id, Path: e.Path, Checking: true, TotalBytes: e.Size}
+	j.activeReceives[e.Path] = active
 	j.mu.Unlock()
 	fresh, err := refresh(ctx, e.file)
 	if ctx.Err() != nil {
@@ -224,7 +254,7 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 			if !os.IsNotExist(statErr) {
 				err = errors.New("local file appeared since comparison")
 			}
-		} else if statErr != nil || !info.Mode().IsRegular() || !os.SameFile(e.info, info) || info.Size() != e.info.Size() || !info.ModTime().Equal(e.info.ModTime()) {
+		} else if statErr != nil || info.Mode().Type() != e.info.Mode().Type() || !os.SameFile(e.info, info) || info.Size() != e.info.Size() || !info.ModTime().Equal(e.info.ModTime()) {
 			err = errors.New("local file changed since comparison")
 		}
 	}
@@ -233,6 +263,12 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 		if ctx.Err() != nil {
 			return
 		}
+		j.mu.Lock()
+		active.Checking = false
+		if !fresh.IsDir && !fresh.PreserveLink() {
+			active.TotalBytes = fresh.Size
+		}
+		j.mu.Unlock()
 		attempted = true
 		err = receive(ctx, j.state.Root, fresh)
 		outcome = "received"
@@ -247,6 +283,8 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	current := &j.entries[id]
+	delete(j.activeReceives, e.Path)
+	j.state.BatchFinished++
 	if current.Outcome == "failed" {
 		j.state.Failed--
 	}
@@ -266,5 +304,19 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 		j.state.Skipped++
 	default:
 		j.state.Failed++
+	}
+}
+
+// Each comparison download has its own downloader. Its counters belong to
+// this path even for initial/final events with an empty CurrentFile field.
+func (j *Job) RecordReceiveProgress(path string, event httpdownload.Event) {
+	if event.Type != "progress" {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if active := j.activeReceives[path]; active != nil {
+		active.DoneBytes = event.DoneBytes
+		active.TotalBytes = event.TotalBytes
 	}
 }

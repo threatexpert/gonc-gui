@@ -24,6 +24,7 @@ export namespace appupdate {
 export namespace httpdownload {
 	
 	export class FileInfo {
+	    link_target?: string;
 	    name: string;
 	    is_dir: boolean;
 	    // Go type: time
@@ -37,6 +38,7 @@ export namespace httpdownload {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.link_target = source["link_target"];
 	        this.name = source["name"];
 	        this.is_dir = source["is_dir"];
 	        this.mod_time = this.convertValues(source["mod_time"], null);
@@ -216,7 +218,29 @@ export namespace main {
 
 export namespace receivecompare {
 
+	export class ActiveReceive {
+	    id: number;
+	    path: string;
+	    checking: boolean;
+	    doneBytes: number;
+	    totalBytes: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ActiveReceive(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.checking = source["checking"];
+	        this.doneBytes = source["doneBytes"];
+	        this.totalBytes = source["totalBytes"];
+	    }
+	}
 	export class Item {
+	    linkTarget?: string;
+	    preserveLink?: boolean;
 	    id: number;
 	    path: string;
 	    size: number;
@@ -235,6 +259,8 @@ export namespace receivecompare {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.linkTarget = source["linkTarget"];
+	        this.preserveLink = source["preserveLink"];
 	        this.id = source["id"];
 	        this.path = source["path"];
 	        this.size = source["size"];
@@ -249,6 +275,9 @@ export namespace receivecompare {
 	    }
 	}
 	export class Snapshot {
+	    batchTotal: number;
+	    batchFinished: number;
+	    activeReceives: ActiveReceive[];
 	    id: string;
 	    root: string;
 	    scope: string;
@@ -282,6 +311,9 @@ export namespace receivecompare {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.batchTotal = source["batchTotal"];
+	        this.batchFinished = source["batchFinished"];
+	        this.activeReceives = this.convertValues(source["activeReceives"], ActiveReceive);
 	        this.id = source["id"];
 	        this.root = source["root"];
 	        this.scope = source["scope"];

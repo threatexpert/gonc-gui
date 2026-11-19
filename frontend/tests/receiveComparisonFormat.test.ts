@@ -1,15 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {comparisonTime} from '../src/receiveComparisonFormat.js';
+import {comparisonTimes} from '../src/receiveComparisonFormat.js';
 
 for (const lang of ['zh', 'en'] as const) {
-  test(`preserves sub-millisecond differences in ${lang}`, () => {
-    const first = comparisonTime('2026-11-19T01:02:03.123456700Z', lang);
-    const second = comparisonTime('2026-11-19T01:02:03.123456701Z', lang);
-    assert.notEqual(first, second);
-    assert.ok(first.endsWith('.123456700'));
-    assert.ok(second.endsWith('.123456701'));
-    assert.equal(first, comparisonTime('2026-11-19T09:02:03.1234567+08:00', lang));
-    assert.ok(comparisonTime('2026-11-19T01:02:03Z', lang).endsWith('.000000000'));
+  test(`adaptive timestamp precision in ${lang}`, () => {
+    const base = '2026-11-19T01:02:03';
+    const pair = (a: string, b: string) => comparisonTimes(base + a + 'Z', base + b + 'Z', lang);
+    const equal = comparisonTimes(base + '.1234Z', '2026-11-19T09:02:03.123400000+08:00', lang);
+    assert.equal(equal.equal, true);
+    assert.equal(equal.local, equal.remote);
+    assert.doesNotMatch(equal.local, /\.\d+$/);
+    assert.match(pair('', '.001').local, /\.000$/);
+    assert.match(pair('.123', '.1249').remote, /\.124$/);
+    assert.match(pair('.1234', '.1235').local, /\.123400$/);
+    assert.match(pair('.123456700', '.123456701').remote, /\.123456701$/);
+    const different = comparisonTimes(base + '.999Z', '2026-11-19T01:02:04.888Z', lang);
+    assert.equal(different.equal, false);
+    assert.doesNotMatch(different.remote, /\.\d+$/);
+    assert.notEqual(different.local, different.remote);
+    assert.equal(comparisonTimes('', base + 'Z', lang).local, '');
+    assert.equal(comparisonTimes('', '', lang).equal, false);
   });
 }

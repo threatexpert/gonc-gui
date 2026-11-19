@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -11,11 +12,18 @@ import (
 	"time"
 )
 
+var errListStatus = errors.New("remote listing unavailable")
+var errListNotFound = fmt.Errorf("%w: HTTP 404", errListStatus)
+
 // ListForComparison deliberately does not use List's lenient parser or the UI
 // cache. Older senders can omit unreadable paths, so absence in this list alone
 // is never sufficient to authorize deletion; RemotePathMissing checks it again.
 func ListForComparison(ctx context.Context, serverURL string, visit func(FileInfo) error) error {
-	u, err := resolveURL(serverURL, "/")
+	return readComparisonList(ctx, serverURL, "/", visit)
+}
+
+func readComparisonList(ctx context.Context, serverURL, name string, visit func(FileInfo) error) error {
+	u, err := resolveURL(serverURL, name)
 	if err != nil {
 		return err
 	}
@@ -31,7 +39,13 @@ func ListForComparison(ctx context.Context, serverURL string, visit func(FileInf
 	}
 	defer resp.Body.Close()
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if resp.StatusCode != http.StatusOK || (mediaType != "application/x-ndjson" && mediaType != "application/json") {
+	if resp.StatusCode == http.StatusNotFound {
+		return errListNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: %s", errListStatus, resp.Status)
+	}
+	if mediaType != "application/x-ndjson" && mediaType != "application/json" {
 		return fmt.Errorf("invalid comparison list response: %s (%s)", resp.Status, mediaType)
 	}
 	reader, closeReader, err := responseReader(resp)
@@ -48,11 +62,12 @@ func ListForComparison(ctx context.Context, serverURL string, visit func(FileInf
 			return err
 		}
 		var record struct {
-			Path    *string   `json:"path"`
-			IsDir   *bool     `json:"is_dir"`
-			Name    string    `json:"name"`
-			Size    *int64    `json:"size"`
-			ModTime time.Time `json:"mod_time"`
+			LinkTarget string    `json:"link_target"`
+			Path       *string   `json:"path"`
+			IsDir      *bool     `json:"is_dir"`
+			Name       string    `json:"name"`
+			Size       *int64    `json:"size"`
+			ModTime    time.Time `json:"mod_time"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil || record.Path == nil || record.IsDir == nil || strings.TrimSpace(*record.Path) == "" {
 			return fmt.Errorf("invalid record in comparison list")
@@ -61,7 +76,7 @@ func ListForComparison(ctx context.Context, serverURL string, visit func(FileInf
 		if record.Size != nil {
 			size = *record.Size
 		}
-		if err := visit(FileInfo{Path: *record.Path, IsDir: *record.IsDir, Name: record.Name, Size: size, ModTime: record.ModTime}); err != nil {
+		if err := visit(FileInfo{LinkTarget: record.LinkTarget, Path: *record.Path, IsDir: *record.IsDir, Name: record.Name, Size: size, ModTime: record.ModTime}); err != nil {
 			return err
 		}
 	}
@@ -99,6 +114,9 @@ func RemotePathMissing(ctx context.Context, serverURL, remotePath string) (bool,
 // Refresh size just before receiving a selected result. No contents are read;
 // a missing file, directory redirect, or inaccessible target is a failed item.
 func RefreshComparisonFile(ctx context.Context, serverURL string, file FileInfo) (FileInfo, error) {
+	if file.PreserveLink() || file.IsDir {
+		return file, nil
+	}
 	u, err := resolveURL(serverURL, file.Path)
 	if err != nil {
 		return file, err
