@@ -14,7 +14,7 @@ import {ProfileDeleteDialog} from './ProfileDeleteDialog';
 import {ReceiveComparison} from './ReceiveComparison';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
-import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails, type VPNSnapshot} from './vpnDetails';
+import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, type VPNDetails, type VPNSnapshot} from './vpnDetails';
 import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex, type VPNConfigurationFailure} from './vpnDetails';
 import {initialPeerIPv6State, peerIPv6Label as peerIpv6Label} from './vpnDetails';
 import {
@@ -415,7 +415,9 @@ const text = {
     disconnectProtectionHint: '首次连接成功后，隧道断开或重连期间仍保留已配置的网络接管；停止 VPN 后恢复正常网络。未接管的网段不受保护。',
     reconnectDns: '隧道连接 DNS',
     reconnectDnsHint: '用于从本地网络解析隧道服务器地址，确保断线后仍可重连。留空使用 8.8.8.8。它也会影响本程序其他使用默认 DNS 的功能；与 VPN 上网 DNS 分开配置。',
-    protectionActive: '断网保护中 · 网络接管仍然有效',
+    protectionConfigured: '断网保护已配置，接管流量后生效。',
+    protectionActive: '断网保护已生效。',
+    protectionReconnecting: '断网保护生效中，重连期间仍接管选定流量。',
     tunnelOnly: '仅 SOCKS5 隧道',
     tunnelOnlyHint: '只建立本地 SOCKS5 隧道，不修改系统路由。',
     vpnDnsServers: 'DNS',
@@ -726,7 +728,9 @@ const text = {
     disconnectProtectionHint: 'After the first successful connection, keep configured traffic capture during outages and reconnects. Stop VPN to restore normal networking. Excluded networks are not protected.',
     reconnectDns: 'Tunnel connection DNS',
     reconnectDnsHint: 'Resolves tunnel server names through the local network so reconnection works during outages. Blank uses 8.8.8.8. Also affects other default DNS lookups in this app; configured separately from VPN browsing DNS.',
-    protectionActive: 'Disconnect protection active · traffic capture retained',
+    protectionConfigured: 'Disconnect protection is enabled and takes effect when traffic capture starts.',
+    protectionActive: 'Disconnect protection is active.',
+    protectionReconnecting: 'Disconnect protection is active. Traffic on the configured routes stays captured during reconnection.',
     tunnelOnly: 'Tunnel only',
     tunnelOnlyHint: 'Only create the local SOCKS5 tunnel without changing system routes.',
     vpnDnsServers: 'DNS',
@@ -1333,6 +1337,10 @@ function App() {
   const receiveSessionCompact = receiveRunning && (receiveQrHasConnected || remoteList !== null);
   const vpnDisconnectDisplay = vpnDisconnectView(vpnDisconnectPhase, vpnClientRunning);
   const vpnDetails = vpnSnapshot?.data;
+  const protectionHint = vpnProtectionHint(
+    vpnClientRunning && !vpnDisconnectPending ? vpnDetails : undefined,
+    vpnClientDisconnectProtection && !vpnClientTunnelOnly,
+  );
   const vpnConnectionPhase = vpnPhase(vpnDetails, vpnClientRunning);
   const vpnRetryCountdown = vpnRetrySeconds(vpnSnapshot, performance.now());
   const vpnAttempt = vpnAttemptStage(vpnDetails);
@@ -3520,7 +3528,15 @@ function App() {
       <div className="page-stack">
         <section className={`card vpn-hero ${vpnClientStatus.tone}`}>
           <div className="vpn-hero-main">
-            <span className="vpn-hero-icon"><Icon name={vpnClientRunning && vpnClientStatus.tone === 'connected' ? 'shieldCheck' : 'shield'} /></span>
+            <span className="vpn-hero-icon" role={protectionHint ? 'img' : undefined}
+              aria-label={protectionHint && t[protectionHint]} data-protection-tip={protectionHint && t[protectionHint]}>
+              <Icon name={vpnClientRunning && vpnClientStatus.tone === 'connected' ? 'shieldCheck' : 'shield'} />
+              {protectionHint && (
+                <span className={`vpn-protection-lock${protectionHint === 'protectionConfigured' ? '' : ' active'}`}>
+                  <Icon name="lock" />
+                </span>
+              )}
+            </span>
             <div className="vpn-hero-text">
               <h2 title={currentVpnProfileName}>{currentVpnProfileName}</h2>
               <p>{vpnClientStatus.label}</p>
@@ -3541,7 +3557,6 @@ function App() {
           )}
           {!vpnShowConfigurationFailure && vpnShowFailure && <p className="vpn-connection-error">{t.vpnLastFailure}：{vpnDetails?.connectionError ? localizeError(vpnDetails.connectionError) : t.vpnFailureUnknown}</p>}
           {startHint && <p className="vpn-hero-hint">{startHint}</p>}
-          {vpnDetails?.disconnectProtection && vpnDetails.captureActive && !vpnDetails.ready && <p className="vpn-hero-hint" role="status">{t.protectionActive}</p>}
           {vpnClientRunning && (
             <>
             <section className="vpn-detail-group" aria-label={t.vpnConnectionInfo}>

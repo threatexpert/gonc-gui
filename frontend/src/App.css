@@ -2016,6 +2016,7 @@ html.profile-dragging * {
 }
 
 .vpn-hero-icon {
+  position: relative;
   display: grid;
   width: 44px;
   height: 44px;
@@ -2029,6 +2030,51 @@ html.profile-dragging * {
 .vpn-hero-icon .icon {
   width: 22px;
   height: 22px;
+}
+
+.vpn-protection-lock {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--text-muted);
+  color: var(--surface);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.vpn-protection-lock.active {
+  background: var(--success);
+  color: var(--on-accent);
+}
+
+.vpn-protection-lock .icon {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.4;
+}
+
+@media (hover: hover) {
+  .vpn-hero-icon[data-protection-tip]:hover::after {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 7px);
+    left: 0;
+    width: max-content;
+    max-width: min(280px, 65vw);
+    border-radius: 6px;
+    padding: 6px 9px;
+    background: var(--text);
+    color: var(--surface);
+    box-shadow: var(--shadow-sm);
+    content: attr(data-protection-tip);
+    font-size: 12px;
+    line-height: 1.45;
+    pointer-events: none;
+  }
 }
 
 .vpn-hero.connected .vpn-hero-icon {

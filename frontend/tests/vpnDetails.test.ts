@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, type VPNDetails} from '../src/vpnDetails.js';
+import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, type VPNDetails} from '../src/vpnDetails.js';
 import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex} from '../src/vpnDetails.js';
 import {initialPeerIPv6State, peerIPv6Label} from '../src/vpnDetails.js';
 
@@ -11,6 +11,20 @@ const sample = (patch: Partial<VPNDetails> = {}): VPNDetails => ({
   lastConnectedAt: '2026-11-15T10:00:00Z', durationSeconds: 10, inBytes: 123, outBytes: 456,
   inBps: 12, outBps: 45, trafficAt: '2026-11-15T10:00:10Z', tunnelOnly: false,
   routeState: 'applied', configuredRoutes: [], routes: [], bypassIps: [], dnsServers: [], ...patch,
+});
+
+test('protection lock follows capture independently of tunnel readiness', () => {
+  const protectedSession = sample({disconnectProtection: true, captureActive: true});
+  assert.equal(vpnProtectionHint(undefined, false), undefined);
+  assert.equal(vpnProtectionHint(undefined, true), 'protectionConfigured');
+  assert.equal(vpnProtectionHint({...protectedSession, captureActive: false}, true), 'protectionConfigured');
+  assert.equal(vpnProtectionHint(protectedSession, false), 'protectionActive');
+  assert.equal(vpnProtectionHint({...protectedSession, ready: false, routeState: 'protected'}, false), 'protectionReconnecting');
+  assert.equal(vpnProtectionHint({...protectedSession, routeState: 'stopping'}, true), 'protectionConfigured');
+  assert.equal(vpnProtectionHint({...protectedSession, routeState: 'error'}, true), 'protectionConfigured');
+  assert.equal(vpnProtectionHint({...protectedSession, running: false}, false), undefined);
+  assert.equal(vpnProtectionHint({...protectedSession, disconnectProtection: false}, true), undefined);
+  assert.equal(vpnProtectionHint({...protectedSession, tunnelOnly: true}, true), undefined);
 });
 
 test('IPv6 exit wording distinguishes local routing and SOCKS5-only reasons', () => {

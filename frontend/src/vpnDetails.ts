@@ -29,6 +29,15 @@ export type VPNDetails = {
 
 export type VPNSnapshot = {data: VPNDetails; receivedAt: number};
 
+export function vpnProtectionHint(session: VPNDetails | undefined, configured: boolean) {
+  if (!session?.running) return configured ? 'protectionConfigured' : undefined;
+  if (!session.disconnectProtection || session.tunnelOnly) return undefined;
+  if (!session.captureActive || session.routeState === 'stopping' || session.routeState === 'error') {
+    return 'protectionConfigured';
+  }
+  return session.ready ? 'protectionActive' : 'protectionReconnecting';
+}
+
 export function initialPeerIPv6State(tunnelOnly: boolean, hasIPv6Routes: boolean): string {
   return tunnelOnly ? 'tunnel_only' : hasIPv6Routes ? 'waiting' : 'disabled';
 }
