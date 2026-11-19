@@ -63,6 +63,19 @@ func TestDesktopSenderListAdvertisesLinks(t *testing.T) {
 	if !byPath["/tools"].IsDir || byPath["/broken"].Size != -1 || byPath["/tool"].Size != int64(len("file contents")) {
 		t.Errorf("wrong link attributes: %+v", files)
 	}
+	info, err := os.Stat(filepath.Join(dir, "folder", "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/folder/file", "/tool"} {
+		mode := byPath[p].Mode
+		if mode == nil || *mode != uint32(info.Mode().Perm()) {
+			t.Errorf("%s: mode = %v, want %o", p, mode, info.Mode().Perm())
+		}
+	}
+	if byPath["/broken"].Mode != nil {
+		t.Error("broken link has a target mode")
+	}
 	single, err := httpdownload.List(ctx, url, "/tool")
 	if err != nil || len(single) != 1 || single[0].LinkTarget != "folder/file" {
 		t.Fatalf("file listing: %+v, %v", single, err)

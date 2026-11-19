@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,7 +28,8 @@ import (
 )
 
 type FileInfo struct {
-	LinkTarget string `json:"link_target,omitempty"`
+	Mode       *uint32 `json:"mode,omitempty"`
+	LinkTarget string  `json:"link_target,omitempty"`
 	action     httpfileshare.ReceiveAction
 	Name       string    `json:"name"`
 	IsDir      bool      `json:"is_dir"`
@@ -284,10 +286,13 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 
 	// Materialize directories before writing any child, especially when replacing
 	// an older link at the same path.
+	var modeDirs []FileInfo
 	for _, file := range files {
 		if file.IsDir && !file.PreserveLink() {
 			if err := d.downloadWithRetry(ctx, receiverHTTPClient, file, sink); err != nil {
 				setWorkerErr(err)
+			} else if file.Mode != nil {
+				modeDirs = append(modeDirs, file)
 			} else {
 				d.progress.doneDirs.Add(1)
 			}
@@ -309,6 +314,26 @@ func (d *Downloader) Start(ctx context.Context, sink Sink) error {
 	wg.Wait()
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	// Descendants must be finalized before a parent can lose traversal rights.
+	sort.Slice(modeDirs, func(i, j int) bool { return modeDirs[i].Path > modeDirs[j].Path })
+	for _, file := range modeDirs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		full, err := d.localPath(file)
+		if err == nil {
+			err = checkParents(d.root, full)
+		}
+		if err == nil {
+			err = httpfileshare.ApplyPermissions(d.root, full, file.Mode, true)
+		}
+		if err != nil {
+			setWorkerErr(err)
+			emit(sink, "log", "error", err.Error())
+			continue
+		}
+		d.progress.doneDirs.Add(1)
 	}
 	workerErrMu.Lock()
 	finalErr := workerErr
@@ -395,7 +420,7 @@ func waitRetry(ctx context.Context, attempt int) error {
 	}
 }
 
-func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file FileInfo, sink Sink) error {
+func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file FileInfo, sink Sink) (result error) {
 	localPath, err := d.localPath(file)
 	if err != nil {
 		return err
@@ -409,6 +434,15 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 	}
 	if file.PreserveLink() {
 		return d.receiveLink(ctx, client, file, localPath, info, sink)
+	}
+	if !file.IsDir && file.Mode != nil {
+		defer func() {
+			if result == nil {
+				if err := httpfileshare.ApplyPermissions(d.root, localPath, file.Mode, false); err != nil {
+					result = fmt.Errorf("%w: %w", errLocalWrite, err)
+				}
+			}
+		}()
 	}
 	if info != nil && info.Mode()&os.ModeSymlink != 0 {
 		if file.IsDir {
@@ -425,15 +459,12 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		return os.MkdirAll(localPath, 0755)
 	}
 
-	localExists := false
-	localSize := int64(0)
-	localModTime := time.Time{}
-	if stat, err := os.Stat(localPath); err == nil {
-		localExists = true
-		localSize = stat.Size()
-		localModTime = stat.ModTime()
-	} else if !os.IsNotExist(err) {
-		return err
+	localExists := info != nil
+	var localSize int64
+	var localModTime time.Time
+	if localExists {
+		localSize = info.Size()
+		localModTime = info.ModTime()
 	}
 
 	downloadURL, err := resolveURL(d.cfg.ServerURL, file.Path)
@@ -441,7 +472,7 @@ func (d *Downloader) downloadOne(ctx context.Context, client *http.Client, file 
 		return err
 	}
 
-	if d.cfg.Resume && localExists && localSize == file.Size && !file.ModTime.IsZero() && localModTime.Equal(file.ModTime) {
+	if localExists && localSize == file.Size && !file.ModTime.IsZero() && localModTime.Equal(file.ModTime) && (d.cfg.Resume || httpfileshare.PermissionsDiffer(file.Mode, info.Mode())) {
 		d.setFileProgress(file.Path, file.Size)
 		d.progress.skippedFiles.Add(1)
 		return nil

@@ -289,6 +289,14 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
             object.put("isDir", directory);
             object.put("size", directory ? 0 : size);
             object.put("modTimeMillis", lastModifiedMillis);
+            // App-owned files have Unix metadata. SAF documents have no mode.
+            if (uri != null && "file".equals(uri.getScheme()) && uri.getPath() != null) {
+                try {
+                    object.put("mode", android.system.Os.stat(uri.getPath()).st_mode & 0777);
+                } catch (android.system.ErrnoException ignored) {
+                    // Keep the entry usable if optional metadata is unavailable.
+                }
+            }
             return object;
         }
 

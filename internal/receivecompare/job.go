@@ -85,16 +85,22 @@ type Snapshot struct {
 
 type entry struct {
 	Item
-	info os.FileInfo
-	file httpdownload.FileInfo
+	info              os.FileInfo
+	file              httpdownload.FileInfo
+	finalizeDirectory bool
 }
+type remotePath struct {
+	isDir  bool
+	listed bool
+}
+
 type Job struct {
 	activeReceives map[string]*ActiveReceive
 	mu             sync.Mutex
 	state          Snapshot
 	entries        []entry
 	rootInfo       os.FileInfo
-	remote         map[string]bool // all paths, including directories and implicit ancestors
+	remote         map[string]remotePath // all paths, including directories and implicit ancestors
 	links          map[string]bool
 	remoteFiles    []httpdownload.FileInfo
 	indexBytes     int
@@ -134,7 +140,7 @@ func New(id, root, scope, mode string, kinds ...string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Job{state: Snapshot{ID: id, Root: abs, Scope: scope, Kind: kind, Phase: "remote", DeleteMode: mode, Warnings: []string{}, Items: []Item{}}, rootInfo: info, links: make(map[string]bool), remote: make(map[string]bool)}, nil
+	return &Job{state: Snapshot{ID: id, Root: abs, Scope: scope, Kind: kind, Phase: "remote", DeleteMode: mode, Warnings: []string{}, Items: []Item{}}, rootInfo: info, links: make(map[string]bool), remote: make(map[string]remotePath)}, nil
 }
 
 func cleanRemote(p string) (string, error) {
@@ -210,17 +216,19 @@ func (j *Job) Scan(ctx context.Context, list func(context.Context, func(httpdown
 				j.state.Warnings = append(j.state.Warnings, p+": link target unavailable")
 			}
 		}
-		if j.state.Kind != LocalOnly && !file.Unavailable() && (!file.IsDir || file.LinkTarget != "") {
+		compareDirMode := file.Mode != nil && p != "/" && (j.state.Kind == Differences || j.state.Kind == LocalMissing)
+		if j.state.Kind != LocalOnly && !file.Unavailable() && (!file.IsDir || file.LinkTarget != "" || compareDirMode) {
 			if file.Size < 0 {
 				return errors.New("remote file size is missing or invalid")
 			}
-			if _, exists := j.remote[key(p)]; exists {
+			if j.remote[key(p)].listed {
 				return fmt.Errorf("ambiguous remote file path: %s", p)
 			}
 			file.Path = p
 			j.indexBytes += len(p) + 192
 			j.remoteFiles = append(j.remoteFiles, file)
 		}
+		listed := true
 		for {
 			k := key(p)
 			if _, ok := j.remote[k]; !ok {
@@ -228,13 +236,16 @@ func (j *Job) Scan(ctx context.Context, list func(context.Context, func(httpdown
 				if j.indexBytes > maxIndexBytes {
 					return errors.New("comparison index too large; compare a smaller subfolder")
 				}
-				j.remote[k] = file.IsDir
-			} else if j.remote[k] != file.IsDir {
+				j.remote[k] = remotePath{isDir: file.IsDir, listed: listed}
+			} else if j.remote[k].isDir != file.IsDir {
 				return fmt.Errorf("conflicting remote paths: %s", p)
+			} else if listed {
+				j.remote[k] = remotePath{isDir: file.IsDir, listed: true}
 			}
 			if p == "/" {
 				break
 			}
+			listed = false
 			p = path.Dir(p)
 			file.IsDir = true
 		}
@@ -283,7 +294,7 @@ func (j *Job) walk(ctx context.Context, remoteDir string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if isDir, exists := j.remote[key(remoteDir)]; exists && !isDir {
+	if remote, exists := j.remote[key(remoteDir)]; exists && !remote.isDir {
 		j.warn(remoteDir, errors.New("remote file/local directory conflict"))
 		return nil
 	}
@@ -319,7 +330,7 @@ func (j *Job) walk(ctx context.Context, remoteDir string) error {
 				continue
 			}
 			if de.IsDir() {
-				if isDir, exists := j.remote[key(p)]; exists && !isDir {
+				if remote, exists := j.remote[key(p)]; exists && !remote.isDir {
 					j.warn(p, errors.New("remote file/local directory conflict"))
 					continue
 				}

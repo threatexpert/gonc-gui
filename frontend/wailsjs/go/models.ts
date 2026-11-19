@@ -24,6 +24,7 @@ export namespace appupdate {
 export namespace httpdownload {
 	
 	export class FileInfo {
+	    mode?: number;
 	    link_target?: string;
 	    name: string;
 	    is_dir: boolean;
@@ -38,6 +39,7 @@ export namespace httpdownload {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
 	        this.link_target = source["link_target"];
 	        this.name = source["name"];
 	        this.is_dir = source["is_dir"];

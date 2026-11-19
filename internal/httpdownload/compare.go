@@ -62,6 +62,7 @@ func readComparisonList(ctx context.Context, serverURL, name string, visit func(
 			return err
 		}
 		var record struct {
+			Mode       *uint32   `json:"mode"`
 			LinkTarget string    `json:"link_target"`
 			Path       *string   `json:"path"`
 			IsDir      *bool     `json:"is_dir"`
@@ -76,7 +77,7 @@ func readComparisonList(ctx context.Context, serverURL, name string, visit func(
 		if record.Size != nil {
 			size = *record.Size
 		}
-		if err := visit(FileInfo{LinkTarget: record.LinkTarget, Path: *record.Path, IsDir: *record.IsDir, Name: record.Name, Size: size, ModTime: record.ModTime}); err != nil {
+		if err := visit(FileInfo{Mode: record.Mode, LinkTarget: record.LinkTarget, Path: *record.Path, IsDir: *record.IsDir, Name: record.Name, Size: size, ModTime: record.ModTime}); err != nil {
 			return err
 		}
 	}

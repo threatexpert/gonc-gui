@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/threatexpert/gonc/v2/httpfileshare"
 
 	"gonc-gui/internal/httpdownload"
 )
@@ -64,14 +67,20 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 		}
 		localLink := !missing && info.Mode()&os.ModeSymlink != 0
 		typeDifferent := !missing && (file.PreserveLink() != localLink)
-		if file.LinkTarget != "" && !missing && file.IsDir && !file.PreserveLink() && info.IsDir() {
+		materializeDir := file.IsDir && !file.PreserveLink()
+		modeDifferent := !missing && !localLink && httpfileshare.PermissionsDiffer(file.Mode, info.Mode())
+		finalizeDirectory := materializeDir && file.Mode != nil && (missing || (info.IsDir() && modeDifferent))
+		if file.IsDir && file.LinkTarget == "" && !finalizeDirectory {
+			continue
+		}
+		if !finalizeDirectory && file.LinkTarget != "" && !missing && file.IsDir && !file.PreserveLink() && info.IsDir() {
 			continue
 		}
 		if !missing && file.IsDir && !file.PreserveLink() && info.Mode().IsRegular() {
 			j.warn(file.Path, errors.New("link or file/directory conflict skipped"))
 			continue
 		}
-		if !missing && !info.Mode().IsRegular() && !(localLink && file.LinkTarget != "") {
+		if !finalizeDirectory && !missing && !info.Mode().IsRegular() && !(localLink && file.LinkTarget != "") {
 			j.warn(file.Path, errors.New("link or file/directory conflict skipped"))
 			continue
 		}
@@ -98,12 +107,12 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 		}
 		match := j.state.Kind == LocalMissing && missing ||
 			j.state.Kind == SizeDifferent && sizeDifferent ||
-			j.state.Kind == Differences && (missing || sizeDifferent || timeDifferent || typeDifferent || linkDifferent)
+			j.state.Kind == Differences && (missing || sizeDifferent || timeDifferent || typeDifferent || linkDifferent || finalizeDirectory || (compareContent && modeDifferent))
 		if !match {
 			continue
 		}
 		transferSize := file.Size
-		if file.PreserveLink() || file.IsDir {
+		if file.PreserveLink() || file.IsDir || (compareContent && !sizeDifferent && !timeDifferent && !file.ModTime.IsZero()) {
 			transferSize = 0
 		}
 		item := Item{Path: file.Path, Size: transferSize, RemoteSize: &file.Size, LinkTarget: file.LinkTarget, PreserveLink: file.PreserveLink()}
@@ -123,7 +132,7 @@ func (j *Job) scanRemoteFiles(ctx context.Context) error {
 			return errors.New("comparison index too large; compare a smaller subfolder")
 		}
 		item.ID = len(j.entries)
-		j.entries = append(j.entries, entry{Item: item, info: info, file: file})
+		j.entries = append(j.entries, entry{Item: item, info: info, file: file, finalizeDirectory: finalizeDirectory})
 		j.state.Candidates++
 		j.state.Bytes += transferSize
 		j.queryValid = false
@@ -163,13 +172,43 @@ func (j *Job) Receive(ctx context.Context, refresh func(context.Context, httpdow
 		go func() {
 			defer wg.Done()
 			for id := range queue {
-				j.receiveOne(ctx, id, refresh, receive)
+				j.receiveOne(ctx, id, nil, refresh, receive)
 			}
 		}()
 	}
+	// Create selected new directories before workers can create their parents.
+	// Save their identities for the final chmod after children have finished.
+	var dirs []int
+	for id := range j.entries {
+		e := &j.entries[id]
+		if e.Selected && e.finalizeDirectory {
+			dirs = append(dirs, id)
+		}
+	}
+	sort.Slice(dirs, func(i, k int) bool { return j.entries[dirs[i]].Path < j.entries[dirs[k]].Path })
+	for _, id := range dirs {
+		e := &j.entries[id]
+		if e.info != nil || ctx.Err() != nil {
+			continue
+		}
+		full, err := j.receiveTarget(e.file)
+		if err == nil {
+			err = os.MkdirAll(filepath.Dir(full), 0755)
+		}
+		if err == nil {
+			err = os.Mkdir(full, 0755)
+		}
+		if err == nil {
+			e.info, err = os.Lstat(full)
+		}
+		if err != nil {
+			j.receiveOne(ctx, id, err, refresh, receive)
+		}
+	}
 	for id := range j.entries {
 		j.mu.Lock()
-		selected := j.entries[id].Selected && j.entries[id].RemoteSize != nil
+		e := &j.entries[id]
+		selected := e.Selected && e.RemoteSize != nil && !e.finalizeDirectory
 		j.mu.Unlock()
 		if !selected {
 			continue
@@ -184,6 +223,12 @@ func (j *Job) Receive(ctx context.Context, refresh func(context.Context, httpdow
 	}
 	close(queue)
 	wg.Wait()
+	for i := len(dirs) - 1; i >= 0; i-- {
+		id := dirs[i]
+		if j.entries[id].Selected {
+			j.receiveOne(ctx, id, nil, refresh, receive)
+		}
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if ctx.Err() != nil {
@@ -227,7 +272,7 @@ func (j *Job) receiveTarget(file httpdownload.FileInfo) (string, error) {
 	return full, nil
 }
 
-func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Context, httpdownload.FileInfo) (httpdownload.FileInfo, error), receive func(context.Context, string, httpdownload.FileInfo) error) {
+func (j *Job) receiveOne(ctx context.Context, id int, err error, refresh func(context.Context, httpdownload.FileInfo) (httpdownload.FileInfo, error), receive func(context.Context, string, httpdownload.FileInfo) error) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -236,7 +281,10 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 	active := &ActiveReceive{ID: id, Path: e.Path, Checking: true, TotalBytes: e.Size}
 	j.activeReceives[e.Path] = active
 	j.mu.Unlock()
-	fresh, err := refresh(ctx, e.file)
+	fresh := e.file
+	if err == nil {
+		fresh, err = refresh(ctx, e.file)
+	}
 	if ctx.Err() != nil {
 		return
 	}
@@ -254,7 +302,9 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 			if !os.IsNotExist(statErr) {
 				err = errors.New("local file appeared since comparison")
 			}
-		} else if statErr != nil || info.Mode().Type() != e.info.Mode().Type() || !os.SameFile(e.info, info) || info.Size() != e.info.Size() || !info.ModTime().Equal(e.info.ModTime()) {
+		} else if statErr != nil || !os.SameFile(e.info, info) || info.Mode().Type() != e.info.Mode().Type() ||
+			(e.file.Mode != nil && info.Mode().Perm() != e.info.Mode().Perm()) ||
+			(!e.finalizeDirectory && (info.Size() != e.info.Size() || !info.ModTime().Equal(e.info.ModTime()))) {
 			err = errors.New("local file changed since comparison")
 		}
 	}
@@ -270,7 +320,11 @@ func (j *Job) receiveOne(ctx context.Context, id int, refresh func(context.Conte
 		}
 		j.mu.Unlock()
 		attempted = true
-		err = receive(ctx, j.state.Root, fresh)
+		if e.finalizeDirectory {
+			err = httpfileshare.ApplyPermissions(j.state.Root, full, fresh.Mode, true)
+		} else {
+			err = receive(ctx, j.state.Root, fresh)
+		}
 		outcome = "received"
 		if err != nil {
 			outcome = "failed"

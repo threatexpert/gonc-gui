@@ -145,6 +145,7 @@ type DownloadWarning = {
 
 type RemoteFile = {
   link_target?: string;
+  mode?: number;
   name: string;
   is_dir: boolean;
   mod_time: string;
@@ -4427,6 +4428,7 @@ function normalizeRemoteFile(file: RemoteFile): RemoteFile {
     name: String(item.name ?? item.Name ?? remoteBaseName(path)),
     is_dir: Boolean(item.is_dir ?? item.IsDir),
     link_target: item.link_target ?? item.LinkTarget,
+    mode: item.mode ?? item.Mode,
     mod_time: item.mod_time ?? item.ModTime ?? '',
     size: Number(item.size ?? item.Size ?? 0),
     path,
