@@ -50,6 +50,8 @@ Release packages are named like:
 | --- | --- |
 | Windows x64 | `gonc-gui-<version>-windows-amd64.zip` |
 | Windows arm64 | `gonc-gui-<version>-windows-arm64.zip` |
+| Linux x64 | `gonc-gui-<version>-linux-amd64.tar.gz` |
+| Linux arm64 | `gonc-gui-<version>-linux-arm64.tar.gz` |
 | Android arm64 | `gonc-gui-<version>-android-arm64.apk` |
 
 On Windows, keep `gonc-gui.exe` and `wintun.dll` in the same folder when using

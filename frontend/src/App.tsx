@@ -77,7 +77,7 @@ import {
   SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {BrowserOpenURL, ClipboardGetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
+import {BrowserOpenURL, ClipboardGetText, ClipboardSetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = PassphraseMode;
 type Lang = 'zh' | 'en';
@@ -365,6 +365,7 @@ const text = {
     scanSuccess: '已从二维码识别口令',
     paste: '粘贴',
     copied: '口令已复制',
+    copyPasswordFailed: '无法将口令复制到剪贴板。',
     logsCopied: '日志已复制',
     sharedList: '文件',
     addPickerTitle: '添加分享内容',
@@ -680,6 +681,7 @@ const text = {
     scanSuccess: 'Passphrase read from QR code',
     paste: 'Paste',
     copied: 'Passphrase copied',
+    copyPasswordFailed: 'Could not copy the passphrase to the clipboard.',
     logsCopied: 'Activity copied',
     sharedList: 'Files',
     addPickerTitle: 'Add shared content',
@@ -1965,12 +1967,21 @@ function App() {
   }
 
   async function copyPassword() {
+    if (!activePassword) return;
     const targetMode = mode;
-    if (activePassword) {
-      await navigator.clipboard.writeText(activePassword);
-      revealPasswordTemporarily(targetMode);
-      appendLog('status', 'info', t.copied);
+    setError('');
+    try {
+      if (!await ClipboardSetText(activePassword)) throw new Error();
+    } catch {
+      try {
+        await navigator.clipboard.writeText(activePassword);
+      } catch {
+        setError(t.copyPasswordFailed);
+        return;
+      }
     }
+    revealPasswordTemporarily(targetMode);
+    appendLog('status', 'info', t.copied);
   }
 
   async function copyLogs() {

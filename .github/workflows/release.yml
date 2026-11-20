@@ -42,7 +42,13 @@ jobs:
             linux_tags: ""
           - os: ubuntu-24.04
             target: linux/amd64
-            platform: ubuntu-amd64
+            platform: linux-amd64
+            binary: gonc-gui
+            wintun_arch: ""
+            linux_tags: webkit2_41
+          - os: ubuntu-24.04-arm
+            target: linux/arm64
+            platform: linux-arm64
             binary: gonc-gui
             wintun_arch: ""
             linux_tags: webkit2_41
@@ -122,13 +128,13 @@ jobs:
       - name: Build and test WebKitGTK 4.0 app on glibc 2.28
         if: runner.os == 'Linux'
         run: |
-          # Debian 10 (buster-slim), pinned to the amd64 image.
-          docker run --rm --platform linux/amd64 --shm-size=256m \
+          # Debian 10 (buster-slim) image index, pinned for both architectures.
+          docker run --rm --platform "${{ matrix.target }}" --shm-size=256m \
             -v "${GITHUB_WORKSPACE}:/src" -w /src \
             -v "$(go env GOROOT):/usr/local/go:ro" \
             -v "$(go env GOMODCACHE):/go/pkg/mod:ro" \
             -v /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca.crt:ro \
-            debian@sha256:32220ea48be72979c9f0810d69f3de9145c9584c2ee966c6ec26edbcf4640c0b \
+            debian@sha256:bb3dc79fddbca7e8903248ab916bb775c96ec61014b3d02b4f06043b604726dc \
             bash .github/scripts/build-linux-compat.sh
 
       - name: Package desktop artifact
@@ -328,10 +334,14 @@ jobs:
 
           copy_latest "windows-amd64" "zip"
           copy_latest "windows-arm64" "zip"
-          copy_latest "ubuntu-amd64" "tar.gz"
+          copy_latest "linux-amd64" "tar.gz"
+          copy_latest "linux-arm64" "tar.gz"
           copy_latest "macos-amd64" "zip"
           copy_latest "macos-arm64" "zip"
           copy_latest "android-arm64" "apk"
+
+          # Older Linux clients look up this exact name in the manifest.
+          cp "r2-latest/${APP_NAME}-linux-amd64.tar.gz" "r2-latest/${APP_NAME}-ubuntu-amd64.tar.gz"
 
           printf "%s\n" "${RELEASE_TAG}" > r2-latest/version.txt
           python - <<'PY'
@@ -350,7 +360,10 @@ jobs:
           for path in sorted(latest_dir.iterdir()):
               if not path.is_file() or path.name.endswith(".sha256.txt") or path.name in {"manifest.json", "version.txt"}:
                   continue
-              versioned_name = f"{app_name}-{version}-{path.name.removeprefix(app_name + '-')}"
+              package = path.name.removeprefix(app_name + '-')
+              if package == "ubuntu-amd64.tar.gz":
+                  package = "linux-amd64.tar.gz"
+              versioned_name = f"{app_name}-{version}-{package}"
               data = path.read_bytes()
               assets.append({
                   "name": path.name,

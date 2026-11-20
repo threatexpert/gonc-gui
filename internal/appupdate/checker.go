@@ -167,7 +167,9 @@ func assetName(goos, goarch string) string {
 	case "darwin/arm64":
 		return "gonc-gui-macos-arm64.zip"
 	case "linux/amd64":
-		return "gonc-gui-ubuntu-amd64.tar.gz"
+		return "gonc-gui-linux-amd64.tar.gz"
+	case "linux/arm64":
+		return "gonc-gui-linux-arm64.tar.gz"
 	default:
 		return ""
 	}

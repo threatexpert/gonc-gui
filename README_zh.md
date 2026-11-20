@@ -44,6 +44,8 @@ Gonc 通过共享口令帮助两台设备找到彼此，在相同内网可快速
 | --- | --- |
 | Windows x64 | `gonc-gui-<version>-windows-amd64.zip` |
 | Windows arm64 | `gonc-gui-<version>-windows-arm64.zip` |
+| Linux x64 | `gonc-gui-<version>-linux-amd64.tar.gz` |
+| Linux arm64 | `gonc-gui-<version>-linux-arm64.tar.gz` |
 | Android arm64 | `gonc-gui-<version>-android-arm64.apk` |
 
 在 Windows 上使用远程组网功能时，请将 `gonc-gui.exe` 和 `wintun.dll` 放在同一

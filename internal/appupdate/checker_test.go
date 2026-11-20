@@ -53,8 +53,8 @@ func TestAssetName(t *testing.T) {
 		{"windows", "arm64", "gonc-gui-windows-arm64.zip"},
 		{"darwin", "amd64", "gonc-gui-macos-amd64.zip"},
 		{"darwin", "arm64", "gonc-gui-macos-arm64.zip"},
-		{"linux", "amd64", "gonc-gui-ubuntu-amd64.tar.gz"},
-		{"linux", "arm64", ""},
+		{"linux", "amd64", "gonc-gui-linux-amd64.tar.gz"},
+		{"linux", "arm64", "gonc-gui-linux-arm64.tar.gz"},
 	}
 	for _, tt := range tests {
 		if got := assetName(tt.goos, tt.goarch); got != tt.want {
@@ -145,7 +145,7 @@ func TestCheckErrors(t *testing.T) {
 		{
 			name: "unsupported platform",
 			body: validManifest("1.2.17", "gonc-gui-linux-arm64.tar.gz", validURL),
-			goos: "linux", goarch: "arm64",
+			goos: "linux", goarch: "386",
 			wantCode: ErrorUnsupportedPlatform, wantIs: errUnsupportedPlatform,
 		},
 		{
