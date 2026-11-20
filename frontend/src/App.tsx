@@ -32,6 +32,7 @@ import {
   type AddPickerState,
 } from './sendContentState';
 import {
+  receivePassphraseForStart,
   fileTransferReportBelongsToRun,
   inlineQrShouldMask,
   isFileTransferMode,
@@ -259,6 +260,7 @@ const text = {
     start: '开始',
     startShare: '开始分享',
     startReceive: '连接对方',
+    generateAndReceive: '生成口令准备接收',
     startVpnServer: '启动 VPN 服务端',
     startVpnClient: '连接 VPN',
     vpnConnectAdminPrompt: '将请求管理员权限',
@@ -572,6 +574,7 @@ const text = {
     start: 'Start',
     startShare: 'Start Sharing',
     startReceive: 'Connect',
+    generateAndReceive: 'Generate passphrase and connect',
     startVpnServer: 'Start VPN Server',
     startVpnClient: 'Connect VPN',
     vpnConnectAdminPrompt: 'Administrator permission required',
@@ -1319,11 +1322,11 @@ function App() {
   const supportsDNSProtection = isWindows || runtimePlatform === 'linux';
   const dnsProtectionActive = supportsDNSProtection && !vpnClientTunnelOnly && vpnClientBlockDNSLeak;
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
-  const canStart = !startPending && !shareMutationPending && !pickerPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
+  const canStart = !startPending && !shareMutationPending && !pickerPending && !currentRunning && (mode === 'receive' || activePassword.trim().length > 0) && (mode !== 'send' || sharePaths.length > 0);
   const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
   const canDownload = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && selectedPaths.size > 0 && !receivedActionsUnavailable);
   const canDownloadAll = Boolean(mode === 'receive' && status.localHTTPUrl && saveDir && remoteList && visibleEntries.length > 0 && !receivedActionsUnavailable);
-  const primaryLabel = mode === 'send' ? t.startShare : (mode === 'receive' ? t.startReceive : (mode === 'vpnServer' ? t.startVpnServer : t.startVpnClient));
+  const primaryLabel = mode === 'send' ? t.startShare : (mode === 'receive' ? (receivePassword.trim() ? t.startReceive : t.generateAndReceive) : (mode === 'vpnServer' ? t.startVpnServer : t.startVpnClient));
   const showVpnAdminPrompt = mode === 'vpnClient' && !vpnClientTunnelOnly && !isAdministrator;
   const p2pSessions = useMemo(() => Object.values(sendP2PReports), [sendP2PReports]);
   const vpnServerSessions = useMemo(() => Object.values(vpnServerP2PReports), [vpnServerP2PReports]);
@@ -1936,8 +1939,12 @@ function App() {
   }
 
   async function generateReceivePassword() {
+    if (startPendingRef.current || receiveRunning) return;
+    const receiveRun = activeReceiveTransferRun.current;
     setError('');
-    setReceivePassword(await GeneratePassword());
+    const generated = await GeneratePassword();
+    if (startPendingRef.current || receiveRun !== activeReceiveTransferRun.current) return;
+    setReceivePassword(generated);
     revealPasswordTemporarily('receive');
   }
 
@@ -1993,6 +2000,7 @@ function App() {
   }
 
   function setPasswordForMode(targetMode: Mode, value: string) {
+    if (targetMode === 'receive' && startPendingRef.current) return;
     if (targetMode === 'send') {
       setSendPassword(value);
     } else if (targetMode === 'receive') {
@@ -2200,10 +2208,13 @@ function App() {
     setStartPending(gate.pending);
     return shareStartCoordinatorRef.current!.run(async (startupSharePaths) => {
     setError('');
-    const passphrase = activePassword.trim();
+    let passphrase = activePassword.trim();
     const clientRunId = isFileTransferMode(mode) || mode === 'vpnClient' ? ++transferRunSequence.current : 0;
     let transferStarted = false;
     try {
+      if (mode === 'receive') {
+        passphrase = await receivePassphraseForStart(passphrase, GeneratePassword, setReceivePassword);
+      }
       if (mode === 'send') {
         activeSendTransferRun.current = clientRunId;
         setSendQrHasConnected(false);
@@ -3043,7 +3054,7 @@ function App() {
   const startIcon: IconName = mode === 'send' ? 'send' : (mode === 'receive' ? 'link' : (mode === 'vpnServer' ? 'server' : 'shield'));
   const startHint = currentRunning || canStart || startPending
     ? ''
-    : (mode === 'send' && sharePaths.length === 0 ? t.addContentFirst : (!activePassword.trim() ? t.enterPassphraseFirst : ''));
+    : (mode === 'send' && sharePaths.length === 0 ? t.addContentFirst : (mode !== 'receive' && !activePassword.trim() ? t.enterPassphraseFirst : ''));
   const navTone: Record<Mode, StatusTone | null> = {
     send: sendRunning ? sendStatus.tone : null,
     receive: receiveRunning ? receiveStatus.tone : null,
@@ -3100,9 +3111,10 @@ function App() {
     </>
   ) : mode === 'receive' ? (
     <>
-      {!receiveRunning && toolButton('regenerate', t.generate, generateReceivePassword)}
-      {!receiveRunning && toolButton('paste', t.paste, pastePassword)}
-      {!receiveRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+      {!receiveRunning && toolButton('regenerate', t.generate, generateReceivePassword, startPending)}
+        {toolButton('copy', t.copy, copyPassword, !receivePassword.trim())}
+      {!receiveRunning && toolButton('paste', t.paste, pastePassword, startPending)}
+      {!receiveRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy || startPending)}
     </>
   ) : mode === 'vpnServer' ? (
     <>
@@ -3142,7 +3154,7 @@ function App() {
             }
           }}
           placeholder={t.passPlaceholder}
-          disabled={currentRunning}
+          disabled={currentRunning || (mode === 'receive' && startPending)}
           spellCheck={false}
           autoComplete="off"
         />

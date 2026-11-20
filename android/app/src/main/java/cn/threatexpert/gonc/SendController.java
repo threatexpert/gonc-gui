@@ -179,9 +179,9 @@ final class SendController {
             }
         }
 
-        card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), true), u.blockParams(u.dp(14)));
+        card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), true), u.blockParams(u.dp(8)));
         card.addView(passwordField());
-        card.addView(u.sectionDivider(), u.dividerParams(u.dp(12)));
+        card.addView(u.sectionDivider(), u.dividerParams(u.dp(6)));
         card.addView(protocolToggle());
 
         Button primary = session == null
@@ -195,6 +195,11 @@ final class SendController {
             }
         });
         card.addView(primary, u.blockParams(u.dp(12)));
+        if (session == null) {
+            Button scanShare = u.secondaryButton(string(R.string.scan_and_share));
+            scanShare.setOnClickListener(v -> scanPassword());
+            card.addView(scanShare, u.blockParams(u.dp(8)));
+        }
         return card;
     }
 
@@ -369,73 +374,40 @@ final class SendController {
 
     private View passwordField() {
         UiKit u = host.ui();
-        if (session != null) {
-            LinearLayout qrOnly = u.column();
-            View qr = PassphraseQrView.create(
-                    host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
-                    sendQrHasConnected,
-                    () -> host.showPassphraseQr(password.trim()),
-                    () -> host.toast(R.string.inline_qr_generation_failed));
-            int qrSize = u.dp(TransferInlineQrState.inlineQrSizeDp());
-            LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(qrSize, qrSize);
-            qrParams.gravity = Gravity.CENTER_HORIZONTAL;
-            qrOnly.addView(qr, qrParams);
-            return qrOnly;
+        FrameLayout panel = new FrameLayout(host.context());
+        LinearLayout qrOnly = u.column();
+        View qr = PassphraseQrView.create(
+                host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
+                session != null && sendQrHasConnected,
+                this::showPasswordQr,
+                () -> host.toast(R.string.inline_qr_generation_failed));
+        int qrSize = u.dp(TransferInlineQrState.inlineQrSizeDp());
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(qrSize, qrSize);
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        qrOnly.addView(qr, qrParams);
+        LinearLayout tools = u.row();
+        tools.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        if (session == null) {
+            View random = u.iconButton(R.drawable.ic_key_random, R.string.random_passphrase, this::randomizePassword);
+            random.setPadding(u.dp(6), u.dp(10), u.dp(6), u.dp(10));
+            tools.addView(random, new LinearLayout.LayoutParams(u.dp(32), u.dp(40)));
         }
-        boolean locked = session != null;
-        LinearLayout box = u.column();
-        box.addView(u.text(string(R.string.passphrase_hint), 12, u.muted(), Typeface.NORMAL), u.blockParams(u.dp(4)));
+        View copy = u.iconButton(R.drawable.ic_key_copy, R.string.copy, this::copyPassword);
+        copy.setPadding(u.dp(6), u.dp(10), u.dp(6), u.dp(10));
+        tools.addView(copy, new LinearLayout.LayoutParams(u.dp(32), u.dp(40)));
+        panel.addView(qrOnly, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, qrSize));
+        panel.addView(tools, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(40), Gravity.TOP | Gravity.END));
+        return panel;
+    }
 
-        LinearLayout line = u.row();
-        EditText input = new EditText(host.context());
-        input.setSingleLine(true);
-        input.setText(password);
-        input.setTextColor(u.ink());
-        input.setTextSize(15);
-        input.setHint(string(R.string.passphrase_input_hint));
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(u.dp(12), 0, u.dp(12), 0);
-        input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
-        input.setEnabled(!locked);
-        applyPasswordVisibility(input);
-        input.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (session != null) {
-                    return;
-                }
-                password = s.toString();
-                revealPasswordTemporarily(input);
-            }
-
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
+    private void showPasswordQr() {
+        final long dialogRun = runId;
+        host.showPassphraseQr(password.trim(), session == null, value -> {
+            if (session != null || dialogRun != runId) return;
+            password = value;
+            PassphraseQrView.clearCache();
+            host.requestRender();
         });
-        line.addView(input, new LinearLayout.LayoutParams(0, u.dp(46), 1));
-        box.addView(line, u.blockParams(u.dp(8)));
-
-        LinearLayout actions = u.row();
-        Button change = u.secondaryButton(string(R.string.random_passphrase));
-        u.setControlEnabled(change, !locked);
-        change.setOnClickListener(v -> randomizePassword());
-        Button copy = u.secondaryButton(string(R.string.copy));
-        copy.setOnClickListener(v -> copyPassword());
-        Button scan = u.secondaryButton(string(R.string.scan));
-        u.setControlEnabled(scan, !locked);
-        scan.setOnClickListener(v -> scanPassword());
-        Button qr = u.secondaryButton(string(R.string.qr));
-        qr.setOnClickListener(v -> host.showPassphraseQr(password.trim()));
-        actions.addView(change, new LinearLayout.LayoutParams(0, u.dp(40), 1));
-        actions.addView(copy, u.actionParams());
-        actions.addView(scan, u.actionParams());
-        actions.addView(qr, u.actionParams());
-        box.addView(actions, u.blockParams(u.dp(6)));
-        return box;
     }
 
     private View protocolToggle() {
@@ -522,20 +494,27 @@ final class SendController {
         if (session != null) {
             return;
         }
+        if (shareItems.isEmpty()) {
+            host.toast(R.string.toast_select_file_first);
+            return;
+        }
+        final long scanRun = runId;
         host.scanPassphrase(result -> {
-            if (session != null) {
+            if (session != null || scanRun != runId) {
                 return;
             }
             password = result.trim();
             revealPasswordTemporarily();
             host.log("info", "Passphrase scanned");
             host.requestRender();
+            start();
         });
     }
 
     // --- session ----------------------------------------------------------
 
     private void start() {
+        if (session != null) return;
         if (shareItems.isEmpty()) {
             host.toast(R.string.toast_select_file_first);
             return;

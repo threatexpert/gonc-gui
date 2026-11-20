@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -26,6 +27,19 @@ final class UiKit {
 
     UiKit(Context context) {
         this.context = context;
+    }
+
+    ImageButton iconButton(int icon, int label, Runnable action) {
+        ImageButton button = new ImageButton(context);
+        button.setImageResource(icon);
+        button.setColorFilter(muted());
+        button.setBackgroundTintList(null);
+        button.setBackground(null);
+        button.setPadding(dp(10), dp(10), dp(10), dp(10));
+        button.setContentDescription(context.getString(label));
+        button.setTooltipText(context.getString(label));
+        button.setOnClickListener(v -> action.run());
+        return button;
     }
 
     // --- colors -----------------------------------------------------------

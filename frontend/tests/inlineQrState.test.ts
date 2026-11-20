@@ -2,6 +2,42 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {readLastMode, saveLastMode, startupFileMode, lastModeStorageKey} from '../src/pagePreference.js';
+import {receivePassphraseForStart} from '../src/inlineQrState.js';
+
+test('empty receive passphrase is generated and displayed before connecting with the same value', async () => {
+  for (const input of ['', '   ']) {
+    const events: string[] = [];
+    const passphrase = await receivePassphraseForStart(input, async () => {
+      events.push('generate');
+      return ' generated123 ';
+    }, value => events.push(`display:${value}`));
+    events.push(`connect:${passphrase}`);
+    assert.deepEqual(events, ['generate', 'display:generated123', 'connect:generated123']);
+  }
+});
+
+test('configured receive passphrase is reused; clearing it restores generation', async () => {
+  let generations = 0;
+  let displayed = 'custom123';
+  const generate = async () => { generations++; return 'fresh123'; };
+  assert.equal(await receivePassphraseForStart(' custom123 ', generate, value => { displayed = value; }), 'custom123');
+  assert.equal(generations, 0);
+  assert.equal(displayed, 'custom123');
+  assert.equal(await receivePassphraseForStart('', generate, value => { displayed = value; }), 'fresh123');
+  assert.equal(generations, 1);
+  assert.equal(displayed, 'fresh123');
+});
+
+test('receive generation failure never proceeds to connecting or changing the field', async () => {
+  for (const generate of [async () => { throw new Error('generation failed'); }, async () => ' ']) {
+    let connected = false;
+    await assert.rejects(async () => {
+      await receivePassphraseForStart('', generate, () => assert.fail('must not change field'));
+      connected = true;
+    });
+    assert.equal(connected, false);
+  }
+});
 
 test('last page is persisted in local storage with a safe default', () => {
   const entries = new Map<string, string>();

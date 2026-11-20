@@ -98,6 +98,8 @@ final class ReceiveController {
     private TextView remoteFilesSummaryTextView;
     private TextView remoteFilesTotalSummaryTextView;
     private Button downloadSelectedButton;
+    private Button connectButton;
+    private Button scanConnectButton;
     private final Map<String, CheckBox> remoteFileCheckboxes = new LinkedHashMap<>();
     private boolean updatingRemoteSelectionViews;
 
@@ -290,11 +292,13 @@ final class ReceiveController {
         card.addView(sectionDivider(), dividerParams(dp(12)));
         card.addView(protocolToggle());
 
-        Button primary = receiveSession == null ? primaryButton(string(R.string.connect)) : dangerButton(string(R.string.disconnect));
+        Button primary = primaryButton(string(receivePassword.trim().isEmpty() ? R.string.scan_and_connect : R.string.connect));
+        connectButton = primary;
         setControlEnabled(primary, canStartReceiveConnection());
         primary.setOnClickListener(v -> {
             if (canStartReceiveConnection()) {
-                startP2PReceive();
+                if (receivePassword.trim().isEmpty()) scanPassword();
+                else startP2PReceive();
             } else {
                 if (receiveSession != null) {
                     stopSession();
@@ -302,6 +306,12 @@ final class ReceiveController {
             }
         });
         card.addView(primary, blockParams(dp(12)));
+        Button scan = secondaryButton(string(R.string.scan_and_connect));
+        scanConnectButton = scan;
+        setControlEnabled(scan, canStartReceiveConnection());
+        scan.setVisibility(receivePassword.trim().isEmpty() ? View.GONE : View.VISIBLE);
+        scan.setOnClickListener(v -> scanPassword());
+        card.addView(scan, blockParams(dp(8)));
         return card;
     }
 
@@ -1323,7 +1333,7 @@ final class ReceiveController {
         input.setText(receivePassword);
         input.setTextColor(ink());
         input.setTextSize(15);
-        input.setHint(string(R.string.passphrase_input_hint));
+        input.setHint(string(R.string.receive_passphrase_placeholder));
         input.setHintTextColor(Color.rgb(148, 163, 184));
         input.setPadding(dp(12), 0, dp(12), 0);
         input.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
@@ -1342,6 +1352,8 @@ final class ReceiveController {
                 }
                 receivePassword = s.toString();
                 revealPasswordTemporarily(input);
+                if (connectButton != null) connectButton.setText(receivePassword.trim().isEmpty() ? R.string.scan_and_connect : R.string.connect);
+                if (scanConnectButton != null) scanConnectButton.setVisibility(receivePassword.trim().isEmpty() ? View.GONE : View.VISIBLE);
             }
 
             @Override
@@ -1352,23 +1364,18 @@ final class ReceiveController {
 
         box.addView(line, blockParams(dp(8)));
 
-        LinearLayout actions = row();
-        Button random = secondaryButton(string(R.string.random_passphrase));
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setBackground(rounded(Color.WHITE, dp(6), Color.rgb(203, 215, 230), 1));
+        input.setBackgroundColor(Color.TRANSPARENT);
+        input.setMinimumWidth(0);
+        View random = host.ui().iconButton(R.drawable.ic_key_random, R.string.random_passphrase, this::randomizePassword);
+        View paste = host.ui().iconButton(R.drawable.ic_key_paste, R.string.paste, this::pastePassword);
+        View qr = host.ui().iconButton(R.drawable.ic_key_qr, R.string.qr, this::showPasswordQr);
         setControlEnabled(random, !locked);
-        random.setOnClickListener(v -> randomizePassword());
-        Button paste = secondaryButton(string(R.string.paste));
         setControlEnabled(paste, !locked);
-        paste.setOnClickListener(v -> pastePassword());
-        Button scan = secondaryButton(string(R.string.scan));
-        setControlEnabled(scan, !locked);
-        scan.setOnClickListener(v -> scanPassword());
-        Button qr = secondaryButton(string(R.string.qr));
-        qr.setOnClickListener(v -> showPasswordQr());
-        actions.addView(random, new LinearLayout.LayoutParams(0, dp(40), 1));
-        actions.addView(paste, actionParams());
-        actions.addView(scan, actionParams());
-        actions.addView(qr, actionParams());
-        box.addView(actions, blockParams(dp(6)));
+        line.addView(random, new LinearLayout.LayoutParams(dp(40), dp(46)));
+        line.addView(paste, new LinearLayout.LayoutParams(dp(40), dp(46)));
+        line.addView(qr, new LinearLayout.LayoutParams(dp(40), dp(46)));
         return box;
     }
 
@@ -1463,21 +1470,28 @@ final class ReceiveController {
     }
 
     private void showPasswordQr() {
-        host.showPassphraseQr(receivePassword.trim());
+        final long dialogRun = receiveRunId;
+        host.showPassphraseQr(receivePassword.trim(), canStartReceiveConnection(), value -> {
+            if (!canStartReceiveConnection() || dialogRun != receiveRunId) return;
+            receivePassword = value;
+            host.requestRender();
+        });
     }
 
     private void scanPassword() {
-        if (receiveSession != null) {
+        if (!canStartReceiveConnection()) {
             return;
         }
+        final long scanRun = receiveRunId;
         host.scanPassphrase(result -> {
-            if (receiveSession != null) {
+            if (!canStartReceiveConnection() || scanRun != receiveRunId) {
                 return;
             }
             receivePassword = result.trim();
             revealPasswordTemporarily();
             host.log("info", "Passphrase scanned");
             host.requestRender();
+            startP2PReceive();
         });
     }
 

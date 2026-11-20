@@ -1,5 +1,17 @@
 export type FileTransferMode = 'send' | 'receive';
 
+export async function receivePassphraseForStart(
+  current: string,
+  generate: () => Promise<string>,
+  onGenerated: (passphrase: string) => void,
+) {
+  if (current.trim()) return current.trim();
+  const passphrase = (await generate()).trim();
+  if (!passphrase) throw new Error('enter a passphrase');
+  onGenerated(passphrase);
+  return passphrase;
+}
+
 export function normalizedQrPassphrase(value: string) {
   return value.trim();
 }

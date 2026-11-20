@@ -255,7 +255,7 @@
     <string name="passphrase_qr">口令二维码</string>
     <string name="view_passphrase_qr">查看口令二维码</string>
     <string name="inline_qr_generation_failed">无法生成二维码</string>
-    <string name="passphrase_qr_copy_hint">长按二维码或口令可复制</string>
+    <string name="passphrase_qr_copy_hint">长按二维码可复制</string>
     <string name="source_title">开源项目</string>
     <string name="source_description">Gonc 是开源项目。你可以在 GitHub 查看源代码、反馈问题和关注更新。</string>
     <string name="check_for_updates">检查更新</string>
@@ -297,4 +297,8 @@
     <string name="vpn_cleanup_failed">VPN 清理失败，请点击断开重试</string>
     <string name="symbolic_link">符号链接</string>
     <string name="link_target_unavailable">链接目标不可用</string>
+    <string name="scan_and_share">扫码分享</string>
+    <string name="scan_and_connect">扫码连接对方</string>
+    <string name="editable_passphrase">口令（可编辑）</string>
+    <string name="receive_passphrase_placeholder">输入口令或扫码连接</string>
 </resources>

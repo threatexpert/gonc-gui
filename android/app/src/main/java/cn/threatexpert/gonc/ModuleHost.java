@@ -82,6 +82,9 @@ interface ModuleHost {
 
     void showPassphraseQr(String passphrase);
 
+    /** Editable callers receive the changed passphrase once when the dialog closes. */
+    void showPassphraseQr(String passphrase, boolean editable, Consumer<String> onChanged);
+
     /** Launch the QR scanner; {@code onResult} receives the scanned text on the main thread. */
     void scanPassphrase(Consumer<String> onResult);
 

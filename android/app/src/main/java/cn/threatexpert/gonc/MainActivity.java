@@ -110,7 +110,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private VpnClientController vpnClient;
     private SendController sendController;
     private ReceiveController receiveController;
-    private java.util.function.Consumer<String> pendingScanCallback;
+    private final PendingQrScan pendingQrScan = new PendingQrScan();
     private boolean pendingScanIsProfile;
     private int aboutUpdateGeneration;
 
@@ -246,13 +246,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_SCAN_QR) {
             String result = data == null ? null : data.getStringExtra(Intents.Scan.RESULT);
-            if (result != null && !result.trim().isEmpty()) {
-                if (pendingScanCallback != null) {
-                    java.util.function.Consumer<String> callback = pendingScanCallback;
-                    pendingScanCallback = null;
-                    callback.accept(result.trim());
-                }
-            }
+            pendingQrScan.complete(resultCode == RESULT_OK, result);
             return;
         }
         if (requestCode == REQUEST_VPN_PERMISSION) {
@@ -298,6 +292,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 launchQrScanner();
             } else {
+                pendingQrScan.cancel();
                 Toast.makeText(this, R.string.toast_camera_permission, Toast.LENGTH_SHORT).show();
             }
         } else if (requestCode == REQUEST_STORAGE_PERMISSION) {
@@ -1078,60 +1073,20 @@ public final class MainActivity extends Activity implements ModuleHost {
 
     @Override
     public void showPassphraseQr(String passphrase) {
-        if (passphrase.isEmpty()) {
+        showPassphraseQr(passphrase, false, null);
+    }
+
+    @Override
+    public void showPassphraseQr(String passphrase, boolean editable, java.util.function.Consumer<String> onChanged) {
+        if (!editable && passphrase.trim().isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
             return;
         }
         try {
-            Dialog dialog = new Dialog(this);
-            dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            LinearLayout box = column();
-            box.setPadding(dp(18), dp(18), dp(18), dp(18));
-            box.setBackground(rounded(Color.WHITE, dp(8), 0, 0));
-            TextView title = text(getString(R.string.passphrase_qr), 16, ink(), Typeface.BOLD);
-            title.setGravity(Gravity.CENTER);
-            box.addView(title);
-
-            Bitmap bitmap = QrCodes.encode(passphrase, dp(260));
-            ImageView image = new ImageView(this);
-            image.setImageBitmap(bitmap);
-            image.setAdjustViewBounds(true);
-            image.setBackgroundColor(Color.WHITE);
-            image.setLongClickable(true);
-            image.setOnLongClickListener(v -> {
-                copyPassphraseFromQrDialog(passphrase);
-                return true;
-            });
-            box.addView(image, blockParams(dp(12)));
-
-            TextView hint = text(getString(R.string.passphrase_qr_copy_hint), 12, muted(), Typeface.NORMAL);
-            hint.setGravity(Gravity.CENTER);
-            box.addView(hint, blockParams(dp(4)));
-
-            TextView value = text(passphrase, 14, ink(), Typeface.BOLD);
-            value.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-            value.setTextIsSelectable(true);
-            value.setGravity(Gravity.CENTER);
-            value.setSingleLine(false);
-            value.setPadding(dp(10), dp(8), dp(10), dp(8));
-            value.setBackground(rounded(Color.rgb(248, 251, 255), dp(7), Color.rgb(226, 232, 240), 1));
-            value.setLongClickable(true);
-            value.setOnLongClickListener(v -> {
-                copyPassphraseFromQrDialog(passphrase);
-                return true;
-            });
-            box.addView(value, blockParams(dp(8)));
-
-            Button close = secondaryButton(getString(R.string.close));
-            close.setOnClickListener(v -> dialog.dismiss());
-            box.addView(close, blockParams(dp(12)));
-
-            dialog.setContentView(box);
-            dialog.show();
+            PassphraseQrDialog.show(this, ui(), passphrase, editable, onChanged, this::copyPassphraseFromQrDialog);
         } catch (Exception error) {
             Toast.makeText(this, R.string.toast_qr_failed, Toast.LENGTH_SHORT).show();
             appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());
-            render();
         }
     }
 
@@ -1716,7 +1671,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private void startScan(boolean profilePrompt, java.util.function.Consumer<String> onResult) {
-        pendingScanCallback = onResult;
+        if (!pendingQrScan.begin(onResult)) return;
         pendingScanIsProfile = profilePrompt;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
