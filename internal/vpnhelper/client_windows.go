@@ -106,7 +106,7 @@ func (c *Client) Stop() error {
 	return err
 }
 
-func (c *Client) PrepareBypass(dns, local string) (string, error) {
+func (c *Client) PrepareBypass(dns, local string, _ bool) (string, error) {
 	resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
 	return resp.LocalIP, err
 }

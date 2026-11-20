@@ -31,6 +31,16 @@ type BypassSession struct {
 	prepare        func(bypassSelection) (*bypassRoute, error)
 }
 
+// CurrentExit returns a consistent snapshot to the privileged socket binder.
+func (b *BypassSession) CurrentExit() (device, ip, dns string, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.route == nil {
+		return "", "", "", fmt.Errorf("VPN bypass is unavailable")
+	}
+	return b.selection.Name, b.LocalIP, b.dns, nil
+}
+
 func (b *BypassSession) closeRoute() error {
 	if b.route != nil && b.route.close != nil {
 		if err := b.route.close(); err != nil {

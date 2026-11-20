@@ -527,7 +527,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		if req.DisconnectProtection {
 			plan, _ = PlanProtection(req)
 			requestedLocal, _, _ := net.SplitHostPort(plan.Local)
-			localIP, err := helper.PrepareBypass(plan.DNS, requestedLocal)
+			localIP, err := helper.PrepareBypass(plan.DNS, requestedLocal, req.BlockDNSLeak)
 			if err != nil {
 				return failedVPNStart(helper, fmt.Errorf("prepare reconnect bypass: %w", err))
 			}
@@ -697,7 +697,7 @@ func systemVPNConfig(req Request, s vpnTunnelSnapshot, routes []string, ipv6Avai
 		RejectIPv6:           vpnconfig.ShouldRejectIPv6(routes, ipv6Available),
 		MTU:                  normalizeMTU(req.MTU),
 		RouteMetric:          normalizeRouteMetric(req.RouteMetric),
-		BlockDNSLeak:         req.BlockDNSLeak || req.DisconnectProtection,
+		BlockDNSLeak:         req.BlockDNSLeak,
 		LogLevel:             "warn",
 	}
 }

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 
+	"gonc-gui/internal/vpnconfig"
 	"gonc-gui/internal/winvpn"
 )
 
@@ -13,7 +16,11 @@ func Run(connectAddr, token string) (result error) {
 	if connectAddr == "" || token == "" {
 		return fmt.Errorf("missing helper connection parameters")
 	}
-	conn, err := net.Dial("tcp", connectAddr)
+	network := "tcp"
+	if runtime.GOOS == "linux" && strings.HasPrefix(connectAddr, "@") {
+		network = "unix"
+	}
+	conn, err := net.Dial(network, connectAddr)
 	if err != nil {
 		return err
 	}
@@ -56,9 +63,7 @@ func Run(connectAddr, token string) (result error) {
 				_ = enc.Encode(response{OK: false, Error: "VPN bypass already prepared"})
 				continue
 			}
-			var err error
-			prepared, prepareErr := winvpn.PrepareBypass(req.Address, req.LocalIP)
-			err = prepareErr
+			prepared, err := winvpn.PrepareBypass(req.Address, req.LocalIP)
 			if prepared != nil {
 				resources.bypass = prepared
 			}
@@ -66,7 +71,13 @@ func Run(connectAddr, token string) (result error) {
 				_ = enc.Encode(response{OK: false, Error: err.Error()})
 				continue
 			}
-			_ = enc.Encode(response{OK: true, LocalIP: prepared.LocalIP})
+			bound, address, err := prepareBindingService(conn, prepared)
+			if err != nil {
+				_ = enc.Encode(response{Error: err.Error()})
+				continue
+			}
+			resources.bypass = bound
+			_ = enc.Encode(response{OK: true, LocalIP: prepared.LocalIP, BindAddress: address})
 		case OpRefresh:
 			if resources.bypass == nil {
 				_ = enc.Encode(response{Error: "VPN bypass is not prepared"})
@@ -110,6 +121,12 @@ func Run(connectAddr, token string) (result error) {
 			if req.Trace {
 				trace = func(message string) {
 					_ = enc.Encode(response{Progress: true, Logs: []string{message}})
+				}
+			}
+			if b, ok := resources.bypass.(interface{ configureDNSBypass(*vpnconfig.Config) error }); ok && req.Config.BlockDNSLeak {
+				if err := b.configureDNSBypass(&req.Config); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
 				}
 			}
 			session, err := winvpn.StartWithTrace(req.Config, trace)

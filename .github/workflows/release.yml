@@ -80,7 +80,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev xvfb xauth dbus-daemon
 
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
@@ -108,10 +108,28 @@ jobs:
         shell: bash
         run: |
           if [[ -n "${{ matrix.linux_tags }}" ]]; then
-            wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }}"
+            wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }}" -o gonc-gui-webkit41
           else
             wails build -platform "${{ matrix.target }}"
           fi
+
+      - name: Test WebKitGTK 4.1 app on Ubuntu
+        if: runner.os == 'Linux'
+        run: |
+          readelf -d build/bin/gonc-gui-webkit41 | grep -F 'Shared library: [libwebkit2gtk-4.1.so.0]'
+          bash .github/scripts/smoke-linux.sh build/bin/gonc-gui-webkit41
+
+      - name: Build and test WebKitGTK 4.0 app on glibc 2.28
+        if: runner.os == 'Linux'
+        run: |
+          # Debian 10 (buster-slim), pinned to the amd64 image.
+          docker run --rm --platform linux/amd64 --shm-size=256m \
+            -v "${GITHUB_WORKSPACE}:/src" -w /src \
+            -v "$(go env GOROOT):/usr/local/go:ro" \
+            -v "$(go env GOMODCACHE):/go/pkg/mod:ro" \
+            -v /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca.crt:ro \
+            debian@sha256:32220ea48be72979c9f0810d69f3de9145c9584c2ee966c6ec26edbcf4640c0b \
+            bash .github/scripts/build-linux-compat.sh
 
       - name: Package desktop artifact
         shell: bash
@@ -131,7 +149,8 @@ jobs:
             (cd dist && 7z a -tzip "${release_name}.zip" "${release_name}" > /dev/null)
           else
             cp "build/bin/${{ matrix.binary }}" "${package_dir}/"
-            chmod +x "${package_dir}/${{ matrix.binary }}"
+            cp build/bin/gonc-gui-webkit41 "${package_dir}/"
+            chmod +x "${package_dir}/${{ matrix.binary }}" "${package_dir}/gonc-gui-webkit41"
             cp README.md LICENSE "${package_dir}/"
             tar -czf "dist/${release_name}.tar.gz" -C dist "${release_name}"
           fi

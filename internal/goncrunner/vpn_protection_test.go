@@ -108,6 +108,18 @@ func TestProtectionValidationAndScope(t *testing.T) {
 	}
 }
 
+func TestDisconnectProtectionAndDNSLeakProtectionAreIndependent(t *testing.T) {
+	for _, disconnect := range []bool{false, true} {
+		for _, dns := range []bool{false, true} {
+			req := Request{DisconnectProtection: disconnect, BlockDNSLeak: dns}
+			cfg := systemVPNConfig(req, vpnTunnelSnapshot{}, nil, false)
+			if cfg.DisconnectProtection != disconnect || cfg.BlockDNSLeak != dns {
+				t.Fatalf("disconnect=%t DNS=%t: got disconnect=%t DNS=%t", disconnect, dns, cfg.DisconnectProtection, cfg.BlockDNSLeak)
+			}
+		}
+	}
+}
+
 func TestProtectionDetailsRetainDNSAndCaptureUntilStop(t *testing.T) {
 	d := newVPNDetailsTracker(Request{DisconnectProtection: true}, nil)
 	d.connection("connected", time.Now())

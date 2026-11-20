@@ -1,6 +1,10 @@
 package vpnconfig
 
 type Config struct {
+	// Set by the Linux helper after it authenticates the socket-binding channel.
+	LinuxDNSMark         uint32   `json:"-"`
+	LinuxDNSDevice       string   `json:"-"`
+	LinuxDNSBypass       string   `json:"-"`
 	DisconnectProtection bool     `json:"disconnectProtection"`
 	SOCKS5Endpoint       string   `json:"socks5Endpoint"`
 	Routes               []string `json:"routes"`

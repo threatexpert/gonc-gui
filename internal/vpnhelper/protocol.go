@@ -28,13 +28,14 @@ type request struct {
 }
 
 type response struct {
-	Revision   uint64   `json:"revision,omitempty"`
-	LocalIP    string   `json:"localIp,omitempty"`
-	Progress   bool     `json:"progress,omitempty"`
-	OK         bool     `json:"ok"`
-	Error      string   `json:"error,omitempty"`
-	Logs       []string `json:"logs,omitempty"`
-	DNSServers []string `json:"dnsServers"`
+	BindAddress string   `json:"bindAddress,omitempty"`
+	Revision    uint64   `json:"revision,omitempty"`
+	LocalIP     string   `json:"localIp,omitempty"`
+	Progress    bool     `json:"progress,omitempty"`
+	OK          bool     `json:"ok"`
+	Error       string   `json:"error,omitempty"`
+	Logs        []string `json:"logs,omitempty"`
+	DNSServers  []string `json:"dnsServers"`
 }
 
 // Progress frames are not command completion: keep reading until the final

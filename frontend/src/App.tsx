@@ -1,4 +1,4 @@
-﻿import {Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
+import {Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode} from 'react';
 import QRCode from 'qrcode';
 import type {KeyboardEvent as ReactKeyboardEvent} from 'react';
 import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader';
@@ -438,7 +438,7 @@ const text = {
     dnsLeakProtection: '防 DNS 泄漏',
     p2pWithLan: '同时启用局域网发现',
     p2pWithLanHint: '同时通过公网 P2P 和局域网发现对端。',
-    dnsLeakProtectionHint: '该特性仅在 Windows 生效。连接期间会阻止系统服务 Dnscache 走本地网络，通常使用全局路由模式时才需要。',
+    dnsLeakProtectionHint: 'Windows 阻止系统 DNS 服务从本地网络查询。Linux 将普通 DNS 查询（UDP/TCP 53）经 VPN 转发，并阻止其从物理网卡直出。',
     remoteFiles: '对方分享的文件',
     selectAll: '全选',
     invertSelection: '反选',
@@ -751,7 +751,7 @@ const text = {
     dnsLeakProtection: 'DNS leak protection',
     p2pWithLan: 'Enable LAN discovery alongside P2P',
     p2pWithLanHint: 'Discover peers through both public P2P and the local network.',
-    dnsLeakProtectionHint: 'Windows only. While connected, blocks the Dnscache system service from using the local network. Usually needed only in global routing mode.',
+    dnsLeakProtectionHint: 'Windows blocks the system DNS service from querying over the local network. Linux forwards DNS (UDP/TCP 53) through the VPN and blocks direct DNS traffic on physical interfaces.',
     remoteFiles: 'Peer Shared Files',
     selectAll: 'Select All',
     invertSelection: 'Invert',
@@ -1316,6 +1316,8 @@ function App() {
     );
   }
   const isWindows = runtimePlatform === 'windows';
+  const supportsDNSProtection = isWindows || runtimePlatform === 'linux';
+  const dnsProtectionActive = supportsDNSProtection && !vpnClientTunnelOnly && vpnClientBlockDNSLeak;
   const currentRunning = mode === 'send' ? sendRunning : (mode === 'receive' ? receiveRunning : (mode === 'vpnServer' ? vpnServerRunning : vpnClientRunning));
   const canStart = !startPending && !shareMutationPending && !pickerPending && !currentRunning && activePassword.trim().length > 0 && (mode !== 'send' || sharePaths.length > 0);
   const receivedActionsUnavailable = receivedDownloadActiveState || status.downloading || receivedCompletionRefreshPending;
@@ -2253,7 +2255,7 @@ function App() {
         linkConfig: vpnClientLinkConfig,
         mtu: normalizeVpnMTU(vpnClientMTU),
         routeMetric: normalizeRouteMetric(vpnClientRouteMetric),
-        blockDnsLeak: isWindows && vpnClientBlockDNSLeak,
+        blockDnsLeak: dnsProtectionActive,
         enableIpv6: hasIPv6Routes(vpnClientRouteCIDRs),
         tunnelOnly: vpnClientTunnelOnly,
         disconnectProtection: mode === 'vpnClient' && !vpnClientTunnelOnly && vpnClientDisconnectProtection,
@@ -3696,12 +3698,12 @@ function App() {
               )}
             </div>
           </SettingsSection>
-          <SettingsSection title={t.sectionDns} summary={vpnClientBlockDNSLeak ? t.dnsLeakProtection : normalizeLines(vpnClientDNSServers).split('\n')[0]}>
+          <SettingsSection title={t.sectionDns} summary={dnsProtectionActive ? t.dnsLeakProtection : normalizeLines(vpnClientDNSServers).split('\n')[0]}>
             <Toggle
               label={t.dnsLeakProtection}
               hint={t.dnsLeakProtectionHint}
-              checked={vpnClientBlockDNSLeak || (vpnClientDisconnectProtection && !vpnClientTunnelOnly)}
-              disabled={vpnClientRunning || vpnClientTunnelOnly || vpnClientDisconnectProtection}
+              checked={dnsProtectionActive}
+              disabled={!supportsDNSProtection || vpnClientRunning || vpnClientTunnelOnly}
               onChange={(checked) => {
                 setVpnClientBlockDNSLeak(checked);
                 updateCurrentVpnProfile({blockDnsLeak: checked});

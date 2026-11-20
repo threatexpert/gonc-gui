@@ -24,13 +24,17 @@ import (
 )
 
 type Client struct {
-	conn         net.Conn
-	enc          *json.Encoder
-	dec          *json.Decoder
-	local        *winvpn.Session
-	bypass       *winvpn.BypassSession
-	mu           sync.Mutex
-	cancelLaunch context.CancelFunc
+	conn           net.Conn
+	enc            *json.Encoder
+	dec            *json.Decoder
+	local          *winvpn.Session
+	bypass         *winvpn.BypassSession
+	mu             sync.Mutex
+	cancelLaunch   context.CancelFunc
+	bindingMu      sync.Mutex
+	bindAddress    string
+	releaseBinding func()
+	bindDNS        string
 }
 
 func StartElevated(ctx context.Context) (*Client, error) {
@@ -38,7 +42,11 @@ func StartElevated(ctx context.Context) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	network, address := "tcp", "127.0.0.1:0"
+	if runtime.GOOS == "linux" {
+		network, address = "unix", "@gonc-control-"+token[:32]
+	}
+	ln, err := net.Listen(network, address)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +71,20 @@ func StartElevated(ctx context.Context) (*Client, error) {
 		cancelLaunch()
 		return nil, err
 	}
+	if err := verifyElevatedPeer(peer.conn); err != nil {
+		peer.conn.Close()
+		cancelLaunch()
+		return nil, err
+	}
 	return &Client{conn: peer.conn, enc: peer.enc, dec: peer.dec, cancelLaunch: cancelLaunch}, nil
+}
+
+func (c *Client) clearBindingLocked() {
+	if c.releaseBinding != nil {
+		c.releaseBinding()
+		c.releaseBinding = nil
+	}
+	c.bindAddress = ""
 }
 
 // Start returns the DNS servers actually configured by the helper.
@@ -95,7 +116,12 @@ func (c *Client) StartWithTrace(config vpnconfig.Config, trace func(string)) ([]
 
 func (c *Client) Stop() error {
 	if c.conn != nil {
+		c.bindingMu.Lock()
+		defer c.bindingMu.Unlock()
 		_, err := c.call(request{Op: OpStop})
+		if err == nil {
+			c.clearBindingLocked()
+		}
 		return err
 	}
 	var err error
@@ -115,9 +141,20 @@ func (c *Client) Stop() error {
 	return err
 }
 
-func (c *Client) PrepareBypass(dns, local string) (string, error) {
+func (c *Client) PrepareBypass(dns, local string, blockDNSLeak bool) (string, error) {
 	if c.conn != nil {
+		c.bindingMu.Lock()
+		defer c.bindingMu.Unlock()
 		resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
+		if err == nil && resp.BindAddress != "" {
+			c.bindAddress = resp.BindAddress
+			c.bindDNS = ""
+			if blockDNSLeak {
+				// Mark reconnect queries before the capture rules are installed.
+				c.bindDNS = dns
+			}
+			c.releaseBinding = registerSocketBinding(c, resp.LocalIP)
+		}
 		return resp.LocalIP, err
 	}
 	if c.bypass != nil {
@@ -132,7 +169,16 @@ func (c *Client) PrepareBypass(dns, local string) (string, error) {
 }
 func (c *Client) RefreshBypass() (string, uint64, error) {
 	if c.conn != nil {
+		c.bindingMu.Lock()
+		defer c.bindingMu.Unlock()
 		resp, err := c.call(request{Op: OpRefresh})
+		if err == nil && c.bindAddress != "" {
+			prev := c.releaseBinding
+			c.releaseBinding = registerSocketBinding(c, resp.LocalIP)
+			if prev != nil {
+				prev()
+			}
+		}
 		return resp.LocalIP, resp.Revision, err
 	}
 	if c.bypass == nil {
@@ -170,9 +216,12 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.conn != nil {
+		c.bindingMu.Lock()
+		defer c.bindingMu.Unlock()
 		if _, err := c.call(request{Op: OpExit}); err != nil {
 			return err
 		}
+		c.clearBindingLocked()
 		err := c.conn.Close()
 		if c.cancelLaunch != nil {
 			c.cancelLaunch()

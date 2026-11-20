@@ -53,7 +53,7 @@ func TestPrepareBypassReturnsSelectedSource(t *testing.T) {
 		received <- r
 		_ = json.NewEncoder(h).Encode(response{OK: true, LocalIP: "192.168.50.2"})
 	}()
-	got, err := client.PrepareBypass("8.8.8.8:53", "")
+	got, err := client.PrepareBypass("8.8.8.8:53", "", true)
 	if err != nil || got != "192.168.50.2" {
 		t.Fatalf("%s %v", got, err)
 	}

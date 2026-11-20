@@ -3,6 +3,7 @@
 package winvpn
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -26,6 +27,8 @@ type Session struct {
 	mu         sync.Mutex
 	config     vpnconfig.Config
 	appliedDNS []string
+	capture    *linuxDNSCapture
+	retired    []*linuxDNSCapture
 }
 
 type defaultRoute struct {
@@ -51,6 +54,11 @@ func Start(config vpnconfig.Config) (*Session, error) {
 	if err := CheckRuntime(); err != nil {
 		return nil, err
 	}
+	if config.BlockDNSLeak {
+		if _, err := captureFamilies(); err != nil {
+			return nil, err
+		}
+	}
 	if config.MTU <= 0 {
 		config.MTU = defaultMTU
 	}
@@ -66,7 +74,9 @@ func Start(config vpnconfig.Config) (*Session, error) {
 
 	session := &Session{config: config}
 	if err := session.configure(); err != nil {
-		_ = session.Stop()
+		if cleanup := session.Stop(); cleanup != nil {
+			return session, errors.Join(err, cleanup)
+		}
 		return nil, err
 	}
 	return session, nil
@@ -79,6 +89,13 @@ func StartWithTrace(config vpnconfig.Config, trace func(string)) (*Session, erro
 func (s *Session) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.capture != nil {
+		s.retired = append(s.retired, s.capture)
+		s.capture = nil
+	}
+	if err := s.cleanupDNSCaptures(); err != nil {
+		return err
+	}
 	s.cleanupRoutes()
 	err := stopEngine()
 	_ = run("ip", "link", "delete", interfaceName)
@@ -100,14 +117,19 @@ func (s *Session) configure() error {
 	if err := run("ip", "link", "set", "dev", interfaceName, "mtu", fmt.Sprint(s.config.MTU), "up"); err != nil {
 		return fmt.Errorf("bring VPN interface up: %w", err)
 	}
-	if err := s.configureDNS(); err != nil {
-		return err
+	if !s.config.BlockDNSLeak {
+		if err := s.configureDNS(); err != nil {
+			return err
+		}
 	}
 	if err := s.configureBypassRoutes(); err != nil {
 		return err
 	}
 	if err := s.configureRoutes(); err != nil {
 		return err
+	}
+	if s.config.BlockDNSLeak {
+		return s.installDNSCapture(s.config.DNSServers)
 	}
 	return nil
 }
@@ -119,6 +141,9 @@ func (s *Session) DNSServers() []string {
 func (s *Session) UpdateDNS(servers []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.config.BlockDNSLeak {
+		return s.installDNSCapture(servers)
+	}
 	s.config.DNSServers = append([]string{}, servers...)
 	return s.configureDNS()
 }
@@ -211,7 +236,9 @@ func (s *Session) configureBypassRoutes() error {
 }
 
 func (s *Session) cleanupRoutes() {
-	_ = run("resolvectl", "revert", interfaceName)
+	if !s.config.BlockDNSLeak {
+		_ = run("resolvectl", "revert", interfaceName)
+	}
 	for _, ip := range s.config.BypassIPs {
 		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
 		if err != nil || !addr.IsValid() {

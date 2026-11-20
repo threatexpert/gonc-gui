@@ -32,6 +32,9 @@ const (
 
 type Server struct {
 	udp            *net.UDPConn
+	tcp            *net.TCPListener
+	tcpContext     context.Context
+	stopTCP        context.CancelFunc
 	socks5Endpoint string
 	upstreams      []socksAddr
 
@@ -98,6 +101,19 @@ func Start(bindIP string, socks5Endpoint string, upstreams []string) (*Server, e
 }
 
 func StartWithTrace(bindIP string, socks5Endpoint string, upstreams []string, trace func(string)) (*Server, error) {
+	return startListener(bindIP, defaultDNSPort, false, socks5Endpoint, upstreams, trace)
+}
+
+// StartLoopback starts UDP and TCP on the same ephemeral loopback port.
+func StartLoopback(ip string, endpoint string, upstreams []string) (*Server, error) {
+	if !net.ParseIP(ip).IsLoopback() {
+		return nil, fmt.Errorf("expected a loopback DNS listen address")
+	}
+	return startListener(ip, 0, true, endpoint, upstreams, nil)
+}
+func (s *Server) Port() int { return s.udp.LocalAddr().(*net.UDPAddr).Port }
+
+func startListener(bindIP string, port int, withTCP bool, socks5Endpoint string, upstreams []string, trace func(string)) (*Server, error) {
 	total := time.Now()
 	defer func() {
 		traceDNSProxyStep(trace, "total", total)
@@ -108,7 +124,7 @@ func StartWithTrace(bindIP string, socks5Endpoint string, upstreams []string, tr
 		return nil, err
 	}
 	traceDNSProxyStep(trace, "parse upstreams", step)
-	bind := net.JoinHostPort(strings.TrimSpace(bindIP), strconv.Itoa(defaultDNSPort))
+	bind := net.JoinHostPort(strings.TrimSpace(bindIP), strconv.Itoa(port))
 	step = time.Now()
 	udp, err := listenDNSUDPWithTrace(bind, trace)
 	if err != nil {
@@ -129,6 +145,18 @@ func StartWithTrace(bindIP string, socks5Endpoint string, upstreams []string, tr
 		return nil, err
 	}
 	traceDNSProxyStep(trace, "create SOCKS5 UDP association", step)
+	if withTCP {
+		listenAddr := udp.LocalAddr().(*net.UDPAddr)
+		server.tcp, err = net.ListenTCP("tcp", &net.TCPAddr{IP: listenAddr.IP, Port: listenAddr.Port})
+		if err != nil {
+			assoc.Close()
+			udp.Close()
+			return nil, err
+		}
+		server.tcpContext, server.stopTCP = context.WithCancel(context.Background())
+		server.wg.Add(1)
+		go server.serveTCP()
+	}
 	server.setAssociation(assoc)
 	step = time.Now()
 	server.wg.Add(4)
@@ -195,6 +223,12 @@ func (s *Server) Close() error {
 	var err error
 	s.once.Do(func() {
 		close(s.done)
+		if s.tcp != nil {
+			s.assocMu.Lock()
+			s.stopTCP()
+			s.assocMu.Unlock()
+			err = errors.Join(err, s.tcp.Close())
+		}
 		if s.udp != nil {
 			err = errors.Join(err, s.udp.Close())
 		}
@@ -351,6 +385,10 @@ func (s *Server) UpdateProxy(endpoint string) error {
 	old := s.assoc
 	s.socks5Endpoint, s.assoc = endpoint, nil
 	s.proxyGeneration++
+	if s.stopTCP != nil {
+		s.stopTCP()
+		s.tcpContext, s.stopTCP = context.WithCancel(context.Background())
+	}
 	s.clearPending()
 	s.assocMu.Unlock()
 	if old != nil {

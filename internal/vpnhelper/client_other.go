@@ -11,7 +11,7 @@ import (
 
 type Client struct{}
 
-func (c *Client) PrepareBypass(string, string) (string, error) {
+func (c *Client) PrepareBypass(string, string, bool) (string, error) {
 	return "", fmt.Errorf("unsupported platform")
 }
 func (c *Client) UpdateProxy(string) error { return fmt.Errorf("unsupported platform") }

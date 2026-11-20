@@ -40,6 +40,7 @@ func main() {
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop: true,
 		},
+		Linux: linuxWindowOptions(),
 		Windows: &windows.Options{
 			WebviewUserDataPath: webviewUserDataPath(),
 		},
