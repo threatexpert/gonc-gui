@@ -308,4 +308,5 @@
     <string name="scan_and_connect">Scan to connect</string>
     <string name="editable_passphrase">Passphrase (editable)</string>
     <string name="receive_passphrase_placeholder">Passphrase or scan</string>
+    <string name="connection_peer_wait_timeout">Peer wait timed out</string>
 </resources>

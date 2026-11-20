@@ -5,6 +5,9 @@ import java.util.Map;
 
 /** Live transfer/session metrics for a module (shared across all modules). */
 final class TransferMetrics {
+    final boolean receiveMode;
+    TransferMetrics() { this(false); }
+    TransferMetrics(boolean receiveMode) { this.receiveMode = receiveMode; }
     final Map<String, String> sessions = new LinkedHashMap<>();
     String p2pStatus = "idle";
     String network = "-";

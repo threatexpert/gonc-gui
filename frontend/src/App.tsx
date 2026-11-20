@@ -12,6 +12,7 @@ import {ConnectionDetails} from './ConnectionDetails';
 import {ProfileStrip} from './ProfileStrip';
 import {ProfileDeleteDialog} from './ProfileDeleteDialog';
 import {ReceiveComparison} from './ReceiveComparison';
+import {acceptReceiveReport, isPeerWaitTimeout} from './receiveConnectionState';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
 import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, type VPNDetails, type VPNSnapshot} from './vpnDetails';
@@ -277,6 +278,7 @@ const text = {
     connectionSuccess: '连接成功',
     connectedShort: '已连接',
     connectionFailed: '连接失败',
+    peerWaitTimeout: '等待对端超时',
     disconnected: '已断开',
     transferSpeed: '传输速度',
     receiverUnit: '个接收端',
@@ -591,6 +593,7 @@ const text = {
     connectionSuccess: 'Connection established',
     connectedShort: 'Connected',
     connectionFailed: 'Failed',
+    peerWaitTimeout: 'Peer wait timed out',
     disconnected: 'Disconnected',
     transferSpeed: 'Transfer Speed',
     receiverUnit: 'receivers',
@@ -1625,7 +1628,7 @@ function App() {
           return;
         }
         setReceiveQrHasConnected((current) => latchSuccessfulConnection(current, report.status));
-        setReceiveP2PReport(report);
+        setReceiveP2PReport((current) => acceptReceiveReport(current, report));
       } else if (report.side === 'vpnServer') {
         setVpnServerP2PReports((current) => ({...current, [p2pSessionKey(report)]: report}));
       } else if (report.side === 'vpnClient') {
@@ -3887,7 +3890,7 @@ function App() {
             </div>
           </div>
           <div className="status-grid">
-            <Metric label={t.p2pStatus} value={activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
+            <Metric label={t.p2pStatus} value={mode === 'receive' && isPeerWaitTimeout(activeP2PReport?.status || '') ? t.peerWaitTimeout : activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
             <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
             <Metric label={t.network} value={activeP2PReport?.network || '-'} />
             <Metric label={t.connectionRoute} value={routeLabel(activeP2PReport?.mode || '', t)} />
@@ -4296,6 +4299,9 @@ function singleConnectionStatus(status: string, running: boolean, t: typeof text
 }
 
 function receiveConnectionStatus(report: P2PReport | null, running: boolean, localHTTPReady: boolean, t: typeof text.zh): ConnectionStatus {
+  if (running && isPeerWaitTimeout(report?.status || '')) {
+    return {label: t.peerWaitTimeout, tone: 'waiting'};
+  }
   if (localHTTPReady && running && !report?.status) {
     return {label: t.connectedShort, tone: 'connected'};
   }

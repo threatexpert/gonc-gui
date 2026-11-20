@@ -301,4 +301,5 @@
     <string name="scan_and_connect">扫码连接对方</string>
     <string name="editable_passphrase">口令（可编辑）</string>
     <string name="receive_passphrase_placeholder">输入口令或扫码连接</string>
+    <string name="connection_peer_wait_timeout">等待对端超时</string>
 </resources>

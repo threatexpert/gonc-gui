@@ -346,6 +346,7 @@ final class UiKit {
     /** Collapse the raw p2p status + connection counters into a single display state. */
     String displayStatus(TransferMetrics metrics) {
         String status = normalizeMetricStatus(metrics.p2pStatus);
+        if (metrics.receiveMode && ReceiveReportState.isWaitTimeout(status)) return "wait-timeout";
         // gonc reports P2P failures as "error:<reason>"; collapse those (and any
         // "failed" from log parsing) to a single "failed" so the label and the
         // activity P2P box agree regardless of the reason text. A bare "error"
@@ -374,6 +375,7 @@ final class UiKit {
     String connectionState(TransferMetrics metrics) {
         String clean = displayStatus(metrics);
         clean = clean == null ? "" : clean.trim().toLowerCase(Locale.ROOT);
+        if ("wait-timeout".equals(clean)) return clean;
         if (clean.startsWith("failed") || clean.startsWith("error")) {
             return "failed";
         }
@@ -407,6 +409,7 @@ final class UiKit {
     String connectionLabel(TransferMetrics metrics) {
         String state = connectionState(metrics);
         String route = routeLabel(metrics.routeMode);
+        if ("wait-timeout".equals(state)) return context.getString(R.string.connection_peer_wait_timeout);
         if ("failed".equals(state)) {
             return context.getString(R.string.connection_failed_retry);
         }

@@ -42,7 +42,8 @@ import java.util.function.BiConsumer;
  */
 final class ReceiveController {
     private ModuleHost host;
-    private final TransferMetrics receiveMetrics = new TransferMetrics();
+    private final TransferMetrics receiveMetrics = new TransferMetrics(true);
+    private final ReceiveReportState receiveReportState = new ReceiveReportState();
     private final Object downloadProgressLock = new Object();
 
     private boolean receiveUseUdp;
@@ -246,6 +247,7 @@ final class ReceiveController {
         downloadFinishedAtMs = 0;
         receiveStatus = "Idle";
         receiveMetrics.reset();
+        receiveReportState.reset();
     }
 
     // --- view -------------------------------------------------------------
@@ -1513,6 +1515,7 @@ final class ReceiveController {
         hidePassword();
         PassphraseQrView.clearCache();
         receiveMetrics.reset();
+        receiveReportState.reset();
         remoteListStatus = "Waiting for peer";
         downloadStatus = "Idle";
         downloadDoneFiles = 0;
@@ -1560,7 +1563,7 @@ final class ReceiveController {
                     if (!isActiveRun(runId)) {
                         return;
                     }
-                    host.updateMetricsFromLog(receiveMetrics, message);
+                    // Connection state comes exclusively from P2PReport and session callbacks.
                     host.log(level, message);
                     host.requestBackgroundRender();
                     host.refreshForegroundService();
@@ -1573,6 +1576,7 @@ final class ReceiveController {
                     if (!isActiveRun(runId)) {
                         return;
                     }
+                    if (!receiveReportState.accept(topic, status)) return;
                     host.updateMetricsFromReport(receiveMetrics, topic, status, network, mode, peer);
                     boolean wasRetired = receiveQrRetired;
                     receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, status);

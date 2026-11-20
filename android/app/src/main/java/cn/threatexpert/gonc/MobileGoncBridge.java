@@ -47,7 +47,7 @@ final class MobileGoncBridge implements GoncBridge {
             try {
                 enableFileTransferMulticast(context, session, callback);
                 callback.onEvent("info", "Starting gonc mobile receive engine");
-                mobilegonc.Session goSession = Mobilegonc.startP2PReceiveWithLAN(password, useUdp, FILE_TRANSFER_P2P_WITH_LAN, bridgeCallback(callback, session, false));
+                mobilegonc.Session goSession = Mobilegonc.startP2PReceiveWithHelloTimeout(password, useUdp, FILE_TRANSFER_P2P_WITH_LAN, 300, bridgeCallback(callback, session, false));
                 session.attach(goSession);
             } catch (Throwable error) {
                 session.finish();

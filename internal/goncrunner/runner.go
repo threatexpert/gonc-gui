@@ -176,7 +176,9 @@ func (r *Runner) Start(parent context.Context, req Request, sink Sink, reportSin
 		}
 		session, err = goncembed.StartP2PShareSourceWithOptions(source, req.Password, fileTransferP2POptions(req.UseUDP), cb)
 	case ModeReceive:
-		session, err = goncembed.StartP2PReceiveWithOptions(req.Password, fileTransferP2POptions(req.UseUDP), cb)
+		options := fileTransferP2POptions(req.UseUDP)
+		options.HelloTimeout = 5 * time.Minute
+		session, err = goncembed.StartP2PReceiveWithOptions(req.Password, options, cb)
 	case ModeVPNServer:
 		session, err = goncembed.StartP2PLinkAgent(req.Password, req.UseUDP, req.Upstream, req.DNSForward, vpnExtraArgs(req), cb)
 	case ModeVPNClient:

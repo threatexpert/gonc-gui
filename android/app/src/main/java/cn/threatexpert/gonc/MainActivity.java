@@ -1530,6 +1530,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private String displayStatusLabel(String status) {
+        if ("wait-timeout".equals(status)) return getString(R.string.connection_peer_wait_timeout);
         if (status == null) {
             return "";
         }

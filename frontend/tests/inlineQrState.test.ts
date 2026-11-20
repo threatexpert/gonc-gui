@@ -383,3 +383,24 @@ test('VPN UI keeps shutdown feedback visible and suppresses late restoration not
   // Only a new explicit connection should clear the user's stop intent.
   assert.equal(source.match(/vpnStopRequested\.current = false/g)?.length, 1);
 });
+
+
+test('receive timeout classification uses the exact stable code', async () => {
+  const {isPeerWaitTimeout} = await import('../src/receiveConnectionState.js');
+  assert.equal(isPeerWaitTimeout('error:hello-timeout'), true);
+  for (const status of ['error:MQTT subscription timeout', 'error:hello-timeout network', 'error:handshake timeout', 'wait', 'connected']) {
+    assert.equal(isPeerWaitTimeout(status), false);
+  }
+});
+
+test('late failed paths cannot replace a connected receiver; disconnect allows retry', async () => {
+  const {acceptReceiveReport} = await import('../src/receiveConnectionState.js');
+  const connected = {topic: 'lan-winner', status: 'connected'};
+  const stale = {topic: 'public-loser', status: 'error:hello-timeout'};
+  assert.equal(acceptReceiveReport(connected, stale), connected);
+  assert.equal(acceptReceiveReport(connected, {...stale, status: 'wait'}), connected);
+  const disconnected = {topic: connected.topic, status: 'disconnected'};
+  assert.equal(acceptReceiveReport(connected, disconnected), disconnected);
+  const retry = {topic: 'retry', status: 'wait'};
+  assert.equal(acceptReceiveReport(disconnected, retry), retry);
+});

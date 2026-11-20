@@ -17,7 +17,7 @@ final class TransferInlineQrState {
     private static final String EMPTY_MASKED_PATTERN_ID = "decorative-inline-qr-empty";
     private static final Set<String> INITIAL_RECEIVE_STATES =
             new HashSet<>(Arrays.asList(
-                    "wait", "waiting", "starting", "preparing", "connecting", "negotiating"));
+                    "wait", "waiting", "starting", "preparing", "connecting", "negotiating", "wait-timeout", "error:hello-timeout"));
 
     private TransferInlineQrState() {
     }
@@ -69,6 +69,7 @@ final class TransferInlineQrState {
             return true;
         }
         String clean = normalize(state);
+        if (INITIAL_RECEIVE_STATES.contains(clean)) return false;
         if ("error".equals(clean) || clean.startsWith("error:")
                 || clean.startsWith("fail")
                 || clean.startsWith("lost")
