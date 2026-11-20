@@ -94,7 +94,14 @@ jobs:
       - name: Install Wails CLI
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+          for attempt in 1 2 3; do
+            if go install "github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}"; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then exit 1; fi
+            echo "Wails CLI installation failed (attempt ${attempt}/3), retrying..."
+            sleep "$((5 * attempt))"
+          done
           echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
 
       - name: Resolve version
