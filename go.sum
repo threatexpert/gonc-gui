@@ -123,12 +123,10 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/threatexpert/go-winpty v1.0.3 h1:RVji3LYT4qDHMKnsLeiqRkfJd3WBB/yASUmfDDGhwE4=
 github.com/threatexpert/go-winpty v1.0.3/go.mod h1:gnsSaUlz6zumcKjLreCFuulz+dOzVp/OIZI8r/CuA1c=
-github.com/threatexpert/gonc/v2 v2.6.13-0.20261119133329-69c576beff00 h1:guHAqWQ2QlQbknQ2UfYxj2+WSzDmgJVQ1HPraLgjKqY=
-github.com/threatexpert/gonc/v2 v2.6.13-0.20261119133329-69c576beff00/go.mod h1:Ja6VzngN25j11yXvD5vHY2HEamjpRRQgl+u5S8RRjMU=
-github.com/threatexpert/gonc/v2 v2.6.13-0.20261120010613-ad43751b0e47 h1:tARVTKJTDQzt++hmhFqbGa7L8nj4yR28ztw7zD1mdxE=
-github.com/threatexpert/gonc/v2 v2.6.13-0.20261120010613-ad43751b0e47/go.mod h1:Ja6VzngN25j11yXvD5vHY2HEamjpRRQgl+u5S8RRjMU=
-github.com/threatexpert/tun2socks/v2 v2.0.0-20261118115749-14e8a4308e04 h1:MnjUiKsizSDZaWHBB7iD+lgooSWsEUWbn64qXqn0Dyo=
-github.com/threatexpert/tun2socks/v2 v2.0.0-20261118115749-14e8a4308e04/go.mod h1:CV/bVyvvhuS5BNxrIRtNDVQlJ8dNYg+S6sYJ0UQCYBI=
+github.com/threatexpert/gonc/v2 v2.6.13-0.20261120122034-134dbf6c7f24 h1:8AVnoAM0uW/khFsds7EFDs+FR7n57eAu+3ftfk9iACk=
+github.com/threatexpert/gonc/v2 v2.6.13-0.20261120122034-134dbf6c7f24/go.mod h1:7zWt6D4dWIJzYCISeH6wj+g+wwv3/GKn6BdCRPxT2Ak=
+github.com/threatexpert/tun2socks/v2 v2.0.0-20261120121624-b0ed9683704c h1:UW2YleCYqpeYvzYyZIr2alqUaww359HmeEF8QH2A4J4=
+github.com/threatexpert/tun2socks/v2 v2.0.0-20261120121624-b0ed9683704c/go.mod h1:CV/bVyvvhuS5BNxrIRtNDVQlJ8dNYg+S6sYJ0UQCYBI=
 github.com/tjfoc/gmsm v1.4.1 h1:aMe1GlZb+0bLjn+cKTPEvvn9oUEBlJitaZiiBwsbgho=
 github.com/tjfoc/gmsm v1.4.1/go.mod h1:j4INPkHWMrhJb38G+J6W4Tw0AbuN8Thu3PbdVYhVcTE=
 github.com/tkrajina/go-reflector v0.5.8 h1:yPADHrwmUbMq4RGEyaOUpz2H90sRsETNVpjzo3DLVQQ=
