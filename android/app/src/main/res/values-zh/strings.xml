@@ -294,7 +294,7 @@
     <string name="file_info_modified">修改时间：%1$s</string>
     <string name="file_info_save_location">保存位置：%1$s</string>
     <string name="vpn_disconnect_protection">断网保护</string>
-    <string name="vpn_disconnect_protection_hint">VPN 接管后，隧道断开和重连期间保留已配置路由。路由范围外及本应用流量仍可直出。连接正常时不定期检查网络。</string>
+    <string name="vpn_disconnect_protection_hint">VPN 接管后，隧道断开和重连期间保留已配置路由。路由范围外及本应用流量仍可直出。</string>
     <string name="vpn_reconnect_dns">重连 DNS</string>
     <string name="vpn_reconnect_dns_hint">供 gonc 在 VPN 外建立、重建隧道，留空使用 8.8.8.8。填写 IP，可带端口。此设置影响本应用进程内其他 gonc 任务的解析；被接管应用的 VPN DNS 不变。</string>
     <string name="vpn_protection_confirm_dns">本次 gonc 使用的 DNS 为 %1$s，高级参数中的 -dns 将被覆盖。是否继续？</string>

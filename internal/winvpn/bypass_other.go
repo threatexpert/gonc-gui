@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-func prepareInterfaceBypass(_ bypassSelection) (*bypassRoute, error) {
-	return &bypassRoute{ready: func() (bool, error) { return true, nil }}, nil
-}
-
 func selectBypassExit(dns, requested string, previous bypassSelection) (bypassSelection, error) {
 	host, _, _ := net.SplitHostPort(dns)
 	ipv4 := net.ParseIP(host).To4() != nil

@@ -520,6 +520,10 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		if err := winvpn.CheckRuntime(); err != nil {
 			return nil, err
 		}
+		if !req.BlockDNSLeak && needsLinuxDNSCapture(parent) {
+			req.BlockDNSLeak = true
+			emit(sink, "log", "info", "Per-link DNS via systemd-resolved is unavailable; capturing DNS for this VPN session")
+		}
 		emit(sink, "status", "info", "Starting elevated VPN helper")
 		helper, err = vpnhelper.StartElevated(parent)
 		if err != nil {

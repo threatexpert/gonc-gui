@@ -14,8 +14,9 @@ type bypassSelection struct {
 }
 
 type bypassRoute struct {
-	close func() error
-	ready func() (bool, error)
+	close           func() error
+	ready           func() (bool, error)
+	interfaceScoped bool // Remains valid across address changes on the same device.
 }
 
 // BypassSession owns only routes created by this session. Refresh never stops TUN.
@@ -69,10 +70,15 @@ func (b *BypassSession) Refresh() (string, uint64, error) {
 		return "", b.revision, fmt.Errorf("VPN bypass is closed")
 	}
 	next, err := b.selectExit(b.dns, b.requested, b.selection)
-	if err == nil && next == b.selection && b.route != nil {
+	if err == nil && b.route != nil && (next == b.selection ||
+		(b.route.interfaceScoped && next.Index == b.selection.Index && next.Name == b.selection.Name)) {
 		var ready bool
 		ready, err = b.route.ready()
 		if err == nil && ready {
+			if next != b.selection {
+				b.selection, b.LocalIP = next, next.IP
+				b.revision++
+			}
 			return b.LocalIP, b.revision, nil
 		}
 	}
