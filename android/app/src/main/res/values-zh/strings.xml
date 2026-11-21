@@ -38,6 +38,7 @@
     <string name="passphrase">口令</string>
     <string name="passphrase_hint">推荐随机生成，并以安全方式分享给对方。口令相同即可连接，谁生成，谁扫码都行</string>
     <string name="passphrase_input_hint">输入口令，或点「随机」生成高强度口令</string>
+    <string name="generating_passphrase">正在生成口令…</string>
     <string name="start_sharing">开始分享</string>
     <string name="stop_sharing">停止分享</string>
     <string name="save_to">保存到：%1$s</string>
@@ -104,6 +105,10 @@
     <string name="vpn_profile_export">导出配置二维码</string>
     <string name="vpn_profile_scan">扫码导入</string>
     <string name="vpn_profile_qr">配置二维码</string>
+    <string name="vpn_switch_to_profile_qr">切换到配置二维码</string>
+    <string name="vpn_switch_to_passphrase_qr">切换到仅口令二维码</string>
+    <string name="vpn_showing_profile_qr">已切换为配置二维码</string>
+    <string name="vpn_showing_passphrase_qr">已切换为仅口令二维码</string>
     <string name="vpn_profile_qr_hint">二维码包含完整配置，这里只显示配置名称。</string>
     <string name="vpn_profile_name">名称</string>
     <string name="vpn_profile_name_hint">配置名称</string>
@@ -121,6 +126,7 @@
     <string name="vpn_route_fill_private">常见内网</string>
     <string name="start_vpn">开始 VPN</string>
     <string name="vpn_connect">连接</string>
+    <string name="vpn_scan_config">扫码配置</string>
     <string name="vpn_link_config">link 配置</string>
     <string name="vpn_link_config_hint">端口号，例如 3080</string>
     <string name="vpn_link_config_desc">留空则自动分配本地端口。完整配置格式参见 gonc 的 mux link。</string>
@@ -255,7 +261,7 @@
     <string name="passphrase_qr">口令二维码</string>
     <string name="view_passphrase_qr">查看口令二维码</string>
     <string name="inline_qr_generation_failed">无法生成二维码</string>
-    <string name="passphrase_qr_copy_hint">长按二维码可复制</string>
+    <string name="passphrase_qr_copy_hint">长按二维码可复制口令</string>
     <string name="source_title">开源项目</string>
     <string name="source_description">Gonc 是开源项目。你可以在 GitHub 查看源代码、反馈问题和关注更新。</string>
     <string name="check_for_updates">检查更新</string>

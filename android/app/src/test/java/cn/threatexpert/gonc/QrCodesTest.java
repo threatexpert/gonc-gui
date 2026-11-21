@@ -36,8 +36,12 @@ public class QrCodesTest {
     }
 
     private String decode(String payload, DefaultDecoderFactory factory) throws Exception {
+        return decode(payload, factory, 260);
+    }
+
+    private String decode(String payload, DefaultDecoderFactory factory, int size) throws Exception {
         Result result = factory.createDecoder(Collections.emptyMap())
-                .decode(image(QrCodes.encodeMatrix(payload, 260)));
+                .decode(image(QrCodes.encodeMatrix(payload, size)));
         assertNotNull(result);
         assertEquals(BarcodeFormat.QR_CODE, result.getBarcodeFormat());
         assertEquals(payload, result.getText());
@@ -50,6 +54,29 @@ public class QrCodesTest {
         assertEquals(VpnQrPayload.Kind.PROFILE, parsed.kind);
         assertEquals(CHINESE_NAME, parsed.profile.getString("name"));
         assertEquals("中文口令Test123", parsed.profile.getString("passphrase"));
+    }
+
+    @Test public void serverProfileCanBeImportedFromItsInlineQr() throws Exception {
+        String payload = VpnQrPayload.encodeServerProfile("  中文口令123  ", true, false);
+        String scanned = decode(payload, QrScanPolicy.decoderFactory(), VpnServerController.SHARE_QR_SIZE_DP);
+        VpnQrPayload parsed = VpnQrPayload.parse(scanned);
+        assertEquals(VpnQrPayload.Kind.PROFILE, parsed.kind);
+        VpnProfile imported = VpnProfile.fromJson(parsed.profile, "Fallback");
+        assertEquals("gonclink", imported.name);
+        assertEquals("中文口令123", imported.passphrase);
+        assertEquals("8.8.8.8", imported.dnsServers);
+        assertEquals(VpnProfile.DEFAULT_VPN_ROUTES, imported.routeCidrs);
+        assertTrue(imported.useUdp);
+        assertFalse(imported.p2pWithLan);
+        assertTrue(imported.blockDnsLeak);
+        assertFalse(imported.disconnectProtection);
+        assertFalse(imported.tunnelOnly);
+
+        VpnQrPayload changed = VpnQrPayload.parse(VpnQrPayload.encodeServerProfile("Updated123", false, true));
+        assertEquals("Updated123", changed.profile.getString("passphrase"));
+        assertFalse(changed.profile.getBoolean("useUdp"));
+        assertTrue(changed.profile.getBoolean("p2pWithLan"));
+        assertEquals("", VpnQrPayload.encodeServerProfile(" ", false, false));
     }
 
     @Test public void legacyDefaultCameraDecoderUnderstandsUtf8WithoutHints() throws Exception {

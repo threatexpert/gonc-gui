@@ -18,9 +18,11 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 final class PassphraseQrDialog {
     static void show(Activity activity, UiKit ui, String passphrase, boolean editable,
+                     int titleRes, Function<String, String> encode,
                      Consumer<String> onChanged, Consumer<String> copy) {
         PassphraseQrDraft draft = new PassphraseQrDraft(passphrase, editable);
         final int qrSize = ui.dp(Math.min(260, Math.max(120, activity.getResources().getConfiguration().screenWidthDp - 72)));
@@ -29,14 +31,14 @@ final class PassphraseQrDialog {
         LinearLayout box = ui.column();
         box.setPadding(ui.dp(18), ui.dp(18), ui.dp(18), ui.dp(18));
         box.setBackground(ui.rounded(Color.WHITE, ui.dp(8), 0, 0));
-        TextView title = ui.text(activity.getString(R.string.passphrase_qr), 16, ui.ink(), Typeface.BOLD);
+        TextView title = ui.text(activity.getString(titleRes), 16, ui.ink(), Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
         box.addView(title);
 
         ImageView image = new ImageView(activity);
         image.setAdjustViewBounds(true);
         image.setBackgroundColor(Color.WHITE);
-        image.setContentDescription(activity.getString(R.string.passphrase_qr));
+        image.setContentDescription(activity.getString(titleRes));
         image.setOnLongClickListener(v -> {
             Object encoded = image.getTag();
             if (encoded instanceof String) copy.accept((String) encoded);
@@ -61,7 +63,7 @@ final class PassphraseQrDialog {
             error.setVisibility(View.GONE);
             if (draft.value().isEmpty()) return;
             try {
-                image.setImageBitmap(QrCodes.encode(draft.value(), qrSize));
+                image.setImageBitmap(QrCodes.encode(encode.apply(draft.value()), qrSize));
                 image.setTag(draft.value());
                 image.setLongClickable(true);
             } catch (Exception failure) {

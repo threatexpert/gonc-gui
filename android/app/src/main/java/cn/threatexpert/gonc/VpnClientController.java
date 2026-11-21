@@ -19,7 +19,6 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
@@ -51,7 +50,6 @@ final class VpnClientController {
 
     private static final String KEY_VPN_PROFILES = "vpn_profiles";
     private static final String KEY_SELECTED_VPN_PROFILE = "selected_vpn_profile";
-    private static final String VPN_PROFILE_QR_TYPE = VpnQrPayload.TYPE;
 
     private ModuleHost host;
     private final List<VpnProfile> profiles = new ArrayList<>();
@@ -200,9 +198,15 @@ final class VpnClientController {
         }
 
         card.addView(profileSelector(), u.blockParams(error.isEmpty() ? 0 : u.dp(10)));
-        card.addView(passphraseField(), u.blockParams(u.dp(8)));
-        Button primary = u.primaryButton(string(R.string.vpn_connect));
-        primary.setOnClickListener(v -> host.startVpnClient());
+        Button primary = u.primaryButton(string(primaryActionLabel()));
+        primary.setOnClickListener(v -> {
+            if (currentProfile().passphrase.trim().isEmpty()) {
+                scanProfile();
+            } else {
+                host.startVpnClient();
+            }
+        });
+        card.addView(passphraseField(primary), u.blockParams(u.dp(8)));
         card.addView(primary, u.blockParams(u.dp(12)));
 
         Button advancedToggle = u.secondaryButton(advancedExpanded
@@ -381,11 +385,18 @@ final class VpnClientController {
         );
     }
 
-    private View passphraseField() {
+    private int primaryActionLabel() {
+        return currentProfile().passphrase.trim().isEmpty() ? R.string.vpn_scan_config : R.string.vpn_connect;
+    }
+
+    private View passphraseField(Button primary) {
         UiKit u = host.ui();
         LinearLayout box = u.column();
         box.addView(u.text(string(R.string.passphrase), 13, u.muted(), Typeface.BOLD));
         LinearLayout line = u.row();
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
+
         EditText input = new EditText(host.context());
         input.setSingleLine(true);
         input.setText(currentProfile().passphrase);
@@ -394,28 +405,23 @@ final class VpnClientController {
         input.setHint(string(R.string.vpn_passphrase_hint));
         input.setHintTextColor(Color.rgb(148, 163, 184));
         input.setPadding(u.dp(12), 0, u.dp(12), 0);
-        input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
+        input.setBackgroundColor(Color.TRANSPARENT);
+        input.setMinimumWidth(0);
         input.setTransformationMethod(passwordVisible ? null : PasswordTransformationMethod.getInstance());
-        input.addTextChangedListener(simpleWatcher(value -> currentProfile().passphrase = value));
+        input.addTextChangedListener(simpleWatcher(value -> {
+            currentProfile().passphrase = value;
+            primary.setText(primaryActionLabel());
+        }));
         line.addView(input, new LinearLayout.LayoutParams(0, u.dp(46), 1));
 
-        ImageButton visibility = new ImageButton(host.context());
-        visibility.setImageResource(android.R.drawable.ic_menu_view);
-        visibility.setBackground(u.rounded(Color.TRANSPARENT, u.dp(6), Color.rgb(203, 215, 230), 1));
-        visibility.setContentDescription(string(passwordVisible ? R.string.hide : R.string.show));
-        visibility.setOnClickListener(v -> {
-            passwordVisible = !passwordVisible;
-            host.requestRender();
-        });
-        LinearLayout.LayoutParams visibilityParams = new LinearLayout.LayoutParams(u.dp(46), u.dp(46));
-        visibilityParams.setMargins(u.dp(8), 0, 0, 0);
-        line.addView(visibility, visibilityParams);
-
-        Button scan = u.secondaryButton(string(R.string.scan));
-        scan.setOnClickListener(v -> scanPassphrase());
-        LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(u.dp(76), u.dp(46));
-        scanParams.setMargins(u.dp(8), 0, 0, 0);
-        line.addView(scan, scanParams);
+        View visibility = u.iconButton(passwordVisible ? R.drawable.ic_key_eye_off : R.drawable.ic_key_eye,
+                passwordVisible ? R.string.hide : R.string.show, () -> {
+                    passwordVisible = !passwordVisible;
+                    host.requestRender();
+                });
+        View scan = u.iconButton(R.drawable.ic_key_scan, R.string.vpn_scan_config, this::scanProfile);
+        line.addView(visibility, new LinearLayout.LayoutParams(u.dp(40), u.dp(46)));
+        line.addView(scan, new LinearLayout.LayoutParams(u.dp(40), u.dp(46)));
         box.addView(line, u.blockParams(u.dp(4)));
         return box;
     }
@@ -748,10 +754,6 @@ final class VpnClientController {
 
     // --- scan + QR --------------------------------------------------------
 
-    private void scanPassphrase() {
-        scanProfile();
-    }
-
     private void scanProfile() {
         if (GoncVpnState.isRunning()) {
             return;
@@ -802,12 +804,6 @@ final class VpnClientController {
         normalizeCurrentProfile();
         saveProfiles();
         try {
-            JSONObject root = new JSONObject();
-            root.put("type", VPN_PROFILE_QR_TYPE);
-            root.put("version", 1);
-            root.put("profile", profile.toJson());
-            String payload = root.toString();
-
             LinearLayout layout = u.column();
             layout.setPadding(u.dp(18), u.dp(18), u.dp(18), u.dp(8));
             layout.setBackground(u.rounded(Color.WHITE, u.dp(8), 0, 0));
@@ -815,7 +811,7 @@ final class VpnClientController {
             title.setGravity(Gravity.CENTER);
             layout.addView(title);
 
-            Bitmap bitmap = QrCodes.encode(payload, u.dp(260));
+            Bitmap bitmap = QrCodes.encode(VpnQrPayload.encodeProfile(profile), u.dp(260));
             ImageView image = new ImageView(host.context());
             image.setImageBitmap(bitmap);
             image.setAdjustViewBounds(true);

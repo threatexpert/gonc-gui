@@ -19,6 +19,30 @@ final class VpnQrPayload {
         this.profile = profile;
     }
 
+    static String encodeProfile(VpnProfile profile) {
+        try {
+            return new JSONObject()
+                    .put("type", TYPE)
+                    .put("version", 1)
+                    .put("profile", profile.toJson())
+                    .toString();
+        } catch (JSONException error) {
+            throw new IllegalStateException("Unable to encode VPN profile", error);
+        }
+    }
+
+    static String encodeServerProfile(String passphrase, boolean useUdp, boolean p2pWithLan) {
+        String clean = passphrase.trim();
+        if (clean.isEmpty()) return "";
+        VpnProfile profile = VpnProfile.defaults("gonclink");
+        profile.passphrase = clean;
+        profile.useUdp = useUdp;
+        profile.p2pWithLan = p2pWithLan;
+        profile.dnsServers = "8.8.8.8";
+        profile.blockDnsLeak = true;
+        return encodeProfile(profile);
+    }
+
     static VpnQrPayload parse(String input) {
         String value = input == null ? "" : input.trim();
         if (value.isEmpty()) return result(Kind.INVALID);

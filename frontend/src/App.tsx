@@ -80,6 +80,7 @@ import {
 import {BrowserOpenURL, ClipboardGetText, ClipboardSetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = PassphraseMode;
+type InitialPassphrasePhase = 'prompt' | 'waiting' | 'ready';
 type Lang = 'zh' | 'en';
 type Theme = 'light' | 'dark';
 type DownloadMode = 'resume' | 'overwrite';
@@ -324,6 +325,8 @@ const text = {
     passphrase: '口令',
     senderPassphrase: '口令（已为你生成高强度随机口令,建议直接使用。口令是连接安全的唯一凭据,请通过安全渠道分享给接收方）',
     passPlaceholder: '两端使用相同口令',
+    generatingPassphrase: '正在生成口令…',
+    passphraseGenerationFailed: '无法生成口令。请点「随机」重试。',
     senderPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令仅需分享给接收方。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     receiverPasswordHint: '口令相同即可连接，谁生成谁扫码都行。口令用于发现双方网络地址。双方用口令哈希在公共 MQTT 服务器碰头,网络地址以口令 AES 加密后交换——该服务器看不到口令也解不出地址。随后建立点对点直连,数据不经中转;连接基于口令完成双向认证与密钥协商,TLS 加密、无需 CA 证书,杜绝中间人窃听篡改。',
     vpnServerPasswordHint: '作为 linkagent 服务端运行，支持多个客户端同时连接。口令相同即可连接，建议随机生成并通过安全渠道分享给 VPN 客户端。',
@@ -640,6 +643,8 @@ const text = {
     passphrase: 'Passphrase',
     senderPassphrase: 'Passphrase (a high-strength random passphrase has been generated for you; using it directly is recommended. This is the only credential for connection security, so share it with the receiver through a secure channel)',
     passPlaceholder: 'Same passphrase on both sides',
+    generatingPassphrase: 'Generating passphrase…',
+    passphraseGenerationFailed: 'Could not generate a passphrase. Click Random to try again.',
     senderPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. Share the passphrase only with the receiver. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     receiverPasswordHint: 'The same passphrase is all you need to connect; either side can generate it or scan the QR. The passphrase is used to discover each side\'s network address. Both sides meet on the public MQTT server using a passphrase hash, and exchange network addresses encrypted with passphrase-derived AES, so the server cannot see the passphrase or decrypt the addresses. A direct peer-to-peer connection is then established; data is not relayed. The connection uses the passphrase for mutual authentication and key negotiation, with TLS encryption and no CA certificate required, preventing man-in-the-middle eavesdropping or tampering.',
     vpnServerPasswordHint: 'Run as a linkagent server and allow multiple VPN clients to connect. Use the same passphrase on the client; generating a random one and sharing it securely is recommended.',
@@ -1047,6 +1052,11 @@ function App() {
   const [sendPassword, setSendPassword] = useState('');
   const [receivePassword, setReceivePassword] = useState('');
   const [vpnServerPassword, setVpnServerPassword] = useState('');
+  const [initialPassphraseProgress, setInitialPassphraseProgress] = useState<Record<'send' | 'vpnServer', InitialPassphrasePhase>>({
+    send: 'prompt',
+    vpnServer: 'prompt',
+  });
+  const initialPassphraseRequested = useRef({send: false, vpnServer: false});
   const [vpnClientPassword, setVpnClientPassword] = useState('');
   const [sharePaths, setSharePaths] = useState<string[]>([]);
   const sharePathsRef = useRef<string[]>([]);
@@ -1128,6 +1138,7 @@ function App() {
   const [qrPassword, setQrPassword] = useState('');
   const [qrTitle, setQrTitle] = useState('');
   const [qrHint, setQrHint] = useState('');
+  const vpnServerRunningRef = useRef(false);
   const [scanImage, setScanImage] = useState('');
   const [scanPurpose, setScanPurpose] = useState<'password' | 'vpnProfile'>('password');
   const [scanBusy, setScanBusy] = useState(false);
@@ -1182,6 +1193,8 @@ function App() {
   const scanPasswordMode = useRef<Mode>('send');
   const startupWindowFitted = useRef(false);
   const activePassword = mode === 'send' ? sendPassword : (mode === 'receive' ? receivePassword : (mode === 'vpnServer' ? vpnServerPassword : vpnClientPassword));
+  const initialPassphrasePhase = mode === 'send' || mode === 'vpnServer' ? initialPassphraseProgress[mode] : 'ready';
+  const generatingInitialPassphrase = initialPassphrasePhase !== 'ready';
 
   useEffect(() => {
     SetUILanguage(lang);
@@ -1295,6 +1308,9 @@ function App() {
   const sendRunning = status.sendRunning;
   const receiveRunning = status.receiveRunning;
   const vpnServerRunning = status.vpnServerRunning;
+  vpnServerRunningRef.current = vpnServerRunning;
+  const vpnServerConfigLocked = vpnServerRunning || startPending;
+  const vpnServerPassphrase = vpnServerPassword.trim();
   // Keep configuration locked and the disconnect button visible until the
   // entire stop call finishes, even if a status event arrives before cleanup.
   const vpnClientRunning = (status.vpnClientRunning && vpnDisconnectPhase !== 'stopped') || vpnDisconnectPending;
@@ -1477,19 +1493,27 @@ function App() {
   }, [t.scanCaptureTimeout]);
 
   useEffect(() => {
-    let cancelled = false;
-    Promise.all([GeneratePassword(), GeneratePassword()])
-      .then(([sendValue, vpnServerValue]) => {
-        if (!cancelled) {
-          setSendPassword((current) => current || sendValue);
-          setVpnServerPassword((current) => current || vpnServerValue);
-        }
-      })
-      .catch((err) => setError(localizeError(String(err))));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if ((mode !== 'send' && mode !== 'vpnServer') || initialPassphraseRequested.current[mode]) return;
+
+    const frame = window.requestAnimationFrame(async () => {
+      initialPassphraseRequested.current[mode] = true;
+      const promptTimer = new Promise<void>((resolve) => {
+        window.setTimeout(() => {
+          setInitialPassphraseProgress((current) => ({...current, [mode]: 'waiting'}));
+          resolve();
+        }, 1000);
+      });
+      const [result] = await Promise.allSettled([Promise.resolve().then(GeneratePassword), promptTimer]);
+      if (result.status === 'fulfilled' && result.value.trim()) {
+        const setPassword = mode === 'send' ? setSendPassword : setVpnServerPassword;
+        setPassword((current) => current || result.value);
+      } else {
+        setError(t.passphraseGenerationFailed);
+      }
+      setInitialPassphraseProgress((current) => ({...current, [mode]: 'ready'}));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mode]);
 
   useEffect(() => {
     LoadVPNProfiles()
@@ -1954,9 +1978,16 @@ function App() {
   }
 
   async function generateVpnServerPassword() {
+    if (vpnServerRunningRef.current || startPendingRef.current) return;
     setError('');
-    setVpnServerPassword(await GeneratePassword());
-    revealPasswordTemporarily('vpnServer');
+    try {
+      const passphrase = await GeneratePassword();
+      if (vpnServerRunningRef.current || startPendingRef.current) return;
+      setVpnServerPassword(passphrase);
+      revealPasswordTemporarily('vpnServer');
+    } catch (err) {
+      setError(localizeError(String(err)));
+    }
   }
 
   async function generateVpnClientPassword() {
@@ -1967,14 +1998,15 @@ function App() {
   }
 
   async function copyPassword() {
-    if (!activePassword) return;
     const targetMode = mode;
+    const passphrase = targetMode === 'vpnServer' ? vpnServerPassphrase : activePassword;
+    if (!passphrase) return;
     setError('');
     try {
-      if (!await ClipboardSetText(activePassword)) throw new Error();
+      if (!await ClipboardSetText(passphrase)) throw new Error();
     } catch {
       try {
-        await navigator.clipboard.writeText(activePassword);
+        await navigator.clipboard.writeText(passphrase);
       } catch {
         setError(t.copyPasswordFailed);
         return;
@@ -2015,6 +2047,7 @@ function App() {
 
   function setPasswordForMode(targetMode: Mode, value: string) {
     if (targetMode === 'receive' && startPendingRef.current) return;
+    if (targetMode === 'vpnServer' && (vpnServerRunningRef.current || startPendingRef.current)) return;
     if (targetMode === 'send') {
       setSendPassword(value);
     } else if (targetMode === 'receive') {
@@ -2069,22 +2102,33 @@ function App() {
   }
 
   async function showVpnProfileQr() {
-    const profile = normalizeVpnProfile(vpnProfiles[selectedVpnProfile] || currentVpnProfileFromState(t), t);
-    const payload = JSON.stringify({type: vpnProfileQrType, version: 1, profile});
+    const isServer = mode === 'vpnServer';
+    if (isServer && !vpnServerPassphrase) return;
+    const profile = isServer
+      ? {
+        ...defaultVpnProfile('gonclink'),
+        passphrase: vpnServerPassphrase,
+        useUdp: vpnServerUseUDP,
+        p2pWithLan: vpnServerP2PWithLAN,
+        dnsServers: '8.8.8.8',
+        blockDnsLeak: true,
+      }
+      : normalizeVpnProfile(vpnProfiles[selectedVpnProfile] || currentVpnProfileFromState(t), t);
     setError('');
     try {
-      setQrPassword(profile.name || t.vpnProfileDefaultName);
-      setQrTitle(t.vpnProfileQr);
-      setQrHint(t.vpnProfileQrHint);
-      setQrDataUrl(await QRCode.toDataURL(payload, {
-        width: 280,
-        margin: 2,
+      const dataUrl = await QRCode.toDataURL(encodeVpnProfile(profile), {
+        width: 512,
+        margin: 4,
         color: {
           dark: '#101826',
           light: '#ffffff',
         },
-      }));
-      updateCurrentVpnProfile(profile);
+      });
+      setQrPassword(profile.name || t.vpnProfileDefaultName);
+      setQrTitle(t.vpnProfileQr);
+      setQrHint(t.vpnProfileQrHint);
+      setQrDataUrl(dataUrl);
+      if (!isServer) updateCurrentVpnProfile(profile);
     } catch (err) {
       setError(localizeError(String(err)));
     }
@@ -3119,9 +3163,9 @@ function App() {
 
   const passphraseTools = mode === 'send' ? (
     <>
-      {!sendRunning && toolButton('regenerate', t.generate, generatePassword)}
+      {!sendRunning && toolButton('regenerate', t.generate, generatePassword, generatingInitialPassphrase)}
       {toolButton('copy', t.copy, copyPassword, !sendPassword)}
-      {!sendRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+      {!sendRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy || generatingInitialPassphrase)}
     </>
   ) : mode === 'receive' ? (
     <>
@@ -3132,10 +3176,10 @@ function App() {
     </>
   ) : mode === 'vpnServer' ? (
     <>
-      {!vpnServerRunning && toolButton('regenerate', t.generate, generateVpnServerPassword)}
-      {!vpnServerRunning && toolButton('paste', t.paste, pastePassword)}
-      {toolButton('copy', t.copy, copyPassword, !vpnServerPassword)}
-      {!vpnServerRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy)}
+      {!vpnServerRunning && toolButton('regenerate', t.generate, generateVpnServerPassword, startPending || generatingInitialPassphrase)}
+      {!vpnServerRunning && toolButton('paste', t.paste, pastePassword, startPending || generatingInitialPassphrase)}
+      {toolButton('copy', t.copy, copyPassword, !vpnServerPassphrase)}
+      {!vpnServerRunning && toolButton('scan', t.scan, () => startScreenScan(), scanBusy || startPending || generatingInitialPassphrase)}
       {toolButton('qr', t.qr, showPasswordQr, !vpnServerPassword)}
     </>
   ) : (
@@ -3167,12 +3211,13 @@ function App() {
               setVpnProfileField('passphrase', event.target.value);
             }
           }}
-          placeholder={t.passPlaceholder}
-          disabled={currentRunning || (mode === 'receive' && startPending)}
+          placeholder={initialPassphrasePhase === 'prompt' ? t.generatingPassphrase : t.passPlaceholder}
+          aria-busy={generatingInitialPassphrase || undefined}
+          disabled={generatingInitialPassphrase || currentRunning || ((mode === 'receive' || mode === 'vpnServer') && startPending)}
           spellCheck={false}
           autoComplete="off"
         />
-        <button type="button" className="icon-button field-tool" onClick={togglePassphraseVisibility} aria-label={passphraseToggleLabel} data-tip={passphraseToggleLabel}>
+        <button type="button" className="icon-button field-tool" disabled={generatingInitialPassphrase} onClick={togglePassphraseVisibility} aria-label={passphraseToggleLabel} data-tip={passphraseToggleLabel}>
           <Icon name={passwordVisibility[mode] ? 'eyeOff' : 'eye'} />
         </button>
         <span className="key-tools">{passphraseTools}</span>
@@ -3230,6 +3275,11 @@ function App() {
             onChange={setUseUDP}
           />
         )}
+        {mode === 'vpnServer' && (
+          <button type="button" className="secondary" disabled={!vpnServerPassphrase} aria-haspopup="dialog" onClick={showVpnProfileQr}>
+            <Icon name="qr" />{t.vpnProfileQr}
+          </button>
+        )}
         <div className="action-main">
           {runButton()}
           {startHint && <span className="action-hint">{startHint}</span>}
@@ -3247,14 +3297,15 @@ function App() {
   );
 
   function setupCard(extraFields?: ReactNode) {
+    const showInlineQr = isFileTransferMode(mode);
     return (
       <section className="card setup-card">
-        <div className="card-body setup-grid">
+        <div className={showInlineQr ? 'card-body setup-grid' : 'card-body'}>
           <div className="setup-fields">
             {passphraseField}
             {extraFields}
           </div>
-          {isFileTransferMode(mode) && (
+          {showInlineQr && (
             <div className="transfer-inline-qr-column">
               <TransferInlineQr
                 passphrase={activePassword}
@@ -3783,8 +3834,8 @@ function App() {
         <div className="card-head"><h2>{t.options}</h2></div>
         <div className="card-body form-stack">
           <div className="toggle-list">
-            <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnServerUseUDP} disabled={vpnServerRunning} onChange={setVpnServerUseUDP} />
-            <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnServerP2PWithLAN} disabled={vpnServerRunning} onChange={setVpnServerP2PWithLAN} />
+            <Toggle label={t.useUDP} hint={t.udpHint} checked={vpnServerUseUDP} disabled={vpnServerConfigLocked} onChange={setVpnServerUseUDP} />
+            <Toggle label={t.p2pWithLan} hint={t.p2pWithLanHint} checked={vpnServerP2PWithLAN} disabled={vpnServerConfigLocked} onChange={setVpnServerP2PWithLAN} />
           </div>
           <div className="field">
             <label htmlFor="vpn-upstream">{t.upstreamProxy}</label>
@@ -4018,12 +4069,19 @@ function App() {
       )}
       {qrDataUrl && (
         <div className="qr-backdrop" role="presentation" onClick={closePasswordQr}>
-          <section className="qr-dialog" role="dialog" aria-modal="true" aria-label={t.qr} onClick={(event) => event.stopPropagation()}>
+          <section
+            className="qr-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={qrTitle || t.qr}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => { if (event.key === 'Escape') closePasswordQr(); }}
+          >
             <h2>{qrTitle || t.qr}</h2>
-            <img src={qrDataUrl} alt={t.qr} />
+            <img src={qrDataUrl} alt={qrTitle || t.qr} />
             <div className="qr-password">{qrPassword}</div>
             {qrHint && <p className="field-hint">{qrHint}</p>}
-            <button className="primary" onClick={closePasswordQr}>{t.close}</button>
+            <button type="button" className="primary" autoFocus onClick={closePasswordQr}>{t.close}</button>
           </section>
         </div>
       )}
@@ -4162,6 +4220,10 @@ function latestReport(reports: P2PReport[]) {
 
 function hasIPv6Routes(value: string): boolean {
   return (value.trim() || defaultVpnRoutes).split(/\s+/).some((line) => line.includes(':') && line.includes('/'));
+}
+
+function encodeVpnProfile(profile: VPNProfile) {
+  return JSON.stringify({type: vpnProfileQrType, version: 1, profile});
 }
 
 function defaultVpnProfile(name: string): VPNProfile {

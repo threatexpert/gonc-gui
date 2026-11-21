@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.view.View;
 
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Shared services a per-module panel/controller calls back into. Implemented by
@@ -80,10 +81,11 @@ interface ModuleHost {
 
     void copyText(String label, String value);
 
-    void showPassphraseQr(String passphrase);
-
     /** Editable callers receive the changed passphrase once when the dialog closes. */
     void showPassphraseQr(String passphrase, boolean editable, Consumer<String> onChanged);
+
+    void showPassphraseQr(String passphrase, boolean editable, int titleRes,
+                          Function<String, String> encode, Consumer<String> onChanged);
 
     /** Launch the QR scanner; {@code onResult} receives the scanned text on the main thread. */
     void scanPassphrase(Consumer<String> onResult);

@@ -40,7 +40,8 @@ final class SendController {
     private boolean passwordVisible;
     private boolean sendQrHasConnected;
     private int passwordVisibilityToken;
-    private String password = Passwords.generate();
+    private final InitialPassphrase initialPassphrase = new InitialPassphrase();
+    private String password = "";
     private String status = "Idle";
     private GoncBridge.Session session;
     private long runId;
@@ -187,6 +188,7 @@ final class SendController {
         Button primary = session == null
                 ? u.primaryButton(string(R.string.start_sharing))
                 : u.dangerButton(string(R.string.stop_sharing));
+        u.setControlEnabled(primary, !initialPassphrase.isPending());
         primary.setOnClickListener(v -> {
             if (session == null) {
                 start();
@@ -197,9 +199,11 @@ final class SendController {
         card.addView(primary, u.blockParams(u.dp(12)));
         if (session == null) {
             Button scanShare = u.secondaryButton(string(R.string.scan_and_share));
+            u.setControlEnabled(scanShare, !initialPassphrase.isPending());
             scanShare.setOnClickListener(v -> scanPassword());
             card.addView(scanShare, u.blockParams(u.dp(8)));
         }
+        initialPassphrase.show(card, host.mainHandler(), value -> password = value, () -> host.requestRender());
         return card;
     }
 
@@ -376,11 +380,12 @@ final class SendController {
         UiKit u = host.ui();
         FrameLayout panel = new FrameLayout(host.context());
         LinearLayout qrOnly = u.column();
-        View qr = PassphraseQrView.create(
-                host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
-                session != null && sendQrHasConnected,
-                this::showPasswordQr,
-                () -> host.toast(R.string.inline_qr_generation_failed));
+        boolean generating = initialPassphrase.isPending();
+        View qr = generating
+                ? InitialPassphrase.generatingMessage(host)
+                : PassphraseQrView.create(host.context(), u, password, TransferInlineQrState.inlineQrSizeDp(),
+                        session != null && sendQrHasConnected, this::showPasswordQr,
+                        () -> host.toast(R.string.inline_qr_generation_failed));
         int qrSize = u.dp(TransferInlineQrState.inlineQrSizeDp());
         LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(qrSize, qrSize);
         qrParams.gravity = Gravity.CENTER_HORIZONTAL;
@@ -389,10 +394,12 @@ final class SendController {
         tools.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         if (session == null) {
             View random = u.iconButton(R.drawable.ic_key_random, R.string.random_passphrase, this::randomizePassword);
+            u.setControlEnabled(random, !generating);
             random.setPadding(u.dp(6), u.dp(10), u.dp(6), u.dp(10));
             tools.addView(random, new LinearLayout.LayoutParams(u.dp(32), u.dp(40)));
         }
         View copy = u.iconButton(R.drawable.ic_key_copy, R.string.copy, this::copyPassword);
+        u.setControlEnabled(copy, !generating);
         copy.setPadding(u.dp(6), u.dp(10), u.dp(6), u.dp(10));
         tools.addView(copy, new LinearLayout.LayoutParams(u.dp(32), u.dp(40)));
         panel.addView(qrOnly, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, qrSize));
@@ -581,7 +588,8 @@ final class SendController {
         shareItems.clear();
         useUdp = false;
         passwordVisible = false;
-        password = Passwords.generate();
+        password = "";
+        initialPassphrase.reset();
         status = "Idle";
         passwordVisibilityToken++;
         metrics.reset();

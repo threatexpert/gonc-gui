@@ -1072,18 +1072,21 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     @Override
-    public void showPassphraseQr(String passphrase) {
-        showPassphraseQr(passphrase, false, null);
+    public void showPassphraseQr(String passphrase, boolean editable, java.util.function.Consumer<String> onChanged) {
+        showPassphraseQr(passphrase, editable, R.string.passphrase_qr, value -> value, onChanged);
     }
 
     @Override
-    public void showPassphraseQr(String passphrase, boolean editable, java.util.function.Consumer<String> onChanged) {
+    public void showPassphraseQr(String passphrase, boolean editable, int titleRes,
+                                 java.util.function.Function<String, String> encode,
+                                 java.util.function.Consumer<String> onChanged) {
         if (!editable && passphrase.trim().isEmpty()) {
             Toast.makeText(this, R.string.toast_passphrase_empty, Toast.LENGTH_SHORT).show();
             return;
         }
         try {
-            PassphraseQrDialog.show(this, ui(), passphrase, editable, onChanged, this::copyPassphraseFromQrDialog);
+            PassphraseQrDialog.show(this, ui(), passphrase, editable, titleRes, encode,
+                    onChanged, this::copyPassphraseFromQrDialog);
         } catch (Exception error) {
             Toast.makeText(this, R.string.toast_qr_failed, Toast.LENGTH_SHORT).show();
             appendLog("error", error.getMessage() == null ? error.toString() : error.getMessage());

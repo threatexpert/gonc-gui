@@ -17,9 +17,11 @@ final class QrCodes {
 
     static Bitmap encode(String value, int size) throws WriterException {
         BitMatrix matrix = encodeMatrix(value, size);
-        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        for (int y = 0; y < size; y++) {
-            for (int x = 0; x < size; x++) {
+        int width = matrix.getWidth();
+        int height = matrix.getHeight();
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
                 bitmap.setPixel(x, y, matrix.get(x, y) ? Color.BLACK : Color.WHITE);
             }
         }

@@ -30,15 +30,21 @@ final class PassphraseQrView {
 
     static View create(Context context, UiKit ui, String passphrase, int sizeDp,
                        boolean masked, Runnable onClick, Runnable onError) {
+        return create(context, ui, passphrase, sizeDp, masked,
+                R.string.view_passphrase_qr, false, onClick, onError);
+    }
+
+    static View create(Context context, UiKit ui, String payload, int sizeDp, boolean masked,
+                       int labelRes, boolean editable, Runnable onClick, Runnable onError) {
         int displayPixelSize = Math.max(1, ui.dp(sizeDp));
         int encodedPixelSize = TransferInlineQrState.capQrPixelSize(displayPixelSize);
-        String cleanPassphrase = passphrase == null ? "" : passphrase.trim();
+        String cleanPayload = payload == null ? "" : payload.trim();
         TransferInlineQrState.BitmapCacheKey key =
-                TransferInlineQrState.productionCacheKey(cleanPassphrase, encodedPixelSize, masked);
+                TransferInlineQrState.productionCacheKey(cleanPayload, encodedPixelSize, masked);
         CacheEntry entry = CACHE.get(key);
         boolean newlyFailed = false;
         if (entry == null) {
-            entry = createEntry(cleanPassphrase, encodedPixelSize, masked);
+            entry = createEntry(cleanPayload, encodedPixelSize, masked);
             CACHE.put(key, entry);
             newlyFailed = entry.failed;
         }
@@ -51,7 +57,7 @@ final class PassphraseQrView {
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
         image.setImageBitmap(entry.bitmap);
 
-        boolean actionable = !cleanPassphrase.isEmpty() && !entry.failed;
+        boolean actionable = editable || (!cleanPayload.isEmpty() && !entry.failed);
         image.setEnabled(actionable);
         image.setClickable(actionable);
         image.setFocusable(actionable);
@@ -59,7 +65,7 @@ final class PassphraseQrView {
                 ? View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
                 : View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         if (actionable) {
-            image.setContentDescription(context.getString(R.string.view_passphrase_qr));
+            image.setContentDescription(context.getString(labelRes));
             image.setOnClickListener(view -> {
                 if (onClick != null) {
                     onClick.run();

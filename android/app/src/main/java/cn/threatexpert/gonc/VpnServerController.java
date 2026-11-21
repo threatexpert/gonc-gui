@@ -5,7 +5,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.text.Editable;
 import android.text.TextWatcher;
-import android.text.method.PasswordTransformationMethod;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +26,7 @@ import java.util.List;
  * (render, logging, QR, clipboard, metrics) through {@link ModuleHost}.
  */
 final class VpnServerController {
+    static final int SHARE_QR_SIZE_DP = 216;
     private static final String KEY_SERVER_EXTRA_ARGS_HISTORY = "vpn_server_extra_args_history";
     private static final String KEY_SERVER_UPSTREAM_HISTORY = "vpn_server_upstream_history";
     private static final String KEY_SERVER_DNS_HISTORY = "vpn_server_dns_history";
@@ -44,9 +44,9 @@ final class VpnServerController {
     private String upstream = "";
     private String dnsForward = "";
     private String extraArgs = "";
-    private boolean passwordVisible;
-    private int passwordVisibilityToken;
-    private String password = Passwords.generate();
+    private boolean passphraseQrOnly;
+    private final InitialPassphrase initialPassphrase = new InitialPassphrase();
+    private String password = "";
     private String status = "Idle";
     private String errorMessage;
     private GoncBridge.Session session;
@@ -173,11 +173,11 @@ final class VpnServerController {
         upstream = "";
         dnsForward = "";
         extraArgs = "";
-        passwordVisible = false;
-        password = Passwords.generate();
+        passphraseQrOnly = false;
+        password = "";
+        initialPassphrase.reset();
         status = "Idle";
         errorMessage = null;
-        passwordVisibilityToken++;
         metrics.reset();
     }
 
@@ -201,7 +201,20 @@ final class VpnServerController {
         TextView intro = u.text(string(R.string.vpn_server_intro), 13, u.muted(), Typeface.NORMAL);
         intro.setSingleLine(false);
         card.addView(intro, u.blockParams(u.dp(6)));
-        card.addView(passwordField());
+        card.addView(shareQr(), u.blockParams(u.dp(8)));
+
+        Button primary = session == null
+                ? u.primaryButton(string(R.string.start_vpn_server))
+                : u.dangerButton(string(R.string.stop_vpn_server));
+        u.setControlEnabled(primary, !initialPassphrase.isPending());
+        primary.setOnClickListener(v -> {
+            if (session == null) {
+                start();
+            } else {
+                stop();
+            }
+        });
+        card.addView(primary, u.blockParams(u.dp(12)));
 
         Button advancedToggle = u.secondaryButton(advancedExpanded
                 ? string(R.string.vpn_advanced_settings_hide)
@@ -226,76 +239,63 @@ final class VpnServerController {
                     value -> extraArgs = value, extraArgsHistory), u.blockParams(u.dp(10)));
         }
 
-        Button primary = session == null
-                ? u.primaryButton(string(R.string.start_vpn_server))
-                : u.dangerButton(string(R.string.stop_vpn_server));
-        primary.setOnClickListener(v -> {
-            if (session == null) {
-                start();
-            } else {
-                stop();
-            }
-        });
-        card.addView(primary, u.blockParams(u.dp(12)));
+        initialPassphrase.show(card, host.mainHandler(), value -> password = value, () -> host.requestRender());
         return card;
     }
 
-    private View passwordField() {
+    private View shareQr() {
         UiKit u = host.ui();
-        boolean locked = session != null;
-        LinearLayout box = u.column();
-        box.addView(u.text(string(R.string.passphrase_hint), 12, u.muted(), Typeface.NORMAL), u.blockParams(u.dp(4)));
+        LinearLayout panel = u.column();
+        LinearLayout tools = u.row();
+        tools.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        int width = u.dp(44);
+        int height = u.dp(40);
+        boolean generating = initialPassphrase.isPending();
+        if (session == null) {
+            View random = u.iconButton(R.drawable.ic_key_random, R.string.random_passphrase, this::randomizePassword);
+            u.setControlEnabled(random, !generating);
+            tools.addView(random, width, height);
+        }
+        View copy = u.iconButton(R.drawable.ic_key_copy, R.string.copy, this::copyPassword);
+        u.setControlEnabled(copy, !generating);
+        tools.addView(copy, width, height);
+        int switchLabel = passphraseQrOnly ? R.string.vpn_switch_to_profile_qr : R.string.vpn_switch_to_passphrase_qr;
+        View switchQr = u.iconButton(R.drawable.ic_key_switch, switchLabel, this::switchShareQr);
+        u.setControlEnabled(switchQr, !generating);
+        tools.addView(switchQr, width, height);
+        panel.addView(tools, u.blockParams(0));
 
-        LinearLayout line = u.row();
-        EditText input = new EditText(host.context());
-        input.setSingleLine(true);
-        input.setText(password);
-        input.setTextColor(u.ink());
-        input.setTextSize(15);
-        input.setHint(string(R.string.passphrase_input_hint));
-        input.setHintTextColor(Color.rgb(148, 163, 184));
-        input.setPadding(u.dp(12), 0, u.dp(12), 0);
-        input.setBackground(u.rounded(Color.WHITE, u.dp(6), Color.rgb(203, 215, 230), 1));
-        input.setEnabled(!locked);
-        applyPasswordVisibility(input);
-        input.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-            }
+        int qrSize = u.dp(SHARE_QR_SIZE_DP);
+        int title = passphraseQrOnly ? R.string.passphrase_qr : R.string.vpn_profile_qr;
+        View qr = generating
+                ? InitialPassphrase.generatingMessage(host)
+                : PassphraseQrView.create(host.context(), u, qrPayload(password), SHARE_QR_SIZE_DP,
+                        false, title, session == null, this::showShareQr,
+                        () -> host.toast(R.string.inline_qr_generation_failed));
+        LinearLayout.LayoutParams qrParams = new LinearLayout.LayoutParams(qrSize, qrSize);
+        qrParams.gravity = Gravity.CENTER_HORIZONTAL;
+        panel.addView(qr, qrParams);
+        return panel;
+    }
 
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
-                if (session != null) {
-                    return;
-                }
-                password = s.toString();
-                revealPasswordTemporarily(input);
-            }
+    private String qrPayload(String value) {
+        return passphraseQrOnly ? value.trim() : VpnQrPayload.encodeServerProfile(value, useUdp, p2pWithLan);
+    }
 
-            @Override
-            public void afterTextChanged(Editable s) {
-            }
+    private void switchShareQr() {
+        passphraseQrOnly = !passphraseQrOnly;
+        host.requestRender();
+        host.toast(passphraseQrOnly ? R.string.vpn_showing_passphrase_qr : R.string.vpn_showing_profile_qr);
+    }
+
+    private void showShareQr() {
+        long dialogRun = runId;
+        int title = passphraseQrOnly ? R.string.passphrase_qr : R.string.vpn_profile_qr;
+        host.showPassphraseQr(password, session == null, title, this::qrPayload, value -> {
+            if (session != null || dialogRun != runId) return;
+            password = value;
+            host.requestRender();
         });
-        line.addView(input, new LinearLayout.LayoutParams(0, u.dp(46), 1));
-        box.addView(line, u.blockParams(u.dp(8)));
-
-        LinearLayout actions = u.row();
-        Button change = u.secondaryButton(string(R.string.random_passphrase));
-        u.setControlEnabled(change, !locked);
-        change.setOnClickListener(v -> randomizePassword());
-        Button copy = u.secondaryButton(string(R.string.copy));
-        copy.setOnClickListener(v -> copyPassword());
-        Button scan = u.secondaryButton(string(R.string.scan));
-        u.setControlEnabled(scan, !locked);
-        scan.setOnClickListener(v -> scanPassword());
-        Button qr = u.secondaryButton(string(R.string.qr));
-        qr.setOnClickListener(v -> host.showPassphraseQr(password.trim()));
-        actions.addView(change, new LinearLayout.LayoutParams(0, u.dp(40), 1));
-        actions.addView(copy, u.actionParams());
-        actions.addView(scan, u.actionParams());
-        actions.addView(qr, u.actionParams());
-        box.addView(actions, u.blockParams(u.dp(6)));
-        return box;
     }
 
     private View protocolToggle() {
@@ -313,6 +313,7 @@ final class VpnServerController {
                 return;
             }
             useUdp = isChecked;
+            host.requestRender();
         });
         box.addView(checkBox);
         TextView hint = u.text(string(R.string.use_udp_protocol_hint), 12, u.muted(), Typeface.NORMAL);
@@ -328,6 +329,7 @@ final class VpnServerController {
         lanDiscovery.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (session == null) {
                 p2pWithLan = isChecked;
+                host.requestRender();
             }
         });
         box.addView(lanDiscovery);
@@ -455,41 +457,11 @@ final class VpnServerController {
         }
     }
 
-    private void applyPasswordVisibility(EditText input) {
-        input.setTransformationMethod(passwordVisible ? null : PasswordTransformationMethod.getInstance());
-        input.setSelection(input.getText().length());
-    }
-
-    private void revealPasswordTemporarily(EditText input) {
-        passwordVisible = true;
-        int token = ++passwordVisibilityToken;
-        if (input != null) {
-            applyPasswordVisibility(input);
-        }
-        host.mainHandler().postDelayed(() -> {
-            if (passwordVisibilityToken != token) {
-                return;
-            }
-            passwordVisible = false;
-            if (input != null && input.isAttachedToWindow()) {
-                applyPasswordVisibility(input);
-            } else {
-                host.requestRender();
-            }
-        }, 5000);
-    }
-
-    private void hidePassword() {
-        passwordVisible = false;
-        passwordVisibilityToken++;
-    }
-
     private void randomizePassword() {
         if (session != null) {
             return;
         }
         password = Passwords.generate();
-        revealPasswordTemporarily(null);
         host.log("info", "Passphrase randomized");
         host.requestRender();
     }
@@ -506,23 +478,6 @@ final class VpnServerController {
         host.requestRender();
     }
 
-    private void scanPassword() {
-        if (session != null) {
-            return;
-        }
-        host.scanPassphrase(this::onScannedPassphrase);
-    }
-
-    private void onScannedPassphrase(String result) {
-        if (session != null) {
-            return;
-        }
-        password = result.trim();
-        revealPasswordTemporarily(null);
-        host.log("info", "VPN server passphrase scanned");
-        host.requestRender();
-    }
-
     private void start() {
         String passphrase = password.trim();
         if (passphrase.isEmpty()) {
@@ -533,7 +488,6 @@ final class VpnServerController {
             host.toast(R.string.toast_passphrase_weak);
             return;
         }
-        hidePassword();
         errorMessage = null;
         upstreamHistory.add(upstream.trim());
         dnsHistory.add(dnsForward.trim());
