@@ -14,6 +14,7 @@ import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Log;
+import android.webkit.MimeTypeMap;
 
 import org.json.JSONObject;
 
@@ -42,6 +43,7 @@ import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Function;
 import java.util.zip.GZIPInputStream;
 
 import com.github.luben.zstd.ZstdInputStream;
@@ -147,8 +149,12 @@ final class HttpReceiver {
             }
             DocumentInfo info = resolver.findExisting(file.path, file.name, file.size);
             if (info != null) {
+                String name = info.displayName;
+                if (name == null || name.isEmpty()) {
+                    name = receivedFileName(context.getContentResolver(), info.uri);
+                }
                 found.put(normalizePath(file.path), new ReceivedTarget(
-                        info.uri, displayName(context, info.uri), info.size, info.modifiedMs));
+                        info.uri, name == null ? file.name : name, info.size, info.modifiedMs));
             }
         }
         return found;
@@ -1142,6 +1148,20 @@ final class HttpReceiver {
         return context.getString(R.string.selected_folder);
     }
 
+    private static String receivedFileName(ContentResolver resolver, Uri uri) {
+        if ("file".equals(uri.getScheme())) {
+            return uri.getLastPathSegment();
+        }
+        try (Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                return name == null || name.isEmpty() ? null : name;
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return null;
+    }
+
     private static Uri rootDocumentUri(Uri treeUri) {
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri));
     }
@@ -1169,6 +1189,42 @@ final class HttpReceiver {
         String name = value == null ? "" : value.trim();
         name = name.replace('/', '_').replace('\\', '_').replace(':', '_');
         return name.isEmpty() ? "received-file" : name;
+    }
+
+    private static int extensionStart(String name) {
+        int dot = name.lastIndexOf('.');
+        return dot > 0 && dot < name.length() - 1 ? dot : name.length();
+    }
+
+    static String numberedFileName(String name, int number) {
+        if (number == 0) return name;
+        int dot = extensionStart(name);
+        return name.substring(0, dot) + " (" + number + ")" + name.substring(dot);
+    }
+
+    static String mimeTypeForSave(String name, Function<String, String> lookup) {
+        int dot = extensionStart(name);
+        if (dot == name.length()) return "application/octet-stream";
+        String extension = name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        if ("apk".equals(extension)) return ReceivedFileActions.fallbackMimeType(name);
+        String type = lookup.apply(extension);
+        return type == null || type.isEmpty() ? "application/octet-stream" : type;
+    }
+
+    static boolean acceptsCreatedName(String original, String requested, String actual) {
+        if (actual == null) return false;
+        if (actual.equalsIgnoreCase(requested)) return true;
+        int originalDot = extensionStart(original);
+        int actualDot = extensionStart(actual);
+        if (originalDot < original.length()
+                && !original.substring(originalDot).equalsIgnoreCase(actual.substring(actualDot))) {
+            return false;
+        }
+        // Storage can sanitize the stem. Validate the suffix when it kept the original stem.
+        if (actualDot < originalDot || !actual.regionMatches(true, 0, original, 0, originalDot)) return true;
+        if (!requested.equals(original)) return false;
+        String number = actual.substring(originalDot, actualDot);
+        return number.matches(" \\([1-9][0-9]*\\)");
     }
 
     /**
@@ -1263,6 +1319,16 @@ final class HttpReceiver {
     }
 
     private static final class TargetResolver {
+        private static final int MAX_PROVIDER_NAME_RETRIES = 32;
+        private static final String[] FILE_COLUMNS = {OpenableColumns.SIZE, OpenableColumns.DISPLAY_NAME};
+        private static final String[] MEDIA_FILE_COLUMNS = {
+                OpenableColumns.SIZE, OpenableColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_MODIFIED
+        };
+
+        private interface CreateTarget {
+            Uri create(String name) throws Exception;
+        }
+
         private final Context context;
         private final ContentResolver resolver;
         private final Uri treeUri;
@@ -1287,7 +1353,7 @@ final class HttpReceiver {
         // --- resumable target memory --------------------------------------
         // Remember the exact destination Uri we created for each (save location +
         // remote path), so a resume continues that same file regardless of how the
-        // OS renamed it on a name collision ("name (1)", "name(1)", ...) or whether
+        // OS renamed it on a name collision (e.g. "name (1).apk") or whether
         // scoped storage hides a same-named file made by another app.
 
         private String targetKey(String remotePath) {
@@ -1326,30 +1392,41 @@ final class HttpReceiver {
                 if ("file".equals(uri.getScheme())) {
                     File file = new File(uri.getPath());
                     return file.exists()
-                            ? new DocumentInfo(uri, file.length(), file.lastModified(), file.isDirectory())
+                            ? new DocumentInfo(uri, file.length(), file.lastModified(), file.isDirectory(), true, file.getName())
                             : null;
                 }
-                Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.SIZE}, null, null, null);
-                if (cursor == null) {
-                    return null;
-                }
-                long size;
-                boolean sizeKnown;
+                boolean mediaStore = MediaStore.AUTHORITY.equals(uri.getAuthority());
                 try {
-                    if (cursor.moveToFirst()) {
-                        sizeKnown = !cursor.isNull(0);
-                        size = sizeKnown ? cursor.getLong(0) : 0;
-                    } else {
-                        return null;
-                    }
-                } finally {
-                    cursor.close();
+                    return queryFileInfo(uri, mediaStore ? MEDIA_FILE_COLUMNS : FILE_COLUMNS, mediaStore);
+                } catch (RuntimeException ignored) {
+                    // Some providers accept only a minimal projection.
+                    return queryFileInfo(uri, new String[]{OpenableColumns.SIZE}, mediaStore);
                 }
-                return new DocumentInfo(uri, size, queryModifiedMs(uri),
-                        DocumentsContract.Document.MIME_TYPE_DIR.equals(resolver.getType(uri)), sizeKnown);
             } catch (Exception error) {
                 return null;
             }
+        }
+
+        private DocumentInfo queryFileInfo(Uri uri, String[] columns, boolean mediaStore) {
+            long size;
+            boolean sizeKnown;
+            String name;
+            int modifiedColumn;
+            long modifiedMs;
+            try (Cursor cursor = resolver.query(uri, columns, null, null, null)) {
+                if (cursor == null || !cursor.moveToFirst()) return null;
+                int sizeColumn = cursor.getColumnIndexOrThrow(OpenableColumns.SIZE);
+                sizeKnown = !cursor.isNull(sizeColumn);
+                size = sizeKnown ? cursor.getLong(sizeColumn) : 0;
+                int nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                name = nameColumn < 0 ? null : cursor.getString(nameColumn);
+                modifiedColumn = mediaStore ? cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED) : -1;
+                modifiedMs = modifiedColumn < 0 || cursor.isNull(modifiedColumn) ? 0 : cursor.getLong(modifiedColumn) * 1000L;
+            }
+            if (modifiedColumn < 0) modifiedMs = queryModifiedMs(uri);
+            // The MediaStore URIs tracked here are Downloads items and already represent files.
+            boolean directory = !mediaStore && DocumentsContract.Document.MIME_TYPE_DIR.equals(resolver.getType(uri));
+            return new DocumentInfo(uri, size, modifiedMs, directory, sizeKnown, name);
         }
 
         DocumentInfo findExisting(String remotePath, String fallbackName, long expectedSize) {
@@ -1384,7 +1461,7 @@ final class HttpReceiver {
             Map<String, DocumentInfo> existing = new LinkedHashMap<>();
             for (File child : children) {
                 existing.put(child.getName(), new DocumentInfo(
-                        Uri.fromFile(child), child.length(), child.lastModified(), child.isDirectory()));
+                        Uri.fromFile(child), child.length(), child.lastModified(), child.isDirectory(), true, child.getName()));
             }
             return availableVariant(existing, name, expectedSize);
         }
@@ -1475,38 +1552,63 @@ final class HttpReceiver {
         }
 
         private DocumentInfo createOrFindFile(String remotePath, String fallbackName, boolean replaceExisting) throws Exception {
-            if (treeUri == null) {
-                return ensurePublicFile(remotePath, fallbackName, replaceExisting);
-            }
-            String[] parts = pathParts(remotePath);
-            String name = parts.length == 0 ? safeName(fallbackName) : parts[parts.length - 1];
             if (!replaceExisting) {
                 DocumentInfo remembered = rememberedTarget(remotePath);
-                if (remembered != null) {
+                if (remembered != null && !remembered.directory) {
                     checkUnclaimed(remembered, remotePath);
                     return remembered;
                 }
             }
+            String[] parts = pathParts(remotePath);
+            String name = parts.length == 0 ? safeName(fallbackName) : parts[parts.length - 1];
+            if (treeUri == null) {
+                return ensurePublicFile(parts, name, remotePath, replaceExisting);
+            }
             Uri parent = ensureTreeDirectory(parentPath(parts));
-            DocumentInfo existing = treeChild(parent, name);
-            checkUnclaimed(existing, remotePath);
-            if (existing != null && replaceExisting) {
-                DocumentsContract.deleteDocument(resolver, existing.uri);
-                treeChildren(parent).remove(name);
-                existing = null;
+            Map<String, DocumentInfo> files = treeChildren(parent);
+            DocumentInfo existing = files.get(name);
+            if (existing != null && !existing.directory) {
+                checkUnclaimed(existing, remotePath);
+                if (!replaceExisting) {
+                    rememberTarget(remotePath, existing.uri);
+                    return existing;
+                }
+                if (DocumentsContract.deleteDocument(resolver, existing.uri)) files.remove(name);
             }
-            if (existing != null) {
-                rememberTarget(remotePath, existing.uri);
-                return existing;
+            String mimeType = mimeTypeForSave(name, MimeTypeMap.getSingleton()::getMimeTypeFromExtension);
+            return createNamedTarget(name, remotePath, files,
+                    candidate -> DocumentsContract.createDocument(resolver, parent, mimeType, candidate));
+        }
+
+        private DocumentInfo createNamedTarget(String name, String remotePath,
+                                               Map<String, DocumentInfo> files, CreateTarget create) throws Exception {
+            int rejected = 0;
+            for (int number = 0; ; number++) {
+                String candidate = numberedFileName(name, number);
+                if (files.containsKey(candidate)) continue;
+                Uri uri = create.create(candidate);
+                if (uri == null) throw new IOException("Cannot create " + candidate);
+
+                DocumentInfo info = new DocumentInfo(uri, 0);
+                checkUnclaimed(info, remotePath);
+                String actual = receivedFileName(resolver, uri);
+                DocumentInfo existing = files.get(actual);
+                if (existing == null && acceptsCreatedName(name, candidate, actual)) {
+                    files.put(actual, info);
+                    rememberTarget(remotePath, uri);
+                    return info;
+                }
+                if (existing != null && uri.equals(existing.uri)) {
+                    throw new IOException("Storage returned an existing file for " + candidate);
+                }
+                // This URI was just created and has not been written or recorded.
+                boolean removed = treeUri != null
+                        ? DocumentsContract.deleteDocument(resolver, uri)
+                        : resolver.delete(uri, null, null) > 0;
+                if (!removed || ++rejected >= MAX_PROVIDER_NAME_RETRIES) {
+                    throw new IOException("Cannot save with a unique name that preserves the extension: " + name);
+                }
             }
-            Uri created = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name);
-            if (created == null) {
-                throw new IllegalStateException("Cannot create " + name);
-            }
-            DocumentInfo info = new DocumentInfo(created, 0);
-            treeChildren(parent).put(name, info);
-            rememberTarget(remotePath, created);
-            return info;
         }
 
         synchronized Uri ensureDirectory(String remotePath) throws Exception {
@@ -1576,7 +1678,7 @@ final class HttpReceiver {
                         long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3);
                         Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(0));
                         boolean directory = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(4));
-                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs, directory, sizeKnown));
+                        childrenMap.put(childName, new DocumentInfo(childUri, size, modifiedMs, directory, sizeKnown, childName));
                     }
                 } finally {
                     cursor.close();
@@ -1586,9 +1688,7 @@ final class HttpReceiver {
             return childrenMap;
         }
 
-        private DocumentInfo ensurePublicFile(String remotePath, String fallbackName, boolean replaceExisting) throws Exception {
-            String[] parts = pathParts(remotePath);
-            String name = parts.length == 0 ? safeName(fallbackName) : parts[parts.length - 1];
+        private DocumentInfo ensurePublicFile(String[] parts, String name, String remotePath, boolean replaceExisting) throws Exception {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 String relativeDir = publicRelativeDir(parts);
                 Map<String, DocumentInfo> files = publicFiles(relativeDir);
@@ -1596,21 +1696,10 @@ final class HttpReceiver {
                     DocumentInfo existing = files.get(name);
                     if (existing != null) {
                         checkUnclaimed(existing, remotePath);
-                        resolver.delete(existing.uri, null, null);
-                        files.remove(name);
+                        if (resolver.delete(existing.uri, null, null) > 0) files.remove(name);
                     }
                 } else {
-                    // Resume: continue the exact file we created last time, looked up by
-                    // the Uri we persisted for this remote path. Independent of MediaStore's
-                    // collision rename ("name (1)", "name(1)", ... — OEM dependent) and of
-                    // scoped-storage hiding a same-named file made by another app.
-                    DocumentInfo remembered = rememberedTarget(remotePath);
-                    if (remembered != null) {
-                        checkUnclaimed(remembered, remotePath);
-                        return remembered;
-                    }
-                    // Fallback when no record exists yet (e.g. app data cleared): reuse our
-                    // own plain name or a collision-renamed sibling, most-complete first.
+                    // When no saved URI is available, resume from a download we can see by name.
                     DocumentInfo variant = bestResumeVariant(files, name);
                     if (variant != null) {
                         checkUnclaimed(variant, remotePath);
@@ -1618,18 +1707,14 @@ final class HttpReceiver {
                         return variant;
                     }
                 }
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.Downloads.DISPLAY_NAME, name);
-                values.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
-                values.put(MediaStore.Downloads.RELATIVE_PATH, relativeDir);
-                Uri created = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                if (created == null) {
-                    throw new IllegalStateException("Cannot create " + name);
-                }
-                DocumentInfo info = new DocumentInfo(created, 0);
-                files.put(name, info);
-                rememberTarget(remotePath, created);
-                return info;
+                String mimeType = mimeTypeForSave(name, MimeTypeMap.getSingleton()::getMimeTypeFromExtension);
+                return createNamedTarget(name, remotePath, files, candidate -> {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, candidate);
+                    values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, relativeDir);
+                    return resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                });
             }
 
             File dir = publicDownloadDir(parts);
@@ -1637,10 +1722,26 @@ final class HttpReceiver {
                 throw new IllegalStateException("Cannot create " + dir.getAbsolutePath());
             }
             File file = new File(dir, name);
-            if (file.exists() && replaceExisting && !file.delete()) {
-                throw new IllegalStateException("Cannot replace " + file.getAbsolutePath());
+            if (file.isFile()) {
+                Uri uri = Uri.fromFile(file);
+                DocumentInfo existing = new DocumentInfo(uri, file.length(), file.lastModified(), false);
+                checkUnclaimed(existing, remotePath);
+                if (!replaceExisting) {
+                    rememberTarget(remotePath, uri);
+                    return existing;
+                }
+                if (!file.delete()) {
+                    throw new IllegalStateException("Cannot replace " + file.getAbsolutePath());
+                }
             }
-            return new DocumentInfo(Uri.fromFile(file), file.exists() ? file.length() : 0);
+            for (int number = 0; ; number++) {
+                File candidate = new File(dir, numberedFileName(name, number));
+                if (candidate.createNewFile()) {
+                    Uri uri = Uri.fromFile(candidate);
+                    rememberTarget(remotePath, uri);
+                    return new DocumentInfo(uri, 0);
+                }
+            }
         }
 
         private Map<String, DocumentInfo> publicFiles(String relativeDir) {
@@ -1673,7 +1774,7 @@ final class HttpReceiver {
                         long size = sizeKnown ? cursor.getLong(2) : 0;
                         long modifiedMs = cursor.isNull(3) ? 0 : cursor.getLong(3) * 1000L;
                         Uri uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, String.valueOf(id));
-                        files.put(name, new DocumentInfo(uri, size, modifiedMs, false, sizeKnown));
+                        files.put(name, new DocumentInfo(uri, size, modifiedMs, false, sizeKnown, name));
                     }
                 } finally {
                     cursor.close();
@@ -1683,11 +1784,6 @@ final class HttpReceiver {
             return files;
         }
 
-        /**
-         * Pick the existing file to resume among our own downloads in this folder:
-         * the plain name or a "name (n)" collision-rename, choosing the largest so a
-         * completed copy short-circuits and the most-progressed partial is continued.
-         */
         private DocumentInfo bestResumeVariant(Map<String, DocumentInfo> files, String name) {
             DocumentInfo best = null;
             for (Map.Entry<String, DocumentInfo> entry : files.entrySet()) {
@@ -1939,6 +2035,7 @@ final class HttpReceiver {
         final long modifiedMs;
         final boolean directory;
         final boolean sizeKnown;
+        final String displayName;
 
         DocumentInfo(Uri uri, long size) {
             this(uri, size, 0, false, true);
@@ -1953,11 +2050,16 @@ final class HttpReceiver {
         }
 
         DocumentInfo(Uri uri, long size, long modifiedMs, boolean directory, boolean sizeKnown) {
+            this(uri, size, modifiedMs, directory, sizeKnown, null);
+        }
+
+        DocumentInfo(Uri uri, long size, long modifiedMs, boolean directory, boolean sizeKnown, String displayName) {
             this.uri = uri;
             this.size = size;
             this.modifiedMs = modifiedMs;
             this.directory = directory;
             this.sizeKnown = sizeKnown;
+            this.displayName = displayName;
         }
     }
 

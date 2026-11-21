@@ -36,7 +36,7 @@
     <string name="source">关于</string>
     <string name="screen_stays_on">任务运行时保持屏幕常亮</string>
     <string name="passphrase">口令</string>
-    <string name="passphrase_hint">推荐随机生成，并以安全方式分享给对方。口令相同即可连接，谁生成，谁扫码都行</string>
+    <string name="passphrase_hint">口令相同即可连接，谁生成，谁扫码都行</string>
     <string name="passphrase_input_hint">输入口令，或点「随机」生成高强度口令</string>
     <string name="generating_passphrase">正在生成口令…</string>
     <string name="start_sharing">开始分享</string>

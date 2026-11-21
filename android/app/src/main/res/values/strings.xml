@@ -35,7 +35,7 @@
     <string name="source">About</string>
     <string name="screen_stays_on">Screen stays on while tasks are running</string>
     <string name="passphrase">Passphrase</string>
-    <string name="passphrase_hint">We recommend generating a random passphrase and sharing it securely. Matching passphrases connect; either side can generate or scan.</string>
+    <string name="passphrase_hint">Matching passphrases connect. Either side can generate or scan.</string>
     <string name="passphrase_input_hint">Enter a passphrase, or tap Random to generate a strong one.</string>
     <string name="generating_passphrase">Generating passphrase…</string>
     <string name="start_sharing">Start sharing</string>
