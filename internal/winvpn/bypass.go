@@ -9,8 +9,9 @@ import (
 )
 
 type bypassSelection struct {
-	Name, IP, Gateway string
-	Index             int
+	Name, IP, Gateway     string
+	Index                 int
+	OtherIP, OtherGateway string
 }
 
 type bypassRoute struct {
@@ -19,9 +20,40 @@ type bypassRoute struct {
 	interfaceScoped bool // Remains valid across address changes on the same device.
 }
 
+// A dual-stack exit may need two scoped defaults. Keep ownership of the
+// first route if preparing the second fails so the caller can unwind both.
+func prepareScopedFamilies(s bypassSelection, prepare func(bypassSelection) (*bypassRoute, error)) (*bypassRoute, error) {
+	first, err := prepare(s)
+	if err != nil || s.OtherIP == "" {
+		return first, err
+	}
+	other := bypassSelection{Name: s.Name, Index: s.Index, IP: s.OtherIP, Gateway: s.OtherGateway}
+	second, err := prepare(other)
+	both := &bypassRoute{
+		ready: func() (bool, error) {
+			ok, err := first.ready()
+			if err != nil || !ok {
+				return ok, err
+			}
+			return second.ready()
+		},
+		close: func() error {
+			var errs []error
+			for _, route := range []*bypassRoute{second, first} {
+				if route != nil && route.close != nil {
+					errs = append(errs, route.close())
+				}
+			}
+			return errors.Join(errs...)
+		},
+	}
+	return both, err
+}
+
 // BypassSession owns only routes created by this session. Refresh never stops TUN.
 type BypassSession struct {
-	LocalIP        string
+	Local          string // Device name for an explicit interface, otherwise the selected IP.
+	byDevice       bool
 	mu             sync.Mutex
 	dns, requested string
 	selection      bypassSelection
@@ -33,13 +65,13 @@ type BypassSession struct {
 }
 
 // CurrentExit returns a consistent snapshot to the privileged socket binder.
-func (b *BypassSession) CurrentExit() (device, ip, dns string, err error) {
+func (b *BypassSession) CurrentExit() (device, local, dns string, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed || b.route == nil {
+	if b.closed || b.route == nil || b.route.ready == nil {
 		return "", "", "", fmt.Errorf("VPN bypass is unavailable")
 	}
-	return b.selection.Name, b.LocalIP, b.dns, nil
+	return b.selection.Name, b.Local, b.dns, nil
 }
 
 func (b *BypassSession) closeRoute() error {
@@ -70,16 +102,17 @@ func (b *BypassSession) Refresh() (string, uint64, error) {
 		return "", b.revision, fmt.Errorf("VPN bypass is closed")
 	}
 	next, err := b.selectExit(b.dns, b.requested, b.selection)
-	if err == nil && b.route != nil && (next == b.selection ||
-		(b.route.interfaceScoped && next.Index == b.selection.Index && next.Name == b.selection.Name)) {
+	if err == nil && b.route != nil && b.route.ready != nil && (next == b.selection ||
+		(b.route.interfaceScoped && next.Index == b.selection.Index && next.Name == b.selection.Name && (next.OtherIP == "") == (b.selection.OtherIP == ""))) {
 		var ready bool
 		ready, err = b.route.ready()
 		if err == nil && ready {
 			if next != b.selection {
-				b.selection, b.LocalIP = next, next.IP
+				b.selection = next
+				b.Local = b.source(next)
 				b.revision++
 			}
-			return b.LocalIP, b.revision, nil
+			return b.Local, b.revision, nil
 		}
 	}
 	// Remove owned obsolete scoped routes even while Wi-Fi is disconnected.
@@ -93,11 +126,21 @@ func (b *BypassSession) Refresh() (string, uint64, error) {
 	b.selection = next
 	b.route, err = b.prepare(next) // Retain partial preparation for cleanup retry.
 	if err != nil {
-		return "", b.revision, err
+		if b.route != nil {
+			b.route.ready = nil
+		}
+		return "", b.revision, errors.Join(err, b.closeRoute())
 	}
-	b.LocalIP = next.IP
+	b.Local = b.source(next)
 	b.revision++
-	return b.LocalIP, b.revision, nil
+	return b.Local, b.revision, nil
+}
+
+func (b *BypassSession) source(s bypassSelection) string {
+	if b.byDevice {
+		return s.Name
+	}
+	return s.IP
 }
 
 func PrepareBypass(dns, requestedLocal string) (*BypassSession, error) {
@@ -106,9 +149,11 @@ func PrepareBypass(dns, requestedLocal string) (*BypassSession, error) {
 		return nil, fmt.Errorf("bypass DNS requires an IP and port")
 	}
 	if requestedLocal != "" && net.ParseIP(requestedLocal) == nil {
-		return nil, fmt.Errorf("invalid bypass source IP")
+		if _, err := net.InterfaceByName(requestedLocal); err != nil {
+			return nil, err
+		}
 	}
-	b := &BypassSession{dns: dns, requested: requestedLocal, selectExit: selectBypassExit, prepare: prepareInterfaceBypass}
+	b := &BypassSession{dns: dns, requested: requestedLocal, byDevice: requestedLocal != "" && net.ParseIP(requestedLocal) == nil, selectExit: selectBypassExit, prepare: prepareInterfaceBypass}
 	if _, _, err := b.Refresh(); err != nil {
 		if cleanupErr := b.Close(); cleanupErr != nil {
 			return b, errors.Join(err, cleanupErr)

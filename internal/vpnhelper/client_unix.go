@@ -145,7 +145,7 @@ func (c *Client) PrepareBypass(dns, local string, blockDNSLeak bool) (string, er
 	if c.conn != nil {
 		c.bindingMu.Lock()
 		defer c.bindingMu.Unlock()
-		resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
+		resp, err := c.call(request{Op: OpPrepare, Address: dns, Local: local})
 		if err == nil && resp.BindAddress != "" {
 			c.bindAddress = resp.BindAddress
 			c.bindDNS = ""
@@ -153,9 +153,9 @@ func (c *Client) PrepareBypass(dns, local string, blockDNSLeak bool) (string, er
 				// Mark reconnect queries before the capture rules are installed.
 				c.bindDNS = dns
 			}
-			c.releaseBinding = registerSocketBinding(c, resp.LocalIP)
+			c.releaseBinding = registerSocketBinding(c, resp.Local)
 		}
-		return resp.LocalIP, err
+		return resp.Local, err
 	}
 	if c.bypass != nil {
 		return "", fmt.Errorf("VPN bypass already prepared")
@@ -165,7 +165,7 @@ func (c *Client) PrepareBypass(dns, local string, blockDNSLeak bool) (string, er
 	if err != nil {
 		return "", err
 	}
-	return b.LocalIP, nil
+	return b.Local, nil
 }
 func (c *Client) RefreshBypass() (string, uint64, error) {
 	if c.conn != nil {
@@ -174,12 +174,12 @@ func (c *Client) RefreshBypass() (string, uint64, error) {
 		resp, err := c.call(request{Op: OpRefresh})
 		if err == nil && c.bindAddress != "" {
 			prev := c.releaseBinding
-			c.releaseBinding = registerSocketBinding(c, resp.LocalIP)
+			c.releaseBinding = registerSocketBinding(c, resp.Local)
 			if prev != nil {
 				prev()
 			}
 		}
-		return resp.LocalIP, resp.Revision, err
+		return resp.Local, resp.Revision, err
 	}
 	if c.bypass == nil {
 		return "", 0, fmt.Errorf("VPN bypass is not prepared")

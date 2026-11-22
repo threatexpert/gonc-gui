@@ -51,10 +51,10 @@ func TestPrepareBypassReturnsSelectedSource(t *testing.T) {
 		line, _ := bufio.NewReader(h).ReadBytes('\n')
 		_ = json.Unmarshal(line, &r)
 		received <- r
-		_ = json.NewEncoder(h).Encode(response{OK: true, LocalIP: "192.168.50.2"})
+		_ = json.NewEncoder(h).Encode(response{OK: true, Local: "Ethernet 2"})
 	}()
 	got, err := client.PrepareBypass("8.8.8.8:53", "", true)
-	if err != nil || got != "192.168.50.2" {
+	if err != nil || got != "Ethernet 2" {
 		t.Fatalf("%s %v", got, err)
 	}
 	r := <-received

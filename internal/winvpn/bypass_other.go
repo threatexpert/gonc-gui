@@ -13,8 +13,13 @@ func selectBypassExit(dns, requested string, previous bypassSelection) (bypassSe
 	ipv4 := net.ParseIP(host).To4() != nil
 	// Once TUN captures traffic, global route selection can point at TUN.
 	// Re-read the physical interface addresses instead of reusing the old IP.
-	if previous.Name != "" {
-		iface, err := net.InterfaceByName(previous.Name)
+	device := previous.Name
+	if requested != "" && net.ParseIP(requested) == nil {
+		device = requested
+		requested = ""
+	}
+	if device != "" {
+		iface, err := net.InterfaceByName(device)
 		if err != nil {
 			return bypassSelection{}, err
 		}

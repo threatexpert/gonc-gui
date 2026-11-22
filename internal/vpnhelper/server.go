@@ -63,7 +63,7 @@ func Run(connectAddr, token string) (result error) {
 				_ = enc.Encode(response{OK: false, Error: "VPN bypass already prepared"})
 				continue
 			}
-			prepared, err := winvpn.PrepareBypass(req.Address, req.LocalIP)
+			prepared, err := winvpn.PrepareBypass(req.Address, req.Local)
 			if prepared != nil {
 				resources.bypass = prepared
 			}
@@ -77,7 +77,7 @@ func Run(connectAddr, token string) (result error) {
 				continue
 			}
 			resources.bypass = bound
-			_ = enc.Encode(response{OK: true, LocalIP: prepared.LocalIP, BindAddress: address})
+			_ = enc.Encode(response{OK: true, Local: prepared.Local, BindAddress: address})
 		case OpRefresh:
 			if resources.bypass == nil {
 				_ = enc.Encode(response{Error: "VPN bypass is not prepared"})
@@ -88,7 +88,7 @@ func Run(connectAddr, token string) (result error) {
 				_ = enc.Encode(response{Error: err.Error()})
 				continue
 			}
-			_ = enc.Encode(response{OK: true, LocalIP: local, Revision: revision})
+			_ = enc.Encode(response{OK: true, Local: local, Revision: revision})
 		case OpProxy:
 			if resources.active == nil {
 				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})

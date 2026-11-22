@@ -63,6 +63,30 @@ func darwinDefaults(ipv4 bool) ([]darwinDefault, error) {
 func selectBypassExit(dns, requested string, _ bypassSelection) (bypassSelection, error) {
 	host, _, _ := net.SplitHostPort(dns)
 	ipv4 := net.ParseIP(host).To4() != nil
+	device := ""
+	byDevice := net.ParseIP(requested) == nil
+	if byDevice {
+		device, requested = requested, ""
+	}
+	selected, err := darwinPhysicalExit(ipv4, device, requested)
+	if err != nil {
+		return bypassSelection{}, err
+	}
+	if byDevice {
+		// The DNS family selects the physical device. Prepare the opposite family
+		// only if the same device has an address and a physical default for it.
+		other, err := darwinPhysicalExit(!ipv4, selected.Name, "")
+		if err != nil && !errors.Is(err, errNoPhysicalDefault) {
+			return bypassSelection{}, err
+		}
+		selected.OtherIP, selected.OtherGateway = other.IP, other.Gateway
+	}
+	return selected, nil
+}
+
+var errNoPhysicalDefault = errors.New("no current physical default route/address for reconnect bypass")
+
+func darwinPhysicalExit(ipv4 bool, device, requested string) (bypassSelection, error) {
 	defaults, err := darwinDefaults(ipv4)
 	if err != nil {
 		return bypassSelection{}, err
@@ -70,7 +94,7 @@ func selectBypassExit(dns, requested string, _ bypassSelection) (bypassSelection
 	// Prefer the physical non-scoped default. Scoped fallback supports an
 	// explicitly selected secondary interface without using a captured route.
 	for _, scoped := range []bool{false, true} {
-		if scoped && requested == "" {
+		if scoped && requested == "" && device == "" {
 			continue
 		}
 		for _, d := range defaults {
@@ -78,7 +102,7 @@ func selectBypassExit(dns, requested string, _ bypassSelection) (bypassSelection
 				continue
 			}
 			iface, err := net.InterfaceByIndex(d.index)
-			if err != nil {
+			if err != nil || (device != "" && iface.Name != device) {
 				continue
 			}
 			ip, err := interfaceSource(*iface, ipv4, d.source, requested)
@@ -92,7 +116,7 @@ func selectBypassExit(dns, requested string, _ bypassSelection) (bypassSelection
 			return bypassSelection{Name: iface.Name, Index: iface.Index, IP: ip, Gateway: gateway}, nil
 		}
 	}
-	return bypassSelection{}, fmt.Errorf("no current physical default route/address for reconnect bypass (requested -local %q)", requested)
+	return bypassSelection{}, fmt.Errorf("%w (interface %q, source %q)", errNoPhysicalDefault, device, requested)
 }
 
 func inspectScopedDefault(s bypassSelection) (*darwinDefault, error) {
@@ -144,6 +168,10 @@ func scopedRouteReady(s bypassSelection) (bool, error) {
 }
 
 func prepareInterfaceBypass(s bypassSelection) (*bypassRoute, error) {
+	return prepareScopedFamilies(s, prepareScopedBypass)
+}
+
+func prepareScopedBypass(s bypassSelection) (*bypassRoute, error) {
 	existing, err := inspectScopedDefault(s)
 	if err != nil {
 		return nil, err

@@ -31,7 +31,7 @@ func verifyElevatedPeer(c net.Conn) error {
 func registerSocketBinding(c *Client, ip string) func() {
 	address, server := c.bindAddress, c.bindDNS
 	return netx.RegisterLinuxSocketBinder(ip, server, func(raw syscall.RawConn, dns string) error {
-		return requestSocketBinding(c.conn, address, raw, request{LocalIP: ip, Address: dns})
+		return requestSocketBinding(c.conn, address, raw, request{Local: ip, Address: dns})
 	})
 }
 
@@ -179,7 +179,7 @@ func (b *bindingService) bindRequest(c *net.UnixConn) error {
 	if err != nil {
 		return err
 	}
-	if req.LocalIP != ip || (req.Address != "" && req.Address != dns) {
+	if req.Local != ip || (req.Address != "" && req.Address != dns) {
 		return fmt.Errorf("socket does not match the prepared VPN bypass")
 	}
 	fd := fds[0]

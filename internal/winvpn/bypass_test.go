@@ -81,7 +81,7 @@ func TestBypassGatewayChangeWithSameIPRebuildsOwnedRoute(t *testing.T) {
 	n := a
 	n.Gateway = "192.168.50.254"
 	cleaned := false
-	b := &BypassSession{selection: a, LocalIP: a.IP, revision: 1, route: &bypassRoute{close: func() error { cleaned = true; return nil }},
+	b := &BypassSession{selection: a, Local: a.IP, revision: 1, route: &bypassRoute{close: func() error { cleaned = true; return nil }},
 		selectExit: func(string, string, bypassSelection) (bypassSelection, error) { return n, nil },
 		prepare: func(s bypassSelection) (*bypassRoute, error) {
 			if !cleaned || s != n {
@@ -99,5 +99,34 @@ func TestReusedBypassIsNotDeletedOnClose(t *testing.T) {
 	b := &BypassSession{route: &bypassRoute{ready: func() (bool, error) { return true, nil }}}
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDualStackScopedBypassUnwindsOnSecondFamilyError(t *testing.T) {
+	selected := bypassSelection{Name: "en0", IP: "192.0.2.7", Gateway: "192.0.2.1", OtherIP: "2001:db8::7", OtherGateway: "fe80::1%en0"}
+	var operations []string
+	b := &BypassSession{byDevice: true,
+		selectExit: func(string, string, bypassSelection) (bypassSelection, error) { return selected, nil },
+		prepare: func(s bypassSelection) (*bypassRoute, error) {
+			return prepareScopedFamilies(s, func(family bypassSelection) (*bypassRoute, error) {
+				operations = append(operations, "prepare "+family.Gateway)
+				if family.IP == selected.OtherIP {
+					return nil, errors.New("IPv6 route failed")
+				}
+				return &bypassRoute{close: func() error {
+					operations = append(operations, "remove "+family.Gateway)
+					return nil
+				}}, nil
+			})
+		},
+	}
+	if _, _, err := b.Refresh(); err == nil {
+		t.Fatal("second route error was lost")
+	}
+	if _, _, _, err := b.CurrentExit(); err == nil {
+		t.Fatal("partial bypass advertised")
+	}
+	if err := b.Close(); err != nil || !reflect.DeepEqual(operations, []string{"prepare 192.0.2.1", "prepare fe80::1%en0", "remove 192.0.2.1"}) {
+		t.Fatal(operations, err)
 	}
 }

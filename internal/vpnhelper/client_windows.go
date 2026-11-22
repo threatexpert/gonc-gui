@@ -107,13 +107,13 @@ func (c *Client) Stop() error {
 }
 
 func (c *Client) PrepareBypass(dns, local string, _ bool) (string, error) {
-	resp, err := c.call(request{Op: OpPrepare, Address: dns, LocalIP: local})
-	return resp.LocalIP, err
+	resp, err := c.call(request{Op: OpPrepare, Address: dns, Local: local})
+	return resp.Local, err
 }
 func (c *Client) RefreshBypass() (string, uint64, error) {
 	if c.conn != nil {
 		resp, err := c.call(request{Op: OpRefresh})
-		return resp.LocalIP, resp.Revision, err
+		return resp.Local, resp.Revision, err
 	}
 	return "", 0, fmt.Errorf("VPN helper is not connected")
 }
