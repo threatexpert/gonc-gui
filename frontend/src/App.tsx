@@ -369,6 +369,7 @@ const text = {
     paste: '粘贴',
     copied: '口令已复制',
     copyPasswordFailed: '无法将口令复制到剪贴板。',
+    copyLogsFailed: '无法将日志复制到剪贴板。',
     logsCopied: '日志已复制',
     sharedList: '文件',
     addPickerTitle: '添加分享内容',
@@ -687,6 +688,7 @@ const text = {
     paste: 'Paste',
     copied: 'Passphrase copied',
     copyPasswordFailed: 'Could not copy the passphrase to the clipboard.',
+    copyLogsFailed: 'Could not copy the logs to the clipboard.',
     logsCopied: 'Activity copied',
     sharedList: 'Files',
     addPickerTitle: 'Add shared content',
@@ -1997,21 +1999,26 @@ function App() {
     revealPasswordTemporarily('vpnClient');
   }
 
+  async function copyText(text: string, failureMessage: string): Promise<boolean> {
+    setError('');
+    try {
+      if (await ClipboardSetText(text)) return true;
+    } catch {
+      // Try the WebView clipboard if the native clipboard is unavailable.
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      setError(failureMessage);
+      return false;
+    }
+  }
+
   async function copyPassword() {
     const targetMode = mode;
     const passphrase = targetMode === 'vpnServer' ? vpnServerPassphrase : activePassword;
-    if (!passphrase) return;
-    setError('');
-    try {
-      if (!await ClipboardSetText(passphrase)) throw new Error();
-    } catch {
-      try {
-        await navigator.clipboard.writeText(passphrase);
-      } catch {
-        setError(t.copyPasswordFailed);
-        return;
-      }
-    }
+    if (!passphrase || !await copyText(passphrase, t.copyPasswordFailed)) return;
     revealPasswordTemporarily(targetMode);
     appendLog('status', 'info', t.copied);
   }
@@ -2023,7 +2030,7 @@ function App() {
     const content = logs
       .map((log) => `[${new Date(log.time).toLocaleTimeString()}] ${log.level.toUpperCase()} ${log.message}`)
       .join('\n');
-    await navigator.clipboard.writeText(content);
+    if (!await copyText(content, t.copyLogsFailed)) return;
     appendLog('status', 'info', t.logsCopied);
   }
 
