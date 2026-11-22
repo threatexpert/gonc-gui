@@ -126,6 +126,7 @@ func (v *vpnTunnelLifecycle) current(s vpnTunnelSnapshot) bool {
 type vpnRouteActions struct {
 	protect  bool
 	update   func(string) error
+	resume   func(vpnTunnelSnapshot) error
 	probe    func(context.Context, string) bool
 	start    func(vpnTunnelSnapshot, bool) ([]string, error)
 	stop     func() error
@@ -215,6 +216,14 @@ func runVPNRouteLifecycle(ctx context.Context, done <-chan struct{}, v *vpnTunne
 					return err
 				}
 				endpoint = s.endpoint
+			}
+			if a.resume != nil {
+				if err := a.resume(s); err != nil {
+					if !v.current(s) {
+						continue
+					}
+					return err
+				}
 			}
 			processed = s.revision
 			configuring = false

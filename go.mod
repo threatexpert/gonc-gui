@@ -7,7 +7,7 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.13-0.20261120122034-134dbf6c7f24
+	github.com/threatexpert/gonc/v2 v2.6.13
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/image v0.41.0

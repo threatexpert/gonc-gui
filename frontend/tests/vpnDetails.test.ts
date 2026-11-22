@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, type VPNDetails} from '../src/vpnDetails.js';
 import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex} from '../src/vpnDetails.js';
-import {initialPeerIPv6State, peerIPv6Label} from '../src/vpnDetails.js';
+import {initialPeerIPv6State, peerIPv6Label, vpnDNSLabel} from '../src/vpnDetails.js';
 
 const sample = (patch: Partial<VPNDetails> = {}): VPNDetails => ({
   revision: 1, running: true, connected: true, ready: true, everReady: true, sessionStartedAt: '2026-11-15T10:00:00Z',
@@ -25,6 +25,15 @@ test('protection lock follows capture independently of tunnel readiness', () => 
   assert.equal(vpnProtectionHint({...protectedSession, running: false}, false), undefined);
   assert.equal(vpnProtectionHint({...protectedSession, disconnectProtection: false}, true), undefined);
   assert.equal(vpnProtectionHint({...protectedSession, tunnelOnly: true}, true), undefined);
+});
+
+test('Linux protection follows confirmed output state across first dial and reconnect', () => {
+  const initial = sample({disconnectProtection: true, everReady: false, ready: false, captureActive: false});
+  assert.equal(vpnProtectionHint(initial, true, true), 'linuxPending');
+  assert.equal(vpnProtectionHint({...initial, linuxOutput: 'sealed'}, true, true), 'linuxConnecting');
+  assert.equal(vpnProtectionHint({...initial, linuxOutput: 'sealed', everReady: true, routeState: 'error'}, true, true), 'linuxReconnecting');
+  assert.equal(vpnProtectionHint({...initial, linuxOutput: 'routed', everReady: true}, true, true), 'linuxRouted');
+  assert.equal(vpnProtectionHint({...initial, linuxOutput: 'sealed', routeState: 'stopping'}, true, true), 'linuxPending');
 });
 
 test('IPv6 exit wording distinguishes local routing and SOCKS5-only reasons', () => {
@@ -275,8 +284,11 @@ test('VPN card and activity drawer are wired to per-session backend details', ()
   assert.match(source, /acceptVPNDetails\(current, activeVPNRun\.current/);
   assert.match(source, /event\.mode === 'vpnClient' && !fileTransferReportBelongsToRun/);
   assert.match(source, /aria-expanded={vpnPathsExpanded}/);
-  assert.match(source, /label="DNS" value={vpnDetails\?\.routeState === 'applied' \? vpnDetails.dnsServers/);
-  assert.match(source, /t.vpnSystemDNS : '—'/);
+  assert.ok(source.includes('label="DNS" value={vpnDNSLabel(vpnDetails, t.vpnSystemDNS)}'));
+  assert.equal(vpnDNSLabel(sample(), 'System DNS'), 'System DNS');
+  const reconnect = sample({routeState: 'protected', dnsServers: ['8.8.8.8']});
+  assert.equal(vpnDNSLabel(reconnect, 'System DNS'), '—');
+  assert.equal(vpnDNSLabel({...reconnect, linuxOutput: 'sealed'}, 'System DNS'), '8.8.8.8');
   assert.doesNotMatch(source, /vpnTrafficHint|vpnRouteSummary|vpnRouteScope|vpnRouteCaution/);
   assert.match(source, /label={t.vpnUpload} value={vpnUploadText}/);
   assert.match(source, /label={t.vpnDownload} value={vpnDownloadText}/);

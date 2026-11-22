@@ -93,7 +93,7 @@ func captureFamilies() ([]dnsFamily, error) {
 	return families, nil
 }
 func (c *linuxDNSCapture) start(cfg vpnconfig.Config, servers []string) error {
-	if cfg.DisconnectProtection && (cfg.LinuxDNSMark == 0 || cfg.LinuxDNSDevice == "" || cfg.LinuxDNSBypass == "") {
+	if cfg.DisconnectProtection && (cfg.LinuxEgressMark == 0 || cfg.LinuxDNSBypass == "") {
 		return errors.New("missing reconnect DNS socket binding")
 	}
 	families, err := captureFamilies()
@@ -145,9 +145,11 @@ func (c *linuxDNSCapture) installFamilyRules(tool, chain string, listenerPort in
 			return err
 		}
 		for _, proto := range []string{"udp", "tcp"} {
-			if cfg.LinuxDNSMark != 0 && (net.ParseIP(host).To4() != nil) == v4 {
+			if cfg.LinuxEgressMark != 0 && (net.ParseIP(host).To4() != nil) == v4 {
 				// RETURN from our chain continues processing the user's firewall.
-				if err := c.rule(tool, table, "-A", chain, "-p", proto, "--dport", port, "-d", host, "-o", cfg.LinuxDNSDevice, "-m", "mark", "--mark", fmt.Sprintf("0x%x", cfg.LinuxDNSMark), "-j", "RETURN"); err != nil {
+				match := []string{chain, "-p", proto, "--dport", port, "-d", host}
+				match = append(match, "-m", "mark", "--mark", fmt.Sprintf("0x%x", cfg.LinuxEgressMark), "-j", "RETURN")
+				if err := c.rule(tool, table, "-A", match...); err != nil {
 					return err
 				}
 			}

@@ -15,7 +15,7 @@ import {ReceiveComparison} from './ReceiveComparison';
 import {acceptReceiveReport, isPeerWaitTimeout} from './receiveConnectionState';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from './vpnDisconnectState';
-import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, type VPNDetails, type VPNSnapshot} from './vpnDetails';
+import {acceptVPNDetails, formatVPNConnectedAt, formatVPNDuration, vpnDuration, vpnRates, vpnPaths, vpnPhase, vpnRetrySeconds, vpnAttemptStage, vpnProtectionHint, vpnDNSLabel, type VPNDetails, type VPNSnapshot} from './vpnDetails';
 import {retainVPNConfigurationFailure, vpnConfigurationFailureSummary, vpnFailureLogIndex, type VPNConfigurationFailure} from './vpnDetails';
 import {initialPeerIPv6State, peerIPv6Label as peerIpv6Label} from './vpnDetails';
 import {
@@ -422,12 +422,18 @@ const text = {
     peerIpv6Available: '可用',
     peerIpv6Unavailable: '检测未通过',
     disconnectProtection: '断网保护',
+    linuxDisconnectProtectionHint: '首次连接或重连时，阻止普通应用绕过 VPN 访问网络。连接成功后恢复局域网访问。',
     disconnectProtectionHint: '首次连接成功后，隧道断开或重连期间仍保留已配置的网络接管；停止 VPN 后恢复正常网络。未接管的网段不受保护。',
     reconnectDns: '隧道连接 DNS',
     reconnectDnsHint: '用于从本地网络解析隧道服务器地址，确保断线后仍可重连。留空使用 8.8.8.8。它也会影响本程序其他使用默认 DNS 的功能；与 VPN 上网 DNS 分开配置。',
+    linuxConnecting: '正在连接 VPN，已阻止普通应用绕过 VPN 访问网络。',
+    linuxReconnecting: '正在重连 VPN，已阻止普通应用绕过 VPN 访问网络。',
+    linuxPending: '断网保护已启用，将在建立连接前阻止普通应用绕过 VPN 访问网络。',
+    linuxRouted: 'VPN 已连接，可正常访问局域网。断线重连时将阻止普通应用绕过 VPN 访问网络。',
+    linuxReconnectDNSHint: '仅供本次隧道解析连接地址。留空使用 8.8.8.8。',
     protectionConfigured: '断网保护已配置，接管流量后生效。',
     protectionActive: '断网保护已生效。',
-    protectionReconnecting: '断网保护生效中，重连期间仍接管选定流量。',
+    protectionReconnecting: '正在重连 VPN，受保护的流量仍由 VPN 接管。',
     tunnelOnly: '仅 SOCKS5 隧道',
     tunnelOnlyHint: '只建立本地 SOCKS5 隧道，不修改系统路由。',
     vpnDnsServers: 'DNS',
@@ -447,7 +453,7 @@ const text = {
     dnsLeakProtection: '防 DNS 泄漏',
     p2pWithLan: '同时启用局域网发现',
     p2pWithLanHint: '同时通过公网 P2P 和局域网发现对端。',
-    dnsLeakProtectionHint: 'Windows 阻止系统 DNS 服务从本地网络查询。Linux 将普通 DNS 查询（UDP/TCP 53）经 VPN 转发，并阻止其从物理网卡直出。',
+    dnsLeakProtectionHint: 'Windows 阻止系统 DNS 服务通过本地网络查询。Linux 通过 VPN 转发普通 DNS 查询（UDP/TCP 53），并阻止这些查询绕过 VPN。',
     remoteFiles: '对方分享的文件',
     selectAll: '全选',
     invertSelection: '反选',
@@ -741,12 +747,18 @@ const text = {
     peerIpv6Available: 'Available',
     peerIpv6Unavailable: 'Check failed',
     disconnectProtection: 'Disconnect protection',
+    linuxDisconnectProtectionHint: 'Blocks direct app traffic while connecting or reconnecting. Once the VPN is ready, system routes apply and local network access resumes.',
     disconnectProtectionHint: 'After the first successful connection, keep configured traffic capture during outages and reconnects. Stop VPN to restore normal networking. Excluded networks are not protected.',
     reconnectDns: 'Tunnel connection DNS',
     reconnectDnsHint: 'Resolves tunnel server names through the local network so reconnection works during outages. Blank uses 8.8.8.8. Also affects other default DNS lookups in this app; configured separately from VPN browsing DNS.',
+    linuxConnecting: 'Connecting. Direct app traffic is blocked.',
+    linuxReconnecting: 'Reconnecting. Direct app traffic is blocked.',
+    linuxPending: 'Disconnect protection is configured. Blocking starts before dialing.',
+    linuxRouted: 'VPN connected. Local network access is available. Apps will be blocked from bypassing the VPN during reconnection.',
+    linuxReconnectDNSHint: 'Resolves connection addresses for this tunnel only. Defaults to 8.8.8.8.',
     protectionConfigured: 'Disconnect protection is enabled and takes effect when traffic capture starts.',
     protectionActive: 'Disconnect protection is active.',
-    protectionReconnecting: 'Disconnect protection is active. Traffic on the configured routes stays captured during reconnection.',
+    protectionReconnecting: 'Disconnect protection is active. Protected traffic cannot leave directly during reconnection.',
     tunnelOnly: 'Tunnel only',
     tunnelOnlyHint: 'Only create the local SOCKS5 tunnel without changing system routes.',
     vpnDnsServers: 'DNS',
@@ -1369,6 +1381,7 @@ function App() {
   const protectionHint = vpnProtectionHint(
     vpnClientRunning && !vpnDisconnectPending ? vpnDetails : undefined,
     vpnClientDisconnectProtection && !vpnClientTunnelOnly,
+    runtimePlatform === "linux",
   );
   const vpnConnectionPhase = vpnPhase(vpnDetails, vpnClientRunning);
   const vpnRetryCountdown = vpnRetrySeconds(vpnSnapshot, performance.now());
@@ -3619,7 +3632,7 @@ function App() {
               aria-label={protectionHint && t[protectionHint]} data-protection-tip={protectionHint && t[protectionHint]}>
               <Icon name={vpnClientRunning && vpnClientStatus.tone === 'connected' ? 'shieldCheck' : 'shield'} />
               {protectionHint && (
-                <span className={`vpn-protection-lock${protectionHint === 'protectionConfigured' ? '' : ' active'}`}>
+                <span className={`vpn-protection-lock${(protectionHint === 'protectionConfigured' || protectionHint === 'linuxPending') ? '' : ' active'}`}>
                   <Icon name="lock" />
                 </span>
               )}
@@ -3668,7 +3681,7 @@ function App() {
               ) : (
                 <>
                   <div className="stats-row vpn-network-grid">
-                    <Metric label="DNS" value={vpnDetails?.routeState === 'applied' ? vpnDetails.dnsServers.join(' · ') || t.vpnSystemDNS : '—'} />
+                    <Metric label="DNS" value={vpnDNSLabel(vpnDetails, t.vpnSystemDNS)} />
                     <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />
                   </div>
                   <div className="vpn-paths">
@@ -3712,12 +3725,12 @@ function App() {
           </SettingsSection>
           <SettingsSection title={t.sectionRouting} summary={vpnClientTunnelOnly ? t.tunnelOnly : `${t.systemVpn}${hasIPv6Routes(vpnClientRouteCIDRs) ? ' · IPv6' : ''}`}>
             <Toggle label={t.tunnelOnly} hint={t.tunnelOnlyHint} checked={vpnClientTunnelOnly} disabled={vpnClientRunning} onChange={(checked) => setVpnProfileField('tunnelOnly', checked)} />
-            <Toggle label={t.disconnectProtection} hint={t.disconnectProtectionHint} checked={vpnClientDisconnectProtection} disabled={vpnClientRunning || vpnClientTunnelOnly} onChange={(checked) => setVpnProfileField('disconnectProtection', checked)} />
+            <Toggle label={t.disconnectProtection} hint={runtimePlatform === 'linux' ? t.linuxDisconnectProtectionHint : t.disconnectProtectionHint} checked={vpnClientDisconnectProtection} disabled={vpnClientRunning || vpnClientTunnelOnly} onChange={(checked) => setVpnProfileField('disconnectProtection', checked)} />
             {vpnClientDisconnectProtection && !vpnClientTunnelOnly && (
               <div className="field">
                 <label htmlFor="vpn-reconnect-dns">{t.reconnectDns}</label>
                 <input id="vpn-reconnect-dns" value={vpnClientReconnectDNS} placeholder="8.8.8.8" disabled={vpnClientRunning} onChange={(event) => setVpnProfileField('reconnectDns', event.target.value)} />
-                <p className="field-hint">{t.reconnectDnsHint}</p>
+                <p className="field-hint">{runtimePlatform === 'linux' ? t.linuxReconnectDNSHint : t.reconnectDnsHint}</p>
               </div>
             )}
             <div className="field">

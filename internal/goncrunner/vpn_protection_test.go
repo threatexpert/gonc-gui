@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/threatexpert/gonc/v2/goncembed"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -12,6 +13,14 @@ func TestProtectedReconnectRetainsCaptureAndUpdatesOnlyChangedEndpoint(t *testin
 	h := newRouteHarness(t)
 	h.a.protect = true
 	updates := 0
+	resumes := 0
+	h.a.resume = func(s vpnTunnelSnapshot) error {
+		resumes++
+		if s.endpoint == "socks5://127.0.0.1:2000" && updates != 1 {
+			t.Fatal("resumed output before SOCKS update")
+		}
+		return nil
+	}
 	h.a.update = func(endpoint string) error {
 		updates++
 		if endpoint != "socks5://127.0.0.1:2000" {
@@ -40,7 +49,7 @@ func TestProtectedReconnectRetainsCaptureAndUpdatesOnlyChangedEndpoint(t *testin
 	}
 	tunnelReady(h.v, "topic1", "socks5://127.0.0.1:1000")
 	h.run(t)
-	if h.starts != 1 || h.stops != 0 || h.probes != 1 || updates != 1 || h.applied != 3 || h.paused != 2 {
+	if h.starts != 1 || h.stops != 0 || h.probes != 1 || updates != 1 || h.applied != 3 || h.paused != 2 || resumes != 2 {
 		t.Fatalf("%+v updates=%d", h, updates)
 	}
 }
@@ -65,6 +74,7 @@ func TestProtectedLossDuringStartRetainsCapture(t *testing.T) {
 func TestProtectedUpdateFailureNeverStopsCapture(t *testing.T) {
 	h := newRouteHarness(t)
 	h.a.protect = true
+	h.a.resume = func(vpnTunnelSnapshot) error { t.Fatal("opened output after a failed SOCKS update"); return nil }
 	want := errors.New("update failed")
 	h.a.update = func(string) error { return want }
 	h.a.applied = func(vpnTunnelSnapshot, bool, []string) { tunnelReady(h.v, "b", "socks5://127.0.0.1:2000") }
@@ -103,8 +113,8 @@ func TestProtectionValidationAndScope(t *testing.T) {
 		}
 	}
 	cfg := systemVPNConfig(base, vpnTunnelSnapshot{bypass: []string{"8.8.8.8"}}, []string{"0.0.0.0/1", "128.0.0.0/1"}, false)
-	if len(cfg.BypassIPs) != 0 {
-		t.Fatal("protection added global destination bypass routes")
+	if (len(cfg.BypassIPs) != 0) != (runtime.GOOS == "linux") {
+		t.Fatalf("unexpected peer routes on %s: %v", runtime.GOOS, cfg.BypassIPs)
 	}
 }
 
@@ -189,5 +199,23 @@ func TestAdvancedBypassValuesOverrideAutomaticValues(t *testing.T) {
 	p, err := PlanProtection(Request{ReconnectDNS: "8.8.8.8", ExtraArgs: `-dns 1.1.1.1 --dns=9.9.9.9:5353 --local "192.168.50.2:6000" -e ":nc -dns 4.4.4.4 host 80"`})
 	if err != nil || p.DNS != "9.9.9.9:5353" || p.Local != "192.168.50.2:6000" || len(p.Overrides) != 2 {
 		t.Fatalf("%+v %v", p, err)
+	}
+}
+
+func TestProtectedLocalArgumentKeepsDeviceAndLegacyPort(t *testing.T) {
+	const name = "Ethernet adapter 2"
+	p, err := PlanProtection(Request{})
+	if err != nil || p.DNS != "8.8.8.8:53" || p.requestedSource != "" || p.localArgument(name) != name {
+		t.Fatal(p, err)
+	}
+	for _, local := range []string{name, "device'with" + string('"') + "quotes"} {
+		args := splitExtraArgs("-local " + quoteLocalArg(local))
+		if len(args) != 2 || args[1] != local {
+			t.Fatal(args)
+		}
+	}
+	p, err = PlanProtection(Request{ExtraArgs: "-local 192.0.2.10:4567"})
+	if err != nil || p.requestedSource != "192.0.2.10" || p.localArgument(name) != "192.0.2.10:4567" {
+		t.Fatal(p, err)
 	}
 }

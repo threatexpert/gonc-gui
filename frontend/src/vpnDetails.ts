@@ -1,6 +1,7 @@
 export type VPNDetails = {
   disconnectProtection?: boolean;
   captureActive?: boolean;
+  linuxOutput?: 'sealed' | 'routed';
   revision: number;
   running: boolean;
   connected: boolean;
@@ -29,11 +30,21 @@ export type VPNDetails = {
 
 export type VPNSnapshot = {data: VPNDetails; receivedAt: number};
 
-export function vpnProtectionHint(session: VPNDetails | undefined, configured: boolean) {
-  if (!session?.running) return configured ? 'protectionConfigured' : undefined;
+export function vpnDNSLabel(data: VPNDetails | undefined, systemDNS: string): string {
+  if (data?.routeState === 'applied') return data.dnsServers?.join(' · ') || systemDNS;
+  if (data?.linuxOutput && data.running) return data.dnsServers?.join(' · ') || '—';
+  return '—';
+}
+
+export function vpnProtectionHint(session: VPNDetails | undefined, configured: boolean, linux = false) {
+  const pending = linux ? "linuxPending" : "protectionConfigured";
+  if (!session?.running) return configured ? pending : undefined;
   if (!session.disconnectProtection || session.tunnelOnly) return undefined;
-  if (!session.captureActive || session.routeState === 'stopping' || session.routeState === 'error') {
-    return 'protectionConfigured';
+  if (session.routeState === 'stopping') return pending;
+  if (session.linuxOutput === 'sealed') return session.everReady ? 'linuxReconnecting' : 'linuxConnecting';
+  if (session.linuxOutput === 'routed') return 'linuxRouted';
+  if (!session.captureActive || session.routeState === 'error') {
+    return pending;
   }
   return session.ready ? 'protectionActive' : 'protectionReconnecting';
 }

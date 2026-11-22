@@ -28,10 +28,15 @@ func verifyElevatedPeer(c net.Conn) error {
 	}
 	return nil
 }
-func registerSocketBinding(c *Client, ip string) func() {
-	address, server := c.bindAddress, c.bindDNS
-	return netx.RegisterLinuxSocketBinder(ip, server, func(raw syscall.RawConn, dns string) error {
-		return requestSocketBinding(c.conn, address, raw, request{Local: ip, Address: dns})
+func (c *Client) TunnelNetwork(local, dns string) (*netx.TunnelNetwork, error) {
+	c.bindingMu.Lock()
+	defer c.bindingMu.Unlock()
+	address, control := c.bindAddress, c.conn
+	if address == "" || control == nil {
+		return nil, errors.New("tunnel socket helper unavailable")
+	}
+	return netx.NewTunnelNetwork(dns, local, func(raw syscall.RawConn) error {
+		return requestSocketBinding(control, address, raw, request{Local: local})
 	})
 }
 
@@ -91,6 +96,7 @@ type bindingService struct {
 	ln     *net.UnixListener
 	parent unix.Ucred
 	mark   uint32
+	guard  *winvpn.EgressGuard
 	done   chan struct{}
 }
 
@@ -116,17 +122,48 @@ func prepareBindingService(control net.Conn, session *winvpn.BypassSession) (byp
 	return b, ln.Addr().String(), nil
 }
 func (b *bindingService) configureDNSBypass(config *vpnconfig.Config) error {
-	dev, _, dns, err := b.CurrentExit()
+	_, _, dns, err := b.CurrentExit()
 	if err != nil {
 		return err
 	}
-	config.LinuxDNSDevice, config.LinuxDNSBypass, config.LinuxDNSMark = dev, dns, b.mark
+	config.LinuxDNSBypass = dns
 	return nil
 }
 func (b *bindingService) Close() error {
 	_ = b.ln.Close()
 	<-b.done
-	return b.BypassSession.Close()
+	return errors.Join(b.BypassSession.Close(), b.guard.Close())
+}
+
+func (b *bindingService) egressMark() uint32 { return b.mark }
+
+func (b *bindingService) sealOutput() error {
+	if b.guard != nil {
+		if b.guard.Ready() {
+			return nil
+		}
+		if err := b.guard.Close(); err != nil {
+			return err
+		}
+	}
+	guard, err := winvpn.InstallEgressGuard(b.mark)
+	b.guard = guard // retain partial setup for teardown
+	return err
+}
+
+func (b *bindingService) openOutput() error {
+	if err := b.guard.Close(); err != nil {
+		return err
+	}
+	b.guard = nil
+	return nil
+}
+
+func (c *Client) SealOutput() error { _, err := c.call(request{Op: OpSeal}); return err }
+
+func (c *Client) ResumeProtectedRoutes(peers []string) error {
+	_, err := c.call(request{Op: OpResume, Config: vpnconfig.Config{BypassIPs: peers}})
+	return err
 }
 func (b *bindingService) serve() {
 	defer close(b.done)
@@ -175,11 +212,11 @@ func (b *bindingService) bindRequest(c *net.UnixConn) error {
 	if err := json.Unmarshal(data[:n], &req); err != nil {
 		return err
 	}
-	dev, ip, dns, err := b.CurrentExit()
+	dev, local, dns, err := b.CurrentExit()
 	if err != nil {
 		return err
 	}
-	if req.Local != ip || (req.Address != "" && req.Address != dns) {
+	if req.Local != local || (req.Address != "" && req.Address != dns) {
 		return fmt.Errorf("socket does not match the prepared VPN bypass")
 	}
 	fd := fds[0]
@@ -210,11 +247,10 @@ func (b *bindingService) bindRequest(c *net.UnixConn) error {
 	if !(proto == unix.IPPROTO_TCP && kind == unix.SOCK_STREAM || proto == unix.IPPROTO_UDP && kind == unix.SOCK_DGRAM) {
 		return fmt.Errorf("expected TCP or UDP socket")
 	}
-	if err := unix.BindToDevice(fd, dev); err != nil {
-		return fmt.Errorf("bind socket to %s: %w", dev, err)
+	if b.ExplicitSource() {
+		if err := unix.BindToDevice(fd, dev); err != nil {
+			return fmt.Errorf("bind socket to %s: %w", dev, err)
+		}
 	}
-	if req.Address != "" {
-		return unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, int(b.mark))
-	}
-	return nil
+	return unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, int(b.mark))
 }

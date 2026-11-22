@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/threatexpert/gonc/v2/netx"
 )
 
 type vpnProtection struct {
@@ -20,9 +22,10 @@ func newVPNProtection() *vpnProtection { return &vpnProtection{released: make(ch
 func (p *vpnProtection) release()      { p.once.Do(func() { close(p.released) }) }
 
 type ProtectionPlan struct {
-	DNS       string
-	Local     string
-	Overrides []string
+	DNS             string
+	Local           string
+	Overrides       []string
+	requestedSource string
 }
 
 // PlanProtection validates the final values before elevation or network changes.
@@ -63,7 +66,12 @@ func PlanProtection(req Request) (ProtectionPlan, error) {
 	if err != nil {
 		return plan, err
 	}
-	if plan.Local != "" {
+	binding, err := netx.ParseLocalBinding(plan.Local)
+	if err != nil {
+		return plan, err
+	}
+	plan.requestedSource = binding.Source()
+	if binding.Endpoint != "" {
 		host, port, e := net.SplitHostPort(plan.Local)
 		ip, ie := netip.ParseAddr(host)
 		p, pe := strconv.Atoi(port)
@@ -100,4 +108,16 @@ func reconnectDNSServer(value string) (string, error) {
 		return "", fmt.Errorf("reconnect DNS must be a reachable DNS server IP with an optional port (not a hostname or loopback address)")
 	}
 	return net.JoinHostPort(ip.String(), strconv.Itoa(p)), nil
+}
+
+func (p ProtectionPlan) localArgument(selected string) string {
+	if p.Local != "" {
+		return p.Local
+	}
+	return selected
+}
+
+// goncembed accepts adjacent quoted segments, without backslash escapes.
+func quoteLocalArg(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `"'"'"`) + `"`
 }

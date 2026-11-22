@@ -2,7 +2,6 @@ package winvpn
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -14,24 +13,12 @@ import (
 // predating inet-family NAT can use the same transaction.
 func (c *linuxDNSCapture) installNFT(nft string, families []dnsFamily, table string, ports []int, cfg vpnconfig.Config) error {
 	var bypass netip.AddrPort
-	var deviceMatch string
-	if cfg.LinuxDNSMark != 0 {
+	if cfg.LinuxEgressMark != 0 {
 		addr, err := netip.ParseAddrPort(cfg.LinuxDNSBypass)
 		if err != nil {
 			return fmt.Errorf("invalid reconnect DNS: %w", err)
 		}
-		iface, err := net.InterfaceByName(cfg.LinuxDNSDevice)
-		if err != nil {
-			return fmt.Errorf("find reconnect DNS interface: %w", err)
-		}
 		bypass = addr
-		// Follow a recreated device of the same name. Use its numeric index
-		// when the name contains nft syntax, including wildcard characters.
-		if strings.Trim(iface.Name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-") == "" {
-			deviceMatch = fmt.Sprintf("oifname %q", iface.Name)
-		} else {
-			deviceMatch = fmt.Sprintf("meta oif %d", iface.Index)
-		}
 	}
 	var script strings.Builder
 	var cleanup []firewallCommand
@@ -48,7 +35,7 @@ func (c *linuxDNSCapture) installNFT(nft string, families []dnsFamily, table str
 		for _, proto := range []string{"udp", "tcp"} {
 			if bypass.IsValid() && bypass.Addr().Unmap().Is4() == ipv4 {
 				for _, chain := range []string{"capture", "guard"} {
-					fmt.Fprintf(&script, "add rule %s %s meta mark 0x%x %s %s daddr %s %s dport %d return\n", target, chain, cfg.LinuxDNSMark, deviceMatch, af, bypass.Addr().Unmap(), proto, bypass.Port())
+					fmt.Fprintf(&script, "add rule %s %s meta mark 0x%x %s daddr %s %s dport %d return\n", target, chain, cfg.LinuxEgressMark, af, bypass.Addr().Unmap(), proto, bypass.Port())
 				}
 			}
 			fmt.Fprintf(&script, "add rule %s capture %s dport 53 redirect to :%d\n", target, proto, ports[i])

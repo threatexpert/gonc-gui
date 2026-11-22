@@ -110,12 +110,12 @@ func (c *Client) PrepareBypass(dns, local string, _ bool) (string, error) {
 	resp, err := c.call(request{Op: OpPrepare, Address: dns, Local: local})
 	return resp.Local, err
 }
-func (c *Client) RefreshBypass() (string, uint64, error) {
+func (c *Client) RefreshBypass() (string, bool, error) {
 	if c.conn != nil {
 		resp, err := c.call(request{Op: OpRefresh})
-		return resp.Local, resp.Revision, err
+		return resp.Local, resp.RoutesSuspended, err
 	}
-	return "", 0, fmt.Errorf("VPN helper is not connected")
+	return "", false, fmt.Errorf("VPN helper is not connected")
 }
 func (c *Client) UpdateProxy(endpoint string) error {
 	_, err := c.call(request{Op: OpProxy, Address: endpoint})

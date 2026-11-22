@@ -9,6 +9,29 @@ import (
 	"time"
 )
 
+func TestLinuxDetailsDuringRouteWithdrawal(t *testing.T) {
+	v := newVPNDetailsTracker(Request{DisconnectProtection: true}, nil)
+	now := time.Now()
+	v.linuxOutput(true, true)
+	v.connection("connected", now)
+	v.routes("applied", []string{"0.0.0.0/1"}, []string{"192.0.2.1"}, []string{"8.8.8.8"})
+	v.linuxOutput(false, false)
+	v.connection("disconnected", now)
+	v.linuxOutput(true, false)
+	if d := v.snapshot(now); d.LinuxOutput != "sealed" || len(d.Routes) != 1 {
+		t.Fatal("sealing alone must preserve installed routes", d)
+	}
+	v.linuxOutput(true, true)
+	v.socksReady()
+	if d := v.snapshot(now); len(d.Routes) != 0 || len(d.BypassIPs) != 0 || len(d.DNSServers) != 1 {
+		t.Fatal("withdrawal should preserve only the active DNS settings", d)
+	}
+	v.finish(now)
+	if d := v.snapshot(now); d.LinuxOutput != "" || len(d.DNSServers) != 0 {
+		t.Fatal("stopped session still shows active protection or DNS", d)
+	}
+}
+
 func TestVPNConfigurationFailureSurvivesTeardown(t *testing.T) {
 	v := newVPNDetailsTracker(Request{}, nil)
 	now := time.Now()

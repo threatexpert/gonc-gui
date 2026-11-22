@@ -1,6 +1,7 @@
 package goncrunner
 
 import (
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 // VPNDetails describes this application's session and route configuration, not
 // an audit of the OS routing table or a measurement of the whole network card.
 type VPNDetails struct {
+	LinuxOutput          string   `json:"linuxOutput,omitempty"`
 	DisconnectProtection bool     `json:"disconnectProtection"`
 	CaptureActive        bool     `json:"captureActive"`
 	Revision             uint64   `json:"revision"`
@@ -55,10 +57,14 @@ func newVPNDetailsTracker(req Request, sink Sink) *vpnDetailsTracker {
 		routes = nil
 		state = "tunnelOnly"
 	}
+	applied := routes
+	if runtime.GOOS == "linux" && req.DisconnectProtection {
+		applied = nil
+	}
 	return &vpnDetailsTracker{sink: sink, data: VPNDetails{
 		DisconnectProtection: req.DisconnectProtection && !req.TunnelOnly,
 		Running:              true, TunnelOnly: req.TunnelOnly, RouteState: state,
-		ConfiguredRoutes: routes, Routes: routes,
+		ConfiguredRoutes: routes, Routes: applied,
 		DNSServers: []string{},
 	}}
 }
@@ -155,6 +161,23 @@ func (v *vpnDetailsTracker) traffic(in, out int64, inBps, outBps float64, final 
 	v.data.TrafficAt = now.Format(time.RFC3339Nano)
 }
 
+// Publish only acknowledged helper state. DNS capture survives route withdrawal.
+func (v *vpnDetailsTracker) linuxOutput(sealed, routesWithdrawn bool) {
+	v.mu.Lock()
+	if v.data.Running && !v.stopping {
+		v.data.LinuxOutput = "routed"
+		if sealed {
+			v.data.LinuxOutput = "sealed"
+		}
+		if routesWithdrawn {
+			v.data.Routes = nil
+			v.data.BypassIPs = nil
+		}
+	}
+	v.mu.Unlock()
+	v.publish()
+}
+
 func (v *vpnDetailsTracker) routes(state string, routes, bypass, dns []string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -217,6 +240,10 @@ func (v *vpnDetailsTracker) finish(now time.Time) {
 		v.data.TunnelStatus = "stopped"
 		v.data.Running, v.data.Connected = false, false
 		v.data.CaptureActive = false
+		if v.data.LinuxOutput != "" {
+			v.data.LinuxOutput = ""
+			v.data.Routes, v.data.BypassIPs, v.data.DNSServers = nil, nil, nil
+		}
 		v.data.Ready = false
 		if !v.stopping && v.data.ConnectionState != "" {
 			v.data.ConnectionState = "failed"

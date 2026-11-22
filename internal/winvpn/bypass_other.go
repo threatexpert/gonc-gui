@@ -5,6 +5,7 @@ package winvpn
 import (
 	"fmt"
 	"net"
+	"runtime"
 	"time"
 )
 
@@ -14,6 +15,13 @@ func selectBypassExit(dns, requested string, previous bypassSelection) (bypassSe
 	// Once TUN captures traffic, global route selection can point at TUN.
 	// Re-read the physical interface addresses instead of reusing the old IP.
 	device := previous.Name
+	if runtime.GOOS == "linux" {
+		if requested == "" {
+			return bypassSelection{}, nil
+		} // Use system routing for the tunnel and its bootstrap DNS.
+		// Protected capture rules have been suspended before a reconnect.
+		device = ""
+	}
 	if requested != "" && net.ParseIP(requested) == nil {
 		device = requested
 		requested = ""

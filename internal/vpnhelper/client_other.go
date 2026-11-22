@@ -32,6 +32,6 @@ func (c *Client) UpdateDNS([]string) ([]string, error) {
 	return nil, fmt.Errorf("unsupported platform")
 }
 
-func (c *Client) RefreshBypass() (string, uint64, error) {
-	return "", 0, fmt.Errorf("unsupported platform")
+func (c *Client) RefreshBypass() (string, bool, error) {
+	return "", false, fmt.Errorf("unsupported platform")
 }

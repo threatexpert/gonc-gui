@@ -12,6 +12,12 @@ import (
 	"gonc-gui/internal/winvpn"
 )
 
+type protectedOutput interface {
+	sealOutput() error
+	openOutput() error
+	egressMark() uint32
+}
+
 func Run(connectAddr, token string) (result error) {
 	if connectAddr == "" || token == "" {
 		return fmt.Errorf("missing helper connection parameters")
@@ -77,18 +83,67 @@ func Run(connectAddr, token string) (result error) {
 				continue
 			}
 			resources.bypass = bound
+			if b, ok := bound.(protectedOutput); ok {
+				if err := b.sealOutput(); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
+				}
+			}
 			_ = enc.Encode(response{OK: true, Local: prepared.Local, BindAddress: address})
+		case OpSeal:
+			b, ok := resources.bypass.(protectedOutput)
+			if !ok {
+				_ = enc.Encode(response{Error: "no protected Linux VPN session"})
+				continue
+			}
+			if err := b.sealOutput(); err != nil {
+				_ = enc.Encode(response{Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true})
 		case OpRefresh:
 			if resources.bypass == nil {
 				_ = enc.Encode(response{Error: "VPN bypass is not prepared"})
 				continue
 			}
+			if b, ok := resources.bypass.(protectedOutput); ok {
+				if err := b.sealOutput(); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
+				}
+			}
+			suspended := false
+			if s, ok := resources.active.(interface{ SuspendProtectedRoutes() error }); ok {
+				if err := s.SuspendProtectedRoutes(); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
+				}
+				suspended = true
+			}
 			local, revision, err := resources.bypass.Refresh()
 			if err != nil {
+				_ = enc.Encode(response{RoutesSuspended: suspended, Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true, Local: local, Revision: revision, RoutesSuspended: suspended})
+		case OpResume:
+			s, ok := resources.active.(interface {
+				ResumeProtectedRoutes([]string, func() error) error
+			})
+			b, marked := resources.bypass.(protectedOutput)
+			if !ok || !marked {
+				_ = enc.Encode(response{Error: "no protected Linux VPN session"})
+				continue
+			}
+			if err := s.ResumeProtectedRoutes(req.Config.BypassIPs, b.sealOutput); err != nil {
 				_ = enc.Encode(response{Error: err.Error()})
 				continue
 			}
-			_ = enc.Encode(response{OK: true, Local: local, Revision: revision})
+			if err := b.openOutput(); err != nil {
+				_ = enc.Encode(response{Error: err.Error()})
+				continue
+			}
+			_ = enc.Encode(response{OK: true})
 		case OpProxy:
 			if resources.active == nil {
 				_ = enc.Encode(response{OK: false, Error: "VPN is not running"})
@@ -110,6 +165,18 @@ func Run(connectAddr, token string) (result error) {
 			}
 			_ = enc.Encode(response{OK: true, DNSServers: resources.active.DNSServers()})
 		case OpStart:
+			if req.Config.DisconnectProtection && runtime.GOOS == "linux" {
+				b, ok := resources.bypass.(protectedOutput)
+				if !ok {
+					_ = enc.Encode(response{Error: "missing protected Linux socket binder"})
+					continue
+				}
+				req.Config.LinuxEgressMark = b.egressMark()
+				if err := b.sealOutput(); err != nil {
+					_ = enc.Encode(response{Error: err.Error()})
+					continue
+				}
+			}
 			if resources.active != nil {
 				if err := resources.active.Stop(); err != nil {
 					_ = enc.Encode(response{Error: err.Error()})

@@ -69,7 +69,7 @@ func TestDNSCaptureRuleOrderAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := vpnconfig.Config{LinuxDNSMark: 73, LinuxDNSBypass: "192.0.2.5:53", LinuxDNSDevice: "eth0"}
+	cfg := vpnconfig.Config{LinuxEgressMark: 73, LinuxDNSBypass: "192.0.2.5:53"}
 	c := new(linuxDNSCapture)
 	if err := c.installFamilyRules("iptables", "GONC_TEST", 15453, cfg); err == nil {
 		t.Fatal("expected nat OUTPUT failure")
@@ -85,7 +85,7 @@ func TestDNSCaptureRuleOrderAndRollback(t *testing.T) {
 	for _, table := range []string{"nat", "filter"} {
 		for _, proto := range []string{"tcp", "udp"} {
 			prefix := table + " -A GONC_TEST -p " + proto + " --dport 53 "
-			allow := strings.Index(log, prefix+"-d 192.0.2.5 -o eth0 -m mark --mark 0x49 -j RETURN")
+			allow := strings.Index(log, prefix+"-d 192.0.2.5 -m mark --mark 0x49 -j RETURN")
 			action := "-j REDIRECT --to-ports 15453"
 			if table == "filter" {
 				action = "! -o lo -j REJECT"

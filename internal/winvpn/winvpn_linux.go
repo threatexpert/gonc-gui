@@ -24,11 +24,13 @@ const (
 )
 
 type Session struct {
-	mu         sync.Mutex
-	config     vpnconfig.Config
-	appliedDNS []string
-	capture    *linuxDNSCapture
-	retired    []*linuxDNSCapture
+	mu              sync.Mutex
+	config          vpnconfig.Config
+	appliedDNS      []string
+	capture         *linuxDNSCapture
+	retired         []*linuxDNSCapture
+	protectedRoutes []protectedRoute
+	routingActive   bool
 }
 
 type defaultRoute struct {
@@ -48,6 +50,9 @@ func CheckRuntime() error {
 
 func Start(config vpnconfig.Config) (*Session, error) {
 	config.EnableIPv6 = vpnconfig.HasIPv6(config.Routes)
+	if config.DisconnectProtection && config.LinuxEgressMark == 0 {
+		return nil, errors.New("Linux disconnect protection requires an active egress guard")
+	}
 	if strings.TrimSpace(config.SOCKS5Endpoint) == "" {
 		return nil, fmt.Errorf("SOCKS5 endpoint is required")
 	}
@@ -96,7 +101,16 @@ func (s *Session) Stop() error {
 	if err := s.cleanupDNSCaptures(); err != nil {
 		return err
 	}
-	s.cleanupRoutes()
+	if s.config.LinuxEgressMark != 0 {
+		if err := s.suspendProtectedRoutes(); err != nil {
+			return err
+		}
+		if !s.config.BlockDNSLeak {
+			_ = run("resolvectl", "revert", interfaceName)
+		}
+	} else {
+		s.cleanupRoutes()
+	}
 	err := stopEngine()
 	_ = run("ip", "link", "delete", interfaceName)
 	return err
@@ -122,11 +136,17 @@ func (s *Session) configure() error {
 			return err
 		}
 	}
-	if err := s.configureBypassRoutes(); err != nil {
-		return err
-	}
-	if err := s.configureRoutes(); err != nil {
-		return err
+	if s.config.LinuxEgressMark != 0 {
+		if err := s.resumeProtectedRoutes(s.config.BypassIPs); err != nil {
+			return err
+		}
+	} else {
+		if err := s.configureBypassRoutes(); err != nil {
+			return err
+		}
+		if err := s.configureRoutes(); err != nil {
+			return err
+		}
 	}
 	if s.config.BlockDNSLeak {
 		return s.installDNSCapture(s.config.DNSServers)

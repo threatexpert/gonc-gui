@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -531,19 +532,20 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 		}
 		emit(sink, "status", "info", "Elevated VPN helper is ready")
 		if req.DisconnectProtection {
-			plan, _ = PlanProtection(req)
-			requestedLocal, _, _ := net.SplitHostPort(plan.Local)
-			localIP, err := helper.PrepareBypass(plan.DNS, requestedLocal, req.BlockDNSLeak)
+			plan, err = PlanProtection(req)
+			if err != nil {
+				return failedVPNStart(helper, err)
+			}
+			source, err := helper.PrepareBypass(plan.DNS, plan.requestedSource, req.BlockDNSLeak)
 			if err != nil {
 				return failedVPNStart(helper, fmt.Errorf("prepare reconnect bypass: %w", err))
 			}
-			local := plan.Local
-			if local == "" {
-				local = net.JoinHostPort(localIP, "0")
-			}
-			initialLocal = local
+			initialLocal = plan.localArgument(source)
 			protection = newVPNProtection()
-			emit(sink, "log", "info", "Reconnect bypass: local="+local+" DNS="+plan.DNS)
+			if runtime.GOOS == "linux" {
+				protection.captured.Store(true)
+				cb.vpnDetails.linuxOutput(true, true)
+			}
 		}
 	}
 	emitPeerIPv6(sink, initialPeerIPv6State(req.TunnelOnly, wantsIPv6))
@@ -552,30 +554,56 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 	cb.onReady = lifecycle.ready
 	cb.onP2PReport = lifecycle.report
 	var session runnerSession
+	var captureMu sync.Mutex // Serialize stale Ready work against a reconnect's route suspension.
 	if protection != nil {
 		session, err = startReconnectSession(initialLocal, reconnectActions{
 			callback: cb, retry: 2 * time.Second,
 			refresh: func() (string, error) {
-				ip, _, err := helper.RefreshBypass()
+				captureMu.Lock()
+				defer captureMu.Unlock()
+				source, suspended, err := helper.RefreshBypass()
+				if runtime.GOOS == "linux" && (suspended || err == nil) {
+					cb.vpnDetails.linuxOutput(true, suspended)
+				}
 				if err != nil {
 					return "", err
 				}
-				port := "0"
-				if plan.Local != "" {
-					_, port, _ = net.SplitHostPort(plan.Local)
-				}
-				return net.JoinHostPort(ip, port), nil
+				return plan.localArgument(source), nil
 			},
 			start: func(local string, attempt goncembed.Callback) (runnerSession, error) {
-				emit(sink, "log", "info", "Reconnect bypass: local="+local+" DNS="+plan.DNS)
-				return goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, extraArgs+" -dns "+plan.DNS+" -local "+local, attempt)
+				exit := local
+				if exit == "" {
+					exit = "system routing"
+				}
+				emit(sink, "log", "info", "Reconnect bypass: "+exit+" DNS="+plan.DNS)
+				args := extraArgs + " -dns " + plan.DNS
+				if runtime.GOOS == "linux" {
+					network, err := helper.TunnelNetwork(plan.requestedSource, plan.DNS)
+					if err != nil {
+						return nil, err
+					}
+					// An explicit -local is already present in the user's extra arguments.
+					return goncembed.StartP2PTunnelWithNetwork(req.Password, req.UseUDP, linkConfig, args, network, attempt)
+				}
+				return goncembed.StartP2PTunnel(req.Password, req.UseUDP, linkConfig, args+" -local "+quoteLocalArg(local), attempt)
 			},
 			disconnected: func() {
 				cb.vpnEventMu.Lock()
-				defer cb.vpnEventMu.Unlock()
 				lifecycle.disconnect()
 				cb.vpnDetails.connection("disconnected", time.Now())
 				cb.vpnDetails.publish()
+				cb.vpnEventMu.Unlock()
+				if runtime.GOOS == "linux" {
+					captureMu.Lock()
+					err := helper.SealOutput()
+					if err == nil {
+						cb.vpnDetails.linuxOutput(true, false)
+					}
+					captureMu.Unlock()
+					if err != nil {
+						cb.Error("seal VPN output: " + err.Error())
+					}
+				}
 			},
 			report: func(err error) { cb.Error(err.Error()) },
 		})
@@ -605,7 +633,22 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 			}
 			err := runVPNRouteLifecycle(ctx, session.Done(), lifecycle, vpnRouteActions{
 				protect: req.DisconnectProtection,
-				update:  helper.UpdateProxy,
+				resume: func(s vpnTunnelSnapshot) error {
+					if runtime.GOOS != "linux" {
+						return nil
+					}
+					captureMu.Lock()
+					defer captureMu.Unlock()
+					if !lifecycle.current(s) {
+						return nil
+					}
+					err := helper.ResumeProtectedRoutes(s.bypass)
+					if err == nil {
+						cb.vpnDetails.linuxOutput(false, false)
+					}
+					return err
+				},
+				update: helper.UpdateProxy,
 				probe: func(ctx context.Context, endpoint string) bool {
 					snapshot := lifecycle.snapshot()
 					if !snapshot.ready || snapshot.endpoint != endpoint {
@@ -620,11 +663,22 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					})
 				},
 				start: func(s vpnTunnelSnapshot, ipv6 bool) ([]string, error) {
+					captureMu.Lock()
+					defer captureMu.Unlock()
+					if !lifecycle.current(s) {
+						return nil, fmt.Errorf("tunnel changed before route setup")
+					}
 					logDNSFallback(req.DNSServers, ipv6, sink)
 					dns, err := helper.StartWithTrace(configFor(s, ipv6), func(message string) {
 						emit(sink, "log", "info", message)
 					})
 					if err == nil && protection != nil {
+						if runtime.GOOS == "linux" && lifecycle.current(s) {
+							err = helper.ResumeProtectedRoutes(s.bypass)
+							if err == nil {
+								cb.vpnDetails.linuxOutput(false, false)
+							}
+						}
 						protection.captured.Store(true)
 					}
 					return dns, err
@@ -640,6 +694,10 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					dns := []string{}
 					if protection != nil && protection.captured.Load() {
 						dns = nil
+					}
+					if runtime.GOOS == "linux" && protection != nil {
+						config.Routes = nil
+						config.BypassIPs = nil
 					}
 					cb.vpnDetails.routes("applying", config.Routes, config.BypassIPs, dns)
 					cb.vpnDetails.publish()
@@ -660,7 +718,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 					if protection != nil && protection.captured.Load() {
 						cb.vpnDetails.routes("protected", nil, nil, nil)
 						cb.vpnDetails.publish()
-						emit(sink, "status", "warn", "Tunnel disconnected; disconnect protection is keeping VPN capture active")
+						emit(sink, "status", "warn", "Tunnel disconnected; disconnect protection remains active during reconnect")
 						return
 					}
 					if err != nil {
@@ -678,6 +736,13 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 				},
 			})
 			if err != nil {
+				if protection != nil && runtime.GOOS == "linux" {
+					sealErr := helper.SealOutput()
+					if sealErr == nil {
+						cb.vpnDetails.linuxOutput(true, false)
+					}
+					err = errors.Join(err, sealErr)
+				}
 				cb.vpnDetails.configurationFailed(err)
 				cb.vpnDetails.publish()
 				emit(sink, "status", "error", "System VPN start failed: "+err.Error())
@@ -690,7 +755,7 @@ func startVPNClient(parent context.Context, req Request, cb *callback, sink Sink
 
 func systemVPNConfig(req Request, s vpnTunnelSnapshot, routes []string, ipv6Available bool) vpnconfig.Config {
 	dns, _, _ := vpnconfig.SelectDNS(req.DNSServers, ipv6Available)
-	if req.DisconnectProtection {
+	if req.DisconnectProtection && runtime.GOOS != "linux" {
 		s.bypass = []string{}
 	}
 	return vpnconfig.Config{

@@ -14,6 +14,8 @@ const (
 	OpProxy   = "proxy"
 	OpPrepare = "prepare"
 	OpRefresh = "refresh"
+	OpSeal    = "sealOutput"
+	OpResume  = "resumeProtectedRoutes"
 	OpStop    = "stop"
 	OpExit    = "exit"
 )
@@ -28,14 +30,15 @@ type request struct {
 }
 
 type response struct {
-	BindAddress string   `json:"bindAddress,omitempty"`
-	Revision    uint64   `json:"revision,omitempty"`
-	Local       string   `json:"local,omitempty"`
-	Progress    bool     `json:"progress,omitempty"`
-	OK          bool     `json:"ok"`
-	Error       string   `json:"error,omitempty"`
-	Logs        []string `json:"logs,omitempty"`
-	DNSServers  []string `json:"dnsServers"`
+	BindAddress     string   `json:"bindAddress,omitempty"`
+	RoutesSuspended bool     `json:"routesSuspended,omitempty"`
+	Revision        uint64   `json:"revision,omitempty"`
+	Local           string   `json:"local,omitempty"`
+	Progress        bool     `json:"progress,omitempty"`
+	OK              bool     `json:"ok"`
+	Error           string   `json:"error,omitempty"`
+	Logs            []string `json:"logs,omitempty"`
+	DNSServers      []string `json:"dnsServers"`
 }
 
 // Progress frames are not command completion: keep reading until the final
