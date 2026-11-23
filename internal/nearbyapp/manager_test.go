@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/threatexpert/gonc/v2/nearby"
+	"gonc-gui/internal/nearby"
 )
 
 type recorder struct {

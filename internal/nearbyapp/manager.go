@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/nearby"
 	"gonc-gui/internal/nearbystore"
 
 	"github.com/threatexpert/gonc/v2/goncembed"
 	"github.com/threatexpert/gonc/v2/httpfileshare"
-	"github.com/threatexpert/gonc/v2/nearby"
 )
 
 const (

@@ -54,9 +54,13 @@ func (s *memorySource) ReadDir(name string) string {
 	if name != "/" {
 		return ""
 	}
-	var entries []mobileFileInfoJSON
+	type fileInfo struct {
+		Name string `json:"name"`
+		Size int    `json:"size"`
+	}
+	var entries []fileInfo
 	for path, data := range s.files {
-		entries = append(entries, mobileFileInfoJSON{Name: strings.TrimPrefix(path, "/"), Size: int64(len(data))})
+		entries = append(entries, fileInfo{Name: strings.TrimPrefix(path, "/"), Size: len(data)})
 	}
 	out, _ := json.Marshal(entries)
 	return string(out)

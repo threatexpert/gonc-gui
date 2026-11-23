@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/threatexpert/gonc/v2/nearby"
+	"gonc-gui/internal/nearby"
 )
 
 func TestLoadCreatesIdentityAndRoundTrips(t *testing.T) {

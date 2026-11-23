@@ -239,10 +239,11 @@ Android 可能会限制长时间运行的后台任务。请允许 Gonc 忽略电
 
 ## 开发
 
-桌面端应用使用 Wails 构建，并嵌入 `gonetcat` Go 引擎。Android 应用使用
-gomobile 生成的 `mobilegonc.aar`，它来自相邻的 `gonetcat` 仓库。
+桌面端应用使用 Wails 构建，并嵌入 `gonetcat` Go 引擎。Android 的
+`mobilegonc.aar` 由本仓库的 `android/mobilegonc` 和 `android/nearbygo`
+通过 gomobile 生成，使用 `go.mod` 锁定的 gonc 版本。
 
-修改 `..\gonetcat` 后，重新构建 Android Go bridge：
+Android 绑定或其 Go 依赖变动后，在仓库根目录重新生成 AAR：
 
 ```text
 android\update-mobilegonc-aar.bat
@@ -303,7 +304,7 @@ gonc-gui/
   internal/httpdownload/    桌面端 HTTP 接收下载器
   android/                  Android 应用
   android/update-mobilegonc-aar.bat
-                            从 ../gonetcat 重建 Android mobilegonc.aar
+                            重建 Android mobilegonc.aar
 ```
 
 ## 许可证

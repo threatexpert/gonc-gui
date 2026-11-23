@@ -7,8 +7,9 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.14-0.20261123135011-939c83b2044e
+	github.com/threatexpert/gonc/v2 v2.6.14-0.20261123160155-c4b5503a1d0e
 	github.com/wailsapp/wails/v2 v2.17.1
+	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/image v0.42.0
 	golang.org/x/net v0.61.0
@@ -66,7 +67,6 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	github.com/xjasonlyu/tun2socks/v2 v2.7.0 // indirect
 	github.com/xtaci/kcp-go/v5 v5.6.72 // indirect
 	github.com/xtaci/smux v1.5.57 // indirect
 	go.uber.org/atomic v1.12.0 // indirect

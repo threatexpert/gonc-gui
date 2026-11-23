@@ -24,7 +24,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-gomobile bind -target=android/arm64 -androidapi=26 -trimpath -ldflags="-s -w -buildid= -checklinkname=0" -o "%ANDROID_DIR%app\libs\mobilegonc.aar" github.com/threatexpert/gonc/v2/mobilegonc gonc-gui/android/nearbygo
+gomobile bind -target=android/arm64 -androidapi=26 -trimpath -ldflags="-s -w -buildid= -checklinkname=0" -o "%ANDROID_DIR%app\libs\mobilegonc.aar" gonc-gui/android/mobilegonc gonc-gui/android/nearbygo
 if errorlevel 1 (
     echo.
     echo gomobile bind failed.

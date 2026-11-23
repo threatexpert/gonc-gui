@@ -3,9 +3,9 @@ package main
 import (
 	"errors"
 
+	"gonc-gui/internal/nearby"
 	"gonc-gui/internal/nearbyapp"
 
-	"github.com/threatexpert/gonc/v2/nearby"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

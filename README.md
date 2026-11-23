@@ -273,31 +273,17 @@ optimization or set the app battery mode to unrestricted.
 
 ## Development
 
-The desktop app is built with Wails and embeds the `gonetcat` Go engine. The
-Android app uses a gomobile-generated `mobilegonc.aar` built from the sibling
-`gonetcat` checkout.
+The desktop app is built with Wails and embeds the `gonetcat` Go engine.
+Android's `mobilegonc.aar` binds this repository's `android/mobilegonc` and
+`android/nearbygo` packages against the gonc version pinned in `go.mod`.
 
 ### Desktop tun2socks dependency
 
-Desktop code now calls the independent `github.com/threatexpert/gonc/v2/tunengine`
-package instead of importing tun2socks directly. Android's mobilegonc wrapper
-uses the same package and defaults. OS routes, DNS and Android FD ownership stay
-in their existing platform adapters. The gonc CLI does not import this package.
-
-The shared engine is pinned to published gonc commit
-`ee76a9aa423e806f7cf43b63e87188b5c1da5ec2`, resolved as
-`v2.6.13-0.20261116125136-ee76a9aa423e` in `go.mod` and verified by `go.sum`.
-Normal builds use `GOWORK=off` and plain `wails build`; no local workspace,
-sibling source checkout, `-m`, or `-nosyncgomod` is needed for desktop builds.
-
-Desktop builds pin `github.com/threatexpert/tun2socks` commit
-`4b0120a38bf2ea724209882f0d7d5352dc75a436` through a versioned `replace` in
-`go.mod`; imports keep the upstream `github.com/xjasonlyu/tun2socks/v2` path.
-Go 1.27.1 or newer is required. The local build scripts and GitHub desktop
-release workflow set `GOWORK=off`, so neither a sibling checkout nor a local
-workspace file is needed. No `gonc_deferred_tcp` tag is required. The top-level
-tun2socks `replace` remains necessary because Go does not inherit replacements
-from dependency modules.
+Desktop VPN and Android's `mobilegonc` wrapper share `internal/tunengine`.
+Platform adapters handle routes, DNS and Android FD ownership. The versioned
+`replace` in `go.mod` selects the `github.com/threatexpert/tun2socks` fork for
+both builds. Go 1.27.1 or newer is required. The local build scripts and GitHub
+desktop release workflow set `GOWORK=off`.
 
 Every desktop build enables deferred TCP handshakes, a 30-second / 4096-entry
 failed-SYN cache, and a 30-second SOCKS5 handshake timeout after the fixed
@@ -308,13 +294,13 @@ the fork's default behavior.
 
 Android is separate: its checked-in `mobilegonc.aar` is not rebuilt by the
 desktop Go build or the GitHub APK job. The Android client calls
-`StartTun2SocksWithPolicy` in the updated gonc mobile wrapper to enable the same
+`StartTun2SocksWithPolicy` in the Android Go binding to enable the same
 deferred-TCP settings and probe-dependent IPv6 rejection. A new tunnel-ready
 generation triggers another probe and an engine restart even when DNS is
 unchanged; in that case the existing VPN interface is retained. The original
 `StartTun2Socks` API remains available with both features disabled for older
-callers. Rebuild the AAR from the updated gonc checkout before building the APK;
-changing this repository's `go.mod` alone does not update the native engine.
+callers. Run the AAR update script before building the APK when the Android
+bindings or their Go dependencies change.
 
 The project, local CLI and GitHub workflow use Wails v2.17.1. For a manual
 desktop build, set `GOWORK=off` and use `wails build` with the desired platform
@@ -324,7 +310,7 @@ manifests normally, including on a fresh checkout. Prefer the supplied build
 scripts.
 
 
-Rebuild the Android Go bridge after changing `..\gonetcat`:
+Rebuild the Android Go bridge from the gonc-gui repository root:
 
 ```text
 android\update-mobilegonc-aar.bat
@@ -389,7 +375,7 @@ gonc-gui/
   internal/httpdownload/    Desktop HTTP receive downloader
   android/                  Android app
   android/update-mobilegonc-aar.bat
-                            Rebuild Android mobilegonc.aar from ../gonetcat
+                            Rebuild the Android mobilegonc.aar
 ```
 
 ## License

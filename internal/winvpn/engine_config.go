@@ -3,7 +3,7 @@
 package winvpn
 
 import (
-	"github.com/threatexpert/gonc/v2/tunengine"
+	"gonc-gui/internal/tunengine"
 	"gonc-gui/internal/vpnconfig"
 )
 

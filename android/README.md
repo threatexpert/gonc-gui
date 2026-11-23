@@ -146,9 +146,8 @@ Unsigned release APKs are intentionally blocked.
 
 ## Update mobilegonc.aar
 
-After changing `android/nearbygo`, the shared Nearby code, or the gonc version in
-gonc-gui's `go.mod`, run from this
-directory:
+After changing the Android bindings, shared Nearby or VPN code, or the gonc
+version in `go.mod`, run from this directory:
 
 ```text
 update-mobilegonc-aar.bat
@@ -157,13 +156,13 @@ update-mobilegonc-aar.bat
 The script:
 
 1. Changes directory to the gonc-gui root.
-2. Runs `gomobile bind` for gonc's `github.com/threatexpert/gonc/v2/mobilegonc`
-   (passphrase transfers and VPN) and gonc-gui's `gonc-gui/android/nearbygo`
-   (Nearby), in one AAR. The gonc version is the one gonc-gui's `go.mod` pins,
-   the same as the desktop app; to try unmerged gonc changes, add a temporary
+2. Runs `gomobile bind` for `gonc-gui/android/mobilegonc` (passphrase transfers
+   and VPN) and `gonc-gui/android/nearbygo` (Nearby). Both use the gonc version
+   pinned in `go.mod`, as does the desktop app. To try local changes to
+   `goncembed`, `easyp2p`, or `secure`, add a temporary
    `replace github.com/threatexpert/gonc/v2 => ../gonetcat`.
-3. Writes `app\libs\mobilegonc.aar`.
-4. Runs `scripts\strip-mobilegonc-aar.ps1`.
+3. Writes `app\libs\mobilegonc.aar` and the companion sources JAR.
+4. Runs `scripts\strip-mobilegonc-aar.ps1`, then runs Gradle clean.
 
 It only sets `ANDROID_HOME` and `ANDROID_SDK_ROOT` to `D:\Android\sdk` when those
 environment variables are empty. Override them in your shell if your SDK is

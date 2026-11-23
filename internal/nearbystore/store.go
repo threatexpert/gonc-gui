@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/threatexpert/gonc/v2/nearby"
+	"gonc-gui/internal/nearby"
 )
 
 // PathEnv overrides the store location. It exists so two copies of the app

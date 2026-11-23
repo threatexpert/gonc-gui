@@ -2,7 +2,7 @@
 
 package winvpn
 
-import "github.com/threatexpert/gonc/v2/tunengine"
+import "gonc-gui/internal/tunengine"
 
 func (s *Session) UpdateProxy(endpoint string) error {
 	s.mu.Lock()

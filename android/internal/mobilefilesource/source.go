@@ -1,8 +1,5 @@
-// This file adapts the app's mobilegonc.AndroidFileSource to an
-// httpfileshare.FileSource. It mirrors gonc's unexported adapter in
-// mobilegonc/source.go, which the passphrase share uses.
-
-package nearbygo
+// Package mobilefilesource adapts Android file access to gonc file sharing.
+package mobilefilesource
 
 import (
 	"encoding/json"
@@ -13,15 +10,26 @@ import (
 	"time"
 
 	"github.com/threatexpert/gonc/v2/httpfileshare"
-	"github.com/threatexpert/gonc/v2/mobilegonc"
 )
 
-func newMobileFileSource(source mobilegonc.AndroidFileSource) httpfileshare.FileSource {
+// Source provides file metadata and I/O from Android.
+type Source interface {
+	Description() string
+	Stat(name string) string
+	ReadDir(name string) string
+	Open(name string) int64
+	Read(handle int64, maxBytes int) []byte
+	Seek(handle int64, offset int64, whence int) int64
+	Close(handle int64)
+}
+
+// New adapts an Android source to the gonc file-sharing interface.
+func New(source Source) httpfileshare.FileSource {
 	return &mobileFileSource{source: source}
 }
 
 type mobileFileSource struct {
-	source mobilegonc.AndroidFileSource
+	source Source
 }
 
 type mobileFileInfoJSON struct {
@@ -198,7 +206,7 @@ func (i mobileFileInfo) Sys() any {
 }
 
 type mobileFile struct {
-	source mobilegonc.AndroidFileSource
+	source Source
 	handle int64
 	info   fs.FileInfo
 	closed bool

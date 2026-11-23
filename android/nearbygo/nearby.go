@@ -1,6 +1,6 @@
 // Package nearbygo is the Android app's Nearby engine. It wraps the desktop
 // app's nearbyapp.Manager in a gomobile-friendly API and is bound into
-// mobilegonc.aar together with gonc's mobilegonc package (see
+// mobilegonc.aar together with the app's mobilegonc package (see
 // android/update-mobilegonc-aar.bat).
 //
 // Everything reaches the app as events on one NearbyListener, with JSON
@@ -22,9 +22,9 @@ import (
 	"errors"
 	"strings"
 
+	"gonc-gui/android/internal/mobilefilesource"
+	"gonc-gui/android/mobilegonc"
 	"gonc-gui/internal/nearbyapp"
-
-	"github.com/threatexpert/gonc/v2/mobilegonc"
 )
 
 // NearbyListener receives Nearby events. Calls arrive on Go threads.
@@ -130,7 +130,7 @@ func (n *NearbyNode) Send(deviceID string, source mobilegonc.AndroidFileSource, 
 	if source == nil {
 		return "", errors.New("add files to send")
 	}
-	return n.m.SendSource(deviceID, newMobileFileSource(source), quick)
+	return n.m.SendSource(deviceID, mobilefilesource.New(source), quick)
 }
 
 // Accept accepts an offered transfer.
