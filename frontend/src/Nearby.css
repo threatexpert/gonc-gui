@@ -72,6 +72,7 @@
 }
 
 .nearby-device {
+  scroll-margin: 16px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -132,6 +133,42 @@
 
 .nearby-device.sending {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.nearby-device.failed {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+
+.nearby-device-failure {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nearby-device-failure > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.nearby-device-failure p {
+  flex: 1 1 180px;
+  min-width: 0;
+  margin: 0;
+}
+
+.nearby-device-failure-actions {
+  display: flex;
+  flex: 1 1 100%;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .nearby-device-text .nearby-progress {

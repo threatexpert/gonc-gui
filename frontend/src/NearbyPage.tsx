@@ -107,6 +107,15 @@ const strings = {
     noOverwrite: 'Nothing is overwritten: if a file with the same name exists, the new one is saved with a number added.',
     activeSend: (status: string) => `Sending · ${status}`,
     cardStatus: {connecting: 'connecting…', waiting: 'waiting for answer'} as Record<string, string>,
+    sendFailed: 'Could not send',
+    errors: {
+      'not-paired': (name: string) => `${name} no longer recognizes this pairing, maybe because it was forgotten there. Forget it here too, then pair again.`,
+      'quick-refused': (name: string) => `${name} only accepts files from paired devices. Pair with it first.`,
+      busy: (name: string) => `${name} is busy. Try again in a moment.`,
+      timeout: (name: string) => `${name} did not respond. Check that it is on the same network with Nearby open.`,
+    } as Record<string, (name: string) => string>,
+    forgetPairing: 'Forget pairing',
+    dismiss: 'Dismiss',
   },
   zh: {
     title: '附近设备',
@@ -190,6 +199,15 @@ const strings = {
     noOverwrite: '不会覆盖已有文件：如有同名文件，新文件会在名称后加上编号保存。',
     activeSend: (status: string) => `发送中 · ${status}`,
     cardStatus: {connecting: '正在连接…', waiting: '等待对方接收'} as Record<string, string>,
+    sendFailed: '发送失败',
+    errors: {
+      'not-paired': (name: string) => `${name} 已不再识别此配对，可能已在那边忘记了本机。请在这里也忘记该配对，然后重新配对。`,
+      'quick-refused': (name: string) => `${name} 只接收已配对设备的文件，请先配对。`,
+      busy: (name: string) => `${name} 正忙，请稍后再试。`,
+      timeout: (name: string) => `${name} 没有响应。请确认它在同一网络中，并已打开附近设备。`,
+    } as Record<string, (name: string) => string>,
+    forgetPairing: '忘记配对',
+    dismiss: '关闭',
   },
 };
 
@@ -211,6 +229,12 @@ export function formatSize(bytes: number) {
     unit++;
   }
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** A transfer's failure in the app's language, when the Go side named it. */
+function failureText(item: nearbyapp.TransferInfo, t: Strings) {
+  const word = item.errorCode ? t.errors[item.errorCode] : undefined;
+  return word ? word(item.peerName) : item.message || '';
 }
 
 function formatCode(code: string) {
@@ -237,6 +261,11 @@ export function useNearbyModel(lang: Lang) {
   const [cancelling, setCancelling] = useState<Record<string, true>>({});
   // A transfer the user just accepted; the Nearby page scrolls it into view.
   const [revealTransfer, setRevealTransfer] = useState<string | null>(null);
+  // A device whose send just failed; the Nearby page scrolls its card,
+  // which shows the reason, into view.
+  const [revealDevice, setRevealDevice] = useState<string | null>(null);
+  // Failed sends the user closed on the device card.
+  const [dismissedFailures, setDismissedFailures] = useState<Record<string, true>>({});
   // When the user picks an unpaired device to send to, the send starts
   // automatically once pairing succeeds.
   const sendAfterPairing = useRef<{pairingId: string; paths: string[]} | null>(null);
@@ -248,7 +277,12 @@ export function useNearbyModel(lang: Lang) {
       .catch(() => undefined);
     EventsOn('nearby:state', (next: nearbyapp.State) => setState(next));
     EventsOn('nearby:transfer', (item: nearbyapp.TransferInfo) => {
-      setTransfers((current) => ({...current, [item.id]: item}));
+      setTransfers((current) => {
+        if (item.direction === 'send' && item.status === 'failed' && item.deviceId && current[item.id]?.status !== 'failed') {
+          setRevealDevice(item.deviceId);
+        }
+        return {...current, [item.id]: item};
+      });
     });
     EventsOn('nearby:pairing', (info: nearbyapp.PairingInfo) => {
       if (info.status === 'waiting') {
@@ -372,10 +406,27 @@ export function useNearbyModel(lang: Lang) {
     }
     return out;
   }, [transferList]);
+  // A device's newest send when it failed and the user has not closed it.
+  // A new send to the device replaces it.
+  const failedSends = useMemo(() => {
+    const newest: Record<string, nearbyapp.TransferInfo> = {};
+    for (const item of transferList) {
+      if (item.direction === 'send' && item.deviceId && !newest[item.deviceId]) newest[item.deviceId] = item;
+    }
+    const out: Record<string, nearbyapp.TransferInfo> = {};
+    for (const [deviceId, item] of Object.entries(newest)) {
+      if (item.status === 'failed' && !dismissedFailures[item.id]) out[deviceId] = item;
+    }
+    return out;
+  }, [transferList, dismissedFailures]);
+  const dismissFailure = useCallback((id: string) => {
+    setDismissedFailures((current) => ({...current, [id]: true}));
+  }, []);
 
   return {
     t, state, transfers: transferList, pairing, pairingConfirmed, offer, notice, error,
     busyDevices, cancelling, activeSends, revealTransfer, setRevealTransfer,
+    failedSends, dismissFailure, revealDevice, setRevealDevice,
     setError, setNotice, run, sendTo, quickSend, pairOnly, answerPairing, cancelTransfer,
     clearFinished: async () => {
       await NearbyClearFinished();
@@ -495,6 +546,23 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
     return () => window.cancelAnimationFrame(frame);
   }, [revealTransfer, setRevealTransfer]);
 
+  // A failed send shows its reason on the device's card; bring it on screen.
+  const {revealDevice, setRevealDevice} = model;
+  useEffect(() => {
+    if (!revealDevice) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`nearby-device-${revealDevice}`)?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      setRevealDevice(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealDevice, setRevealDevice]);
+
+  async function forgetBroken(device: nearby.Device, failure: nearbyapp.TransferInfo) {
+    if (!device.peerId) return;
+    await model.run(() => NearbyForget(device.peerId!));
+    model.dismissFailure(failure.id);
+  }
+
   function focusName() {
     const input = document.getElementById('nearby-name') as HTMLInputElement | null;
     if (!input) return;
@@ -570,8 +638,9 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
                 const busy = !!model.busyDevices[device.id];
                 const sending = model.activeSends[device.id];
                 const sendPercent = sending && sending.totalBytes > 0 ? Math.min(100, Math.round((sending.doneBytes / sending.totalBytes) * 100)) : 0;
+                const failure = sending ? undefined : model.failedSends[device.id];
                 return (
-                <div key={device.id} className={`nearby-device${device.paired ? ' paired' : ''}${sending ? ' sending' : ''}`}>
+                <div key={device.id} id={`nearby-device-${device.id}`} className={`nearby-device${device.paired ? ' paired' : ''}${sending ? ' sending' : ''}${failure ? ' failed' : ''}`}>
                   <span className="nearby-device-icon"><Icon name={deviceIcon(device.deviceType)} /></span>
                   <div className="nearby-device-text">
                     <strong title={device.nickname}>{device.nickname || device.addresses?.[0]}</strong>
@@ -623,6 +692,18 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
                       </button>
                     )}
                   </div>
+                  {failure && (
+                    <div className="nearby-device-failure" role="alert">
+                      <Icon name="info" />
+                      <p><strong>{t.sendFailed}</strong> {failureText(failure, t)}</p>
+                      <div className="nearby-device-failure-actions">
+                        {failure.errorCode === 'not-paired' && device.paired && device.peerId && (
+                          <button type="button" className="secondary" onClick={() => forgetBroken(device, failure)}>{t.forgetPairing}</button>
+                        )}
+                        <button type="button" className="ghost" onClick={() => model.dismissFailure(failure.id)}>{t.dismiss}</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 );
               })}
@@ -718,7 +799,7 @@ function TransferRow({item, t, cancelling, onCancel, onReveal}: {item: nearbyapp
         </div>
         <div className="nearby-transfer-detail" title={names.join('\n')}>
           {label} · {formatSize(item.totalBytes)}
-          {item.message && <em> — {item.message}</em>}
+          {item.message && <em> — {item.status === 'failed' ? failureText(item, t) : item.message}</em>}
         </div>
         {(item.status === 'transferring' || item.status === 'completed') && (
           <div className="nearby-progress" aria-hidden="true"><span style={{width: `${percent}%`}} /></div>
