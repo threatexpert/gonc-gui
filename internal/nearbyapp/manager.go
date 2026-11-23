@@ -98,8 +98,11 @@ type TransferInfo struct {
 	PeerName  string `json:"peerName"`
 	// Status: connecting, waiting, offered, transferring, completed,
 	// declined, cancelled or failed.
-	Status         string        `json:"status"`
-	Message        string        `json:"message,omitempty"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+	// ErrorCode names a failure apps word themselves: not-paired,
+	// quick-refused, busy or timeout. Message is the English text.
+	ErrorCode      string        `json:"errorCode,omitempty"`
 	Items          []FileSummary `json:"items,omitempty"`
 	FileCount      int64         `json:"fileCount"`
 	TotalBytes     int64         `json:"totalBytes"`
@@ -110,7 +113,9 @@ type TransferInfo struct {
 	SavedPaths     []string      `json:"savedPaths,omitempty"`
 	// Quick is true for transfers between unpaired devices. Nothing proves
 	// who the other device is.
-	Quick     bool      `json:"quick,omitempty"`
+	Quick bool `json:"quick,omitempty"`
+	// Endpoint is set while an ExternalDownload transfer is "ready".
+	Endpoint  string    `json:"endpoint,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -127,6 +132,17 @@ type Manager struct {
 	defaultSaveDir func() string
 	// StorePath overrides the settings file location, for tests.
 	StorePath string
+	// StoreKey, DefaultName and DeviceType configure the store for apps
+	// that keep the key themselves, such as the Android app. Set them
+	// before Start.
+	StoreKey    []byte
+	DefaultName string
+	DeviceType  string
+	// ExternalDownload hands an accepted transfer's download to the app:
+	// the transfer reports status "ready" with Endpoint, the local HTTP
+	// address of the sender's share, and waits for FinishReceive. Without
+	// it the manager saves the files itself.
+	ExternalDownload bool
 
 	mu        sync.Mutex
 	store     nearbystore.Store
@@ -144,6 +160,9 @@ type Manager struct {
 	// discovering is whether the Nearby page is open. Discovery traffic is
 	// sent only then; see SetDiscovering.
 	discovering bool
+
+	// finishers wait for FinishReceive in ExternalDownload mode.
+	finishers map[string]chan receiveResult
 
 	logMu sync.Mutex
 	logs  []LogLine
@@ -205,6 +224,12 @@ type incomingTransfer struct {
 	decided chan bool
 }
 
+// receiveResult is the app's report on an externally downloaded transfer.
+type receiveResult struct {
+	ok      bool
+	message string
+}
+
 func New(emit Emitter, defaultSaveDir func() string) *Manager {
 	if emit == nil {
 		emit = func(string, any) {}
@@ -217,7 +242,12 @@ func New(emit Emitter, defaultSaveDir func() string) *Manager {
 		cancels:        map[string]context.CancelFunc{},
 		incoming:       map[string]*incomingTransfer{},
 		pairingWith:    map[string]bool{},
+		finishers:      map[string]chan receiveResult{},
 	}
+}
+
+func (m *Manager) storeOptions() nearbystore.Options {
+	return nearbystore.Options{Key: m.StoreKey, DefaultName: m.DefaultName}
 }
 
 // Start loads the identity and starts the service. Errors are kept in State
@@ -231,13 +261,17 @@ func (m *Manager) Start() error {
 		}
 		m.StorePath = path
 	}
-	store, err := nearbystore.LoadAt(m.StorePath)
+	store, err := nearbystore.LoadWith(m.StorePath, m.storeOptions())
 	if err != nil {
 		m.setStartErr(fmt.Errorf("could not load Nearby settings: %w", err))
 		return err
 	}
+	identity := store.Identity()
+	if m.DeviceType != "" {
+		identity.DeviceType = m.DeviceType
+	}
 	cfg := nearby.Config{
-		Identity: store.Identity(),
+		Identity: identity,
 		Peers:    store.Peers,
 		Visible:  store.Visible,
 		// Unpaired devices may offer files unless the user turned it off.
@@ -426,7 +460,7 @@ func (m *Manager) updateStore(change func(*nearbystore.Store), apply func(*nearb
 	next.Peers = append([]nearby.PeerRecord(nil), m.store.Peers...)
 	next.Addresses = append([]string(nil), m.store.Addresses...)
 	change(&next)
-	if err := nearbystore.SaveAt(m.StorePath, next); err != nil {
+	if err := nearbystore.SaveWith(m.StorePath, m.storeOptions(), next); err != nil {
 		m.mu.Unlock()
 		return err
 	}
@@ -503,7 +537,7 @@ func (m *Manager) Forget(peerID string) error {
 		m.mu.Unlock()
 		return errors.New("that device is not paired")
 	}
-	if err := nearbystore.SaveAt(m.StorePath, next); err != nil {
+	if err := nearbystore.SaveWith(m.StorePath, m.storeOptions(), next); err != nil {
 		m.mu.Unlock()
 		return err
 	}
@@ -585,7 +619,7 @@ func (m *Manager) savePeer(rec nearby.PeerRecord) error {
 	next := m.store
 	next.Peers = append([]nearby.PeerRecord(nil), m.store.Peers...)
 	next.UpsertPeer(rec)
-	if err := nearbystore.SaveAt(m.StorePath, next); err != nil {
+	if err := nearbystore.SaveWith(m.StorePath, m.storeOptions(), next); err != nil {
 		return err
 	}
 	m.store = next
@@ -602,6 +636,21 @@ func (m *Manager) ConfirmPairing(id string, accept bool) error {
 	}
 	p.Confirm(accept)
 	return nil
+}
+
+// errorCode is TransferInfo.ErrorCode for err, or "".
+func errorCode(err error) string {
+	switch {
+	case errors.Is(err, nearby.ErrNotPaired):
+		return "not-paired"
+	case errors.Is(err, nearby.ErrQuickRefused):
+		return "quick-refused"
+	case errors.Is(err, nearby.ErrBusy):
+		return "busy"
+	case errors.Is(err, nearby.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	return ""
 }
 
 func friendlyError(err error) error {
@@ -754,14 +803,60 @@ func (m *Manager) QuickSend(deviceID string, paths []string) (string, error) {
 }
 
 func (m *Manager) send(deviceID string, paths []string, quick bool) (string, error) {
-	svc, err := m.service()
-	if err != nil {
-		return "", err
-	}
 	if len(paths) == 0 {
 		return "", errors.New("add files or folders to send")
 	}
 	source, err := httpfileshare.NewOSFileSource(paths)
+	if err != nil {
+		return "", err
+	}
+	items, count, total := summarizeLocal(paths)
+	return m.sendSource(deviceID, source, items, count, total, quick)
+}
+
+// SendSource offers the files of any FileSource, such as an app's own
+// document provider, to a device. Set quick for an unpaired device.
+func (m *Manager) SendSource(deviceID string, source httpfileshare.FileSource, quick bool) (string, error) {
+	if source == nil {
+		return "", errors.New("add files to send")
+	}
+	items, count, total := summarizeSource(source)
+	if len(items) == 0 {
+		return "", errors.New("add files to send")
+	}
+	return m.sendSource(deviceID, source, items, count, total, quick)
+}
+
+// summarizeSource lists a source's top-level items with their total sizes.
+func summarizeSource(source httpfileshare.FileSource) ([]FileSummary, int64, int64) {
+	entries, err := source.ReadDir("/")
+	if err != nil {
+		return nil, 0, 0
+	}
+	var items []FileSummary
+	var count, total int64
+	for _, e := range entries {
+		item := FileSummary{Name: e.Name(), IsDir: e.IsDir()}
+		if !e.IsDir() {
+			item.Size = e.Size()
+			count++
+		} else {
+			_ = source.Walk("/"+e.Name(), func(_ string, info fs.FileInfo, err error) error {
+				if err == nil && info != nil && !info.IsDir() {
+					count++
+					item.Size += info.Size()
+				}
+				return nil
+			})
+		}
+		total += item.Size
+		items = append(items, item)
+	}
+	return items, count, total
+}
+
+func (m *Manager) sendSource(deviceID string, source httpfileshare.FileSource, items []FileSummary, count, total int64, quick bool) (string, error) {
+	svc, err := m.service()
 	if err != nil {
 		return "", err
 	}
@@ -774,7 +869,6 @@ func (m *Manager) send(deviceID string, paths []string, quick bool) (string, err
 			}
 		}
 	}
-	items, count, total := summarizeLocal(paths)
 	info := TransferInfo{ID: newID(), Direction: "send", DeviceID: deviceID, PeerName: peerName, Status: "connecting", Items: items, FileCount: count, TotalBytes: total, Quick: quick}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.setCancel(info.ID, cancel)
@@ -789,10 +883,10 @@ func (m *Manager) runSend(ctx context.Context, cancel context.CancelFunc, svc *n
 	fail := func(status string, err error) {
 		info.Status = status
 		if err != nil {
-			info.Message = friendlyError(err).Error()
+			info.Message, info.ErrorCode = friendlyError(err).Error(), errorCode(err)
 		}
 		if ctx.Err() != nil && status == "failed" {
-			info.Status, info.Message = "cancelled", ""
+			info.Status, info.Message, info.ErrorCode = "cancelled", "", ""
 		}
 		m.putTransfer(info)
 	}
@@ -1110,7 +1204,7 @@ func (m *Manager) runReceive(t *nearby.IncomingTransfer) {
 	}()
 
 	finish := func(status, message string) {
-		info.Status, info.Message, info.BytesPerSecond = status, message, 0
+		info.Status, info.Message, info.BytesPerSecond, info.Endpoint = status, message, 0, ""
 		m.putTransfer(info)
 	}
 
@@ -1238,6 +1332,10 @@ func (m *Manager) runReceive(t *nearby.IncomingTransfer) {
 		failAccepted(r.err)
 		return
 	}
+	if m.ExternalDownload {
+		m.awaitExternalDownload(ctx, t, &info, r.endpoint, failAccepted, finish)
+		return
+	}
 	if files == nil {
 		var err error
 		if files, err = list(r.endpoint); err != nil {
@@ -1258,6 +1356,55 @@ func (m *Manager) runReceive(t *nearby.IncomingTransfer) {
 	info.DoneBytes, info.DoneFiles = info.TotalBytes, info.FileCount
 	_ = t.Finish(true, "")
 	finish("completed", "")
+}
+
+// awaitExternalDownload reports the endpoint and waits for the app to finish
+// downloading from it.
+func (m *Manager) awaitExternalDownload(ctx context.Context, t *nearby.IncomingTransfer, info *TransferInfo, endpoint string,
+	failAccepted func(error), finish func(status, message string)) {
+	done := make(chan receiveResult, 1)
+	m.mu.Lock()
+	m.finishers[info.ID] = done
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.finishers, info.ID)
+		m.mu.Unlock()
+	}()
+	info.Status, info.Endpoint = "ready", endpoint
+	m.putTransfer(*info)
+	select {
+	case r := <-done:
+		if !r.ok {
+			msg := strings.TrimSpace(r.message)
+			if msg == "" {
+				msg = "the files could not be saved"
+			}
+			failAccepted(errors.New(msg))
+			return
+		}
+		info.DoneBytes, info.DoneFiles = info.TotalBytes, info.FileCount
+		_ = t.Finish(true, "")
+		finish("completed", "")
+	case <-ctx.Done():
+		failAccepted(ctx.Err())
+	}
+}
+
+// FinishReceive reports that the app finished downloading a transfer it
+// received in ExternalDownload mode. A failure message is shown to the
+// sender.
+func (m *Manager) FinishReceive(id string, ok bool, message string) {
+	m.mu.Lock()
+	done := m.finishers[id]
+	m.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case done <- receiveResult{ok: ok, message: message}:
+	default:
+	}
 }
 
 func stopSession(s *goncembed.Session) {

@@ -53,6 +53,12 @@ final class ReceiveController {
     private String receivePassword = "";
     private Uri saveTreeUri;
     private String saveLocationLabel;
+    private NearbyController nearby;
+    /** The Nearby transfer being downloaded, or null for a passphrase session. */
+    private String nearbyTransferId;
+    private String nearbyPeerName = "";
+    /** Run whose first file list starts downloading everything, for Nearby. */
+    private long nearbyAutoDownloadRun;
     private String receiveEndpoint = "";
     private String remoteListStatus = "Idle";
     private String remoteCurrentPath = "";
@@ -136,6 +142,120 @@ final class ReceiveController {
     boolean isBusy() {
         return receiveSession != null || remoteListSession != null || receiveDownload != null
                 || completionRefresh.isPending();
+    }
+
+    void attachNearby(NearbyController nearby) {
+        this.nearby = nearby;
+    }
+
+    String saveLocationLabel() {
+        return saveLocationLabel == null ? "" : saveLocationLabel;
+    }
+
+    /** Whether an accepted Nearby transfer could start downloading now. */
+    boolean canAcceptNearby() {
+        return canStartReceiveConnection();
+    }
+
+    /**
+     * Starts downloading an accepted Nearby transfer from the sender's share
+     * at {@code endpoint}, exactly like a connected passphrase session, and
+     * downloads every file. Returns false when a receive is already running.
+     */
+    boolean beginNearbyReceive(String transferId, String peerName, String endpoint) {
+        if (!canStartReceiveConnection() || endpoint == null || !endpoint.startsWith("http://")) {
+            return false;
+        }
+        resetForNewRun();
+        receiveStatus = "Ready";
+        long runId = ++receiveRunId;
+        nearbyTransferId = transferId;
+        nearbyPeerName = peerName == null ? "" : peerName;
+        nearbyAutoDownloadRun = runId;
+        receiveSession = new NearbyReceiveSession(transferId);
+        receiveDownloadId++;
+        receivedTargets.clear();
+        receivedTargetCheckId++;
+        completionRefresh.cancel();
+        receiveMetrics.p2pStatus = "connected";
+        receiveQrRetired = true;
+        host.log("info", "Nearby: receiving from " + nearbyPeerName);
+        loadRemoteFiles(endpoint, runId);
+        host.refreshForegroundService();
+        host.requestRender();
+        return true;
+    }
+
+    /** The Nearby side ended the transfer (for example the sender cancelled). */
+    void onNearbyReceiveEnded(String transferId) {
+        if (transferId == null || !transferId.equals(nearbyTransferId)) {
+            return;
+        }
+        nearbyTransferId = null;
+        nearbyAutoDownloadRun = 0;
+        if (remoteListSession != null) {
+            remoteListSession.stop();
+            remoteListSession = null;
+        }
+        if (receiveDownload != null) {
+            receiveDownload.stop();
+        }
+        endNearbySession();
+        host.refreshForegroundService();
+        host.requestRender();
+    }
+
+    private void endNearbySession() {
+        receiveSession = null;
+        receiveStatus = "Idle";
+        receiveMetrics.markStopped();
+    }
+
+    /** Reports a Nearby download that could not start or finish. */
+    private void failNearby(String reason) {
+        String id = nearbyTransferId;
+        if (id == null) {
+            return;
+        }
+        nearbyTransferId = null;
+        nearbyAutoDownloadRun = 0;
+        endNearbySession();
+        if (nearby != null) {
+            nearby.finishReceive(id, false, reason);
+        }
+        host.refreshForegroundService();
+        host.requestRender();
+    }
+
+    private void startNearbyDownload() {
+        if (remoteFiles.isEmpty()) {
+            failNearby("no files were shared");
+            return;
+        }
+        refreshAndStartDownload(Collections.singletonList(""), false);
+        if (receiveDownload == null && remoteListSession == null) {
+            failNearby("the files could not be saved on this device");
+        }
+    }
+
+    /** Stopping a Nearby receive cancels the transfer on both devices. */
+    private final class NearbyReceiveSession implements GoncBridge.Session {
+        private final String transferId;
+
+        NearbyReceiveSession(String transferId) {
+            this.transferId = transferId;
+        }
+
+        @Override
+        public void stop() {
+            if (nearby != null) {
+                nearby.cancel(transferId);
+            }
+        }
+
+        @Override
+        public void updateShareItems(java.util.List<ShareItem> items) {
+        }
     }
 
     boolean isDownloading() {
@@ -289,7 +409,19 @@ final class ReceiveController {
         chooseParams.setMargins(dp(8), 0, 0, 0);
         save.addView(choose, chooseParams);
         card.addView(save, blockParams());
-        card.addView(sectionBoundaryTitle(string(R.string.passphrase_config), true), blockParams(dp(14)));
+        if (nearby != null) {
+            boolean nearbyMode = nearby.isNearbyReceive();
+            card.addView(sectionDivider(), dividerParams(dp(14)));
+            card.addView(nearby.modeSwitch(nearbyMode, canStartReceiveConnection(), nearby::setNearbyReceive),
+                    blockParams(dp(10)));
+            if (nearbyMode) {
+                card.addView(nearby.receiveSection());
+                return card;
+            }
+            card.addView(sectionBoundaryTitle(string(R.string.passphrase_config), false), blockParams(dp(10)));
+        } else {
+            card.addView(sectionBoundaryTitle(string(R.string.passphrase_config), true), blockParams(dp(14)));
+        }
         card.addView(passwordField());
         card.addView(sectionDivider(), dividerParams(dp(12)));
         card.addView(protocolToggle());
@@ -335,7 +467,9 @@ final class ReceiveController {
         labelParams.setMargins(dp(10), 0, dp(8), 0);
         row.addView(label, labelParams);
 
-        if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
+        if (nearbyTransferId != null) {
+            // A Nearby transfer has no passphrase to show.
+        } else if (TransferInlineQrState.showReceiveQr(receiveQrRetired, receiveConnectionState())) {
             int qrSize = dp(TransferInlineQrState.inlineQrSizeDp());
             View qr = PassphraseQrView.create(
                     context(), host.ui(), receivePassword,
@@ -350,7 +484,7 @@ final class ReceiveController {
                     ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
         }
 
-        Button disconnect = dangerButton(string(R.string.disconnect));
+        Button disconnect = dangerButton(string(nearbyTransferId != null ? R.string.cancel : R.string.disconnect));
         disconnect.setTextSize(14);
         disconnect.setOnClickListener(v -> stopSession());
         LinearLayout.LayoutParams disconnectParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38));
@@ -853,6 +987,9 @@ final class ReceiveController {
     private String receiveConnectionLabel() {
         if (receiveSession == null) {
             return string(R.string.connection_disconnected);
+        }
+        if (nearbyTransferId != null) {
+            return context().getString(R.string.nearby_receiving_from, nearbyPeerName);
         }
         return host.ui().connectionLabel(receiveMetrics);
     }
@@ -1514,6 +1651,28 @@ final class ReceiveController {
         }
         hidePassword();
         PassphraseQrView.clearCache();
+        resetForNewRun();
+        nearbyTransferId = null;
+        nearbyAutoDownloadRun = 0;
+        receiveStatus = "Preparing";
+        host.log("info", "Start receiving requested");
+        receiveQrRetired = TransferInlineQrState.newReceiveRunRetired();
+        long runId = ++receiveRunId;
+        GoncBridge.Session started = host.bridge().startP2PReceive(
+                context(), passphrase, receiveUseUdp, callback(runId));
+        receiveSession = started;
+        if (started != null) {
+            receiveDownloadId++;
+            receivedTargets.clear();
+            receivedTargetCheckId++;
+            completionRefresh.cancel();
+        }
+        host.refreshForegroundService();
+        host.requestRender();
+    }
+
+    /** Clears the previous run's list and download state. */
+    private void resetForNewRun() {
         receiveMetrics.reset();
         receiveReportState.reset();
         remoteListStatus = "Waiting for peer";
@@ -1538,21 +1697,6 @@ final class ReceiveController {
         remoteFileCount = 0;
         remoteDirCount = 0;
         remoteTotalBytes = 0;
-        receiveStatus = "Preparing";
-        host.log("info", "Start receiving requested");
-        receiveQrRetired = TransferInlineQrState.newReceiveRunRetired();
-        long runId = ++receiveRunId;
-        GoncBridge.Session started = host.bridge().startP2PReceive(
-                context(), passphrase, receiveUseUdp, callback(runId));
-        receiveSession = started;
-        if (started != null) {
-            receiveDownloadId++;
-            receivedTargets.clear();
-            receivedTargetCheckId++;
-            completionRefresh.cancel();
-        }
-        host.refreshForegroundService();
-        host.requestRender();
     }
 
     private GoncBridge.EventCallback callback(long runId) {
@@ -1671,6 +1815,9 @@ final class ReceiveController {
             current.stop();
             receiveSession = null;
         }
+        // Stopping already cancelled the Nearby transfer on both devices.
+        nearbyTransferId = null;
+        nearbyAutoDownloadRun = 0;
         receiveQrRetired = TransferInlineQrState.retireReceiveQr(receiveQrRetired, "stopped");
         PassphraseQrView.clearCache();
         if (receiveDownload != null) {
@@ -1762,6 +1909,10 @@ final class ReceiveController {
                     }
                     host.requestRender();
                     refreshReceivedTargets(runId, targetPath);
+                    if (replaceAll && nearbyAutoDownloadRun == runId) {
+                        nearbyAutoDownloadRun = 0;
+                        startNearbyDownload();
+                    }
                 });
             }
 
@@ -1776,6 +1927,9 @@ final class ReceiveController {
                     host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.toast(R.string.toast_remote_refresh_failed);
+                    if (nearbyAutoDownloadRun == runId) {
+                        failNearby("could not read the file list");
+                    }
                     host.requestRender();
                 });
             }
@@ -1880,11 +2034,15 @@ final class ReceiveController {
                     if (downloadFiles.isEmpty()) {
                         downloadStatus = "Idle";
                         host.toast(R.string.toast_no_remote_files);
+                        failNearby("no files were shared");
                         host.requestRender();
                         return;
                     }
                     host.log("info", "Remote list refreshed before download: " + fileCount + " file(s), " + dirCount + " folder(s), " + formatBytes(totalBytes));
                     startReceiveDownload(receiveEndpoint, receiveRunId, downloadFiles);
+                    if (receiveDownload == null) {
+                        failNearby("the files could not be saved on this device");
+                    }
                     host.requestRender();
                 });
             }
@@ -1898,6 +2056,7 @@ final class ReceiveController {
                     remoteListSession = null;
                     remoteListStatus = "Remote refresh failed";
                     downloadStatus = "Idle";
+                    failNearby("could not read the file list");
                     host.refreshForegroundService();
                     host.log("error", error.getMessage() == null ? error.toString() : error.getMessage());
                     host.toast(R.string.toast_remote_refresh_failed);
@@ -2029,6 +2188,24 @@ final class ReceiveController {
             }
         }
         refreshReceivedTargets(runId, remoteCurrentPath, completionRefreshToken);
+        if (nearbyTransferId != null) {
+            String id = nearbyTransferId;
+            boolean ok = result != null && result.error == null && result.failures.isEmpty();
+            String message = "";
+            if (result == null) {
+                message = "the recipient stopped the download";
+            } else if (result.error != null) {
+                message = result.error.getMessage() == null ? result.error.toString() : result.error.getMessage();
+            } else if (!result.failures.isEmpty()) {
+                message = result.failures.size() + " file(s) could not be saved";
+            }
+            nearbyTransferId = null;
+            nearbyAutoDownloadRun = 0;
+            endNearbySession();
+            if (nearby != null) {
+                nearby.finishReceive(id, ok, message);
+            }
+        }
         host.refreshForegroundService();
         host.requestRender();
     }

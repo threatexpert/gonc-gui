@@ -74,7 +74,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-public final class MainActivity extends Activity implements ModuleHost {
+public final class MainActivity extends Activity implements ModuleHost, NearbyController.Host {
     private static final String GONC_URL = "https://github.com/threatexpert/gonc";
     private static final String SOURCE_URL = "https://github.com/threatexpert/gonc-gui";
     private static final int REQUEST_OPEN_DOCUMENT = 1001;
@@ -110,6 +110,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     private VpnClientController vpnClient;
     private SendController sendController;
     private ReceiveController receiveController;
+    private NearbyController nearby;
     private final PendingQrScan pendingQrScan = new PendingQrScan();
     private boolean pendingScanIsProfile;
     private int aboutUpdateGeneration;
@@ -159,6 +160,7 @@ public final class MainActivity extends Activity implements ModuleHost {
             vpnClient = retained.vpnClient;
             sendController = retained.sendController;
             receiveController = retained.receiveController;
+            nearby = retained.nearby;
             vpnServer.attach(this);
             vpnClient.attach(this);
             sendController.attach(this);
@@ -168,13 +170,18 @@ public final class MainActivity extends Activity implements ModuleHost {
             vpnClient = new VpnClientController(this);
             sendController = new SendController(this);
             receiveController = new ReceiveController(this);
+            nearby = new NearbyController(this);
             vpnClient.load();
             vpnServer.load();
             applyModule(prefs().getString(KEY_LAST_MODULE, MODULE_SEND), false);
         }
+        nearby.attach(this, this, receiveController);
+        sendController.attachNearby(nearby);
+        receiveController.attachNearby(nearby);
         if (reusedModules) {
             applyModule(prefs().getString(KEY_LAST_MODULE, MODULE_SEND), false);
         }
+        nearby.setScreen(currentModule());
         buildRoot();
         if (!reusedModules) {
             vpnClient.register();
@@ -201,6 +208,7 @@ public final class MainActivity extends Activity implements ModuleHost {
     @Override
     protected void onResume() {
         super.onResume();
+        nearby.setForeground(true);
         vpnClient.syncLogs();
         updateKeepScreenOn();
         renderAfterBackgroundUpdate();
@@ -215,6 +223,21 @@ public final class MainActivity extends Activity implements ModuleHost {
             appendLog("warn", "Battery optimization still enabled for this app");
             Toast.makeText(this, R.string.toast_battery_optimization_still_enabled, Toast.LENGTH_SHORT).show();
         }
+    }
+
+    @Override
+    protected void onPause() {
+        // Nearby announces this device only while the app is on screen.
+        nearby.setForeground(false);
+        super.onPause();
+    }
+
+    @Override
+    public void showReceiveForNearby() {
+        if (vpnMode || vpnServerMode || sendMode) {
+            selectModule(MODULE_RECEIVE);
+        }
+        render();
     }
 
     @Override
@@ -312,7 +335,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         // Keep the extracted module controllers (and their live sessions)
         // alive across a configuration-change recreation; the new Activity
         // re-attaches itself via attach().
-        return new RetainedModules(vpnServer, vpnClient, sendController, receiveController);
+        return new RetainedModules(vpnServer, vpnClient, sendController, receiveController, nearby);
     }
 
     @Override
@@ -327,6 +350,7 @@ public final class MainActivity extends Activity implements ModuleHost {
                 sendController.endTask();
                 vpnServer.endTask();
                 receiveController.endTask();
+                nearby.endTask();
             } finally {
                 GoncForegroundService.clear(this);
             }
@@ -339,8 +363,10 @@ public final class MainActivity extends Activity implements ModuleHost {
         final VpnClientController vpnClient;
         final SendController sendController;
         final ReceiveController receiveController;
+        final NearbyController nearby;
 
-        RetainedModules(VpnServerController vpnServer, VpnClientController vpnClient, SendController sendController, ReceiveController receiveController) {
+        RetainedModules(VpnServerController vpnServer, VpnClientController vpnClient, SendController sendController, ReceiveController receiveController, NearbyController nearby) {
+            this.nearby = nearby;
             this.vpnServer = vpnServer;
             this.vpnClient = vpnClient;
             this.sendController = sendController;
@@ -549,6 +575,9 @@ public final class MainActivity extends Activity implements ModuleHost {
         }
         if (save) {
             prefs().edit().putString(KEY_LAST_MODULE, currentModule()).apply();
+        }
+        if (nearby != null) {
+            nearby.setScreen(currentModule());
         }
     }
 
@@ -874,6 +903,7 @@ public final class MainActivity extends Activity implements ModuleHost {
         exiting = true;
         sendController.endTask();
         receiveController.endTask();
+        nearby.endTask();
         vpnServer.endTask();
         if (GoncVpnState.isRunning()) {
             stopVpnService();
@@ -1400,7 +1430,8 @@ public final class MainActivity extends Activity implements ModuleHost {
     }
 
     private boolean isAnySessionRunning() {
-        return sendController.isRunning() || receiveController.isBusy() || vpnServer.isRunning() || GoncVpnState.isRunning();
+        return sendController.isRunning() || receiveController.isBusy() || nearby.hasActiveSend()
+                || vpnServer.isRunning() || GoncVpnState.isRunning();
     }
 
     private TransferMetrics currentMetrics() {
@@ -1411,7 +1442,8 @@ public final class MainActivity extends Activity implements ModuleHost {
             return vpnServer.metrics();
         }
         if (sendMode) {
-            return sendController.metrics();
+            TransferMetrics nearbyMetrics = sendController.isRunning() ? null : nearby.sendMetricsIfShown();
+            return nearbyMetrics != null ? nearbyMetrics : sendController.metrics();
         }
         return receiveController.metrics();
     }
@@ -1831,6 +1863,8 @@ public final class MainActivity extends Activity implements ModuleHost {
                 new java.util.EnumMap<>(GoncForegroundService.Module.class);
         GoncForegroundService.State state;
         if ((state = sendController.foregroundState()) != null) {
+            active.put(GoncForegroundService.Module.SEND, state);
+        } else if ((state = nearby.foregroundState()) != null) {
             active.put(GoncForegroundService.Module.SEND, state);
         }
         if ((state = receiveController.foregroundState()) != null) {

@@ -80,16 +80,55 @@ func Load() (Store, error) {
 	return LoadAt(path)
 }
 
+// Options adjusts how a store file is read and written.
+type Options struct {
+	// Key, when set, seals the file with AES-GCM under this 32-byte key
+	// instead of the operating system's protection. Mobile apps keep the
+	// key in the platform keystore.
+	Key []byte
+	// DefaultName names a new device instead of the host name.
+	DefaultName string
+}
+
+func (o Options) protect(data []byte) ([]byte, error) {
+	if o.Key != nil {
+		return seal(data, o.Key)
+	}
+	return protect(data)
+}
+
+func (o Options) unprotect(data []byte) ([]byte, error) {
+	if o.Key != nil {
+		return openSealed(data, o.Key)
+	}
+	return unprotect(data)
+}
+
+func (o Options) defaultName() string {
+	if name := strings.TrimSpace(o.DefaultName); name != "" {
+		return name
+	}
+	return defaultNickname()
+}
+
 // LoadAt is Load for an explicit file path.
 func LoadAt(path string) (Store, error) {
+	return LoadWith(path, Options{})
+}
+
+// LoadWith is LoadAt with options.
+func LoadWith(path string, opt Options) (Store, error) {
+	if opt.Key != nil && len(opt.Key) != keyBytes {
+		return Store{}, errors.New("nearby store key must be 32 bytes")
+	}
 	encrypted, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return create(path)
+		return create(path, opt)
 	}
 	if err != nil {
 		return Store{}, err
 	}
-	data, err := unprotect(encrypted)
+	data, err := opt.unprotect(encrypted)
 	if err != nil {
 		return Store{}, err
 	}
@@ -101,12 +140,12 @@ func LoadAt(path string) (Store, error) {
 		return Store{}, errors.New("nearby store is missing its identity")
 	}
 	if strings.TrimSpace(store.Nickname) == "" {
-		store.Nickname = defaultNickname()
+		store.Nickname = opt.defaultName()
 	}
 	return store, nil
 }
 
-func create(path string) (Store, error) {
+func create(path string, opt Options) (Store, error) {
 	id, err := nearby.NewInstallationID()
 	if err != nil {
 		return Store{}, err
@@ -115,8 +154,8 @@ func create(path string) (Store, error) {
 	if err != nil {
 		return Store{}, err
 	}
-	store := Store{Version: 1, InstallationID: id, IRK: irk, Nickname: defaultNickname(), Visible: true}
-	return store, SaveAt(path, store)
+	store := Store{Version: 1, InstallationID: id, IRK: irk, Nickname: opt.defaultName(), Visible: true}
+	return store, SaveWith(path, opt, store)
 }
 
 func Save(store Store) error {
@@ -129,12 +168,17 @@ func Save(store Store) error {
 
 // SaveAt is Save for an explicit file path.
 func SaveAt(path string, store Store) error {
+	return SaveWith(path, Options{}, store)
+}
+
+// SaveWith is SaveAt with options.
+func SaveWith(path string, opt Options, store Store) error {
 	store.Version = 1
 	data, err := json.Marshal(store)
 	if err != nil {
 		return err
 	}
-	encrypted, err := protect(data)
+	encrypted, err := opt.protect(data)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,31 @@ The app supports:
   `ACTION_SEND_MULTIPLE`.
 - Open files with Gonc through `ACTION_VIEW` when a file manager offers it.
 - Scan and display passphrase QR codes.
+- Send to and receive from Gonc devices on the same network without a
+  passphrase (Nearby), including the desktop app.
+
+## Nearby
+
+Send Files and Receive Files each have a **Passphrase | Nearby** switch where
+the passphrase settings were. There is no separate screen.
+
+- **Send Files, Nearby:** the passphrase area becomes a list of nearby
+  devices. A paired device shows **Send**; an unpaired device shows **Pair**
+  (compare a six-digit number on both devices) and, if it accepts files from
+  unpaired devices, **Send** without pairing. Progress and **Cancel** appear in
+  the device row.
+- **Receive Files, Nearby:** a banner shows the name others see ("Ready to
+  receive as ..."), with **Rename**, the **Accept files from unpaired devices**
+  switch and the paired devices (**Forget**).
+- **Incoming files:** a dialog shows the sender, the files and their size, and
+  warns when the sender is not paired. **Accept** switches to Receive Files and
+  downloads everything into the save location with the usual receiver.
+
+The phone announces itself and looks for others only while a Nearby view is
+on screen and the app is in the foreground, holding a Wi-Fi multicast lock for
+that time. Transfers that are already running continue in the background.
+The device identity and pairing keys are stored in `noBackupFilesDir`, sealed
+with a key that is itself wrapped by an Android Keystore key.
 
 ## Received file actions
 
@@ -59,6 +84,9 @@ android/
     MainActivity.java
     GoncBridge.java
     MobileGoncBridge.java
+    NearbyController.java
+    NearbyKey.java
+    NearbyModel.java
     AndroidFileSource.java
     HttpReceiver.java
     ShareItem.java
@@ -118,7 +146,8 @@ Unsigned release APKs are intentionally blocked.
 
 ## Update mobilegonc.aar
 
-After changing `..\gonetcat\mobilegonc` or related Go packages, run from this
+After changing `android/nearbygo`, the shared Nearby code, or the gonc version in
+gonc-gui's `go.mod`, run from this
 directory:
 
 ```text
@@ -127,8 +156,12 @@ update-mobilegonc-aar.bat
 
 The script:
 
-1. Changes directory to `..\..\gonetcat`.
-2. Runs `gomobile bind` for `github.com/threatexpert/gonc/v2/mobilegonc`.
+1. Changes directory to the gonc-gui root.
+2. Runs `gomobile bind` for gonc's `github.com/threatexpert/gonc/v2/mobilegonc`
+   (passphrase transfers and VPN) and gonc-gui's `gonc-gui/android/nearbygo`
+   (Nearby), in one AAR. The gonc version is the one gonc-gui's `go.mod` pins,
+   the same as the desktop app; to try unmerged gonc changes, add a temporary
+   `replace github.com/threatexpert/gonc/v2 => ../gonetcat`.
 3. Writes `app\libs\mobilegonc.aar`.
 4. Runs `scripts\strip-mobilegonc-aar.ps1`.
 
@@ -162,3 +195,15 @@ func StartP2PShareSourceWithLAN(source AndroidFileSource, password string, useUD
 func StartP2PReceive(password string, useUDP bool, cb Callback) (*Session, error)
 func StartP2PReceiveWithLAN(password string, useUDP bool, p2pWithLAN bool, cb Callback) (*Session, error)
 ```
+
+Nearby lives in gonc-gui's `android/nearbygo` package (Java package `nearbygo`),
+a thin wrapper around the desktop app's `internal/nearbyapp` manager:
+
+```go
+func StartNearby(storePath string, storeKey []byte, defaultName string, deviceType string, listener NearbyListener) (*NearbyNode, error)
+```
+
+`NearbyNode` reports devices, pairings and transfers to `NearbyListener` as
+JSON events. For an accepted transfer it reports status `ready` with the
+local HTTP endpoint of the sender's share; the app downloads from it and then
+calls `FinishReceive`.

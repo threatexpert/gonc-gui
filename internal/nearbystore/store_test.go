@@ -57,3 +57,42 @@ func TestLoadRefusesUnreadableStore(t *testing.T) {
 		t.Fatal("Load overwrote an unreadable store")
 	}
 }
+
+// A key-sealed store hides pairing keys, needs the same key to open, and
+// names a new device with the given default name.
+func TestKeySealedStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nearby.bin")
+	key := bytes.Repeat([]byte{7}, 32)
+	opt := Options{Key: key, DefaultName: "Pixel 8"}
+	first, err := LoadWith(path, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Nickname != "Pixel 8" {
+		t.Fatalf("new device name %q", first.Nickname)
+	}
+	first.UpsertPeer(nearby.PeerRecord{InstallationID: "aa", PairKey: []byte("secret-pair-key")})
+	if err := SaveWith(path, opt, first); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("secret-pair-key")) || bytes.Contains(raw, []byte("Pixel 8")) {
+		t.Fatal("sealed store contains plain text")
+	}
+	second, err := LoadWith(path, opt)
+	if err != nil || second.InstallationID != first.InstallationID || len(second.Peers) != 1 {
+		t.Fatalf("sealed store did not round-trip: %+v, %v", second, err)
+	}
+	if _, err := LoadWith(path, Options{Key: bytes.Repeat([]byte{8}, 32)}); err == nil {
+		t.Fatal("opened with the wrong key")
+	}
+	if _, err := LoadWith(path, Options{Key: key[:16]}); err == nil {
+		t.Fatal("accepted a short key")
+	}
+	if raw2, _ := os.ReadFile(path); !bytes.Equal(raw, raw2) {
+		t.Fatal("a failed open changed the file")
+	}
+}
