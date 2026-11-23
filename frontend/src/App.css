@@ -1000,6 +1000,30 @@ input[type="checkbox"] {
   opacity: 0.82;
 }
 
+.action-bar .receive-nearby {
+  min-width: 0;
+  margin-left: auto;
+}
+
+.action-bar .receive-nearby + .action-main {
+  margin-left: 0;
+}
+
+.nearby-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.nearby-shortcut svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
 /* ---------- send content ---------- */
 
 .page--send,

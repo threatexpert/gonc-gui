@@ -72,7 +72,9 @@ test('startup fit runs once and status bar retains a single maximum-direction sp
   assert.match(source, /startupWindowFitted.current = true/);
   assert.match(source, /FitStartupWindow\(window.screen.availWidth, window.screen.availHeight\)/);
   assert.doesNotMatch(source, /WindowMaximise|WindowFullscreen|WindowToggleMaximise/);
-  assert.match(source, /<span className="status-segment">\{formatRate\(transferSpeed\)\}<\/span>/);
+  // One speed segment: Nearby's on the Nearby page, otherwise the mode's.
+  assert.match(source, /<span className="status-segment">\{formatRate\(barSpeed\)\}<\/span>/);
+  assert.match(source, /const barSpeed = nearbyActive \? nearbySpeed : transferSpeed;/);
   assert.match(source, /mode === 'vpnClient' \? Math.max\(freshSpeed\(vpnClientTraffic\?\.time, vpnClientTraffic\?\.inBps, nowTick\), freshSpeed\(vpnClientTraffic\?\.time, vpnClientTraffic\?\.outBps, nowTick\)\)/);
 });
 import {createVpnDisconnectCoordinator, vpnDisconnectView, type VpnDisconnectPhase} from '../src/vpnDisconnectState.js';

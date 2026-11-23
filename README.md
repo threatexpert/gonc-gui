@@ -23,6 +23,9 @@ between your own devices.
 - **Send files and folders directly** - Share multiple files or whole
   directories between desktop and Android.
 - **No accounts** - A shared passphrase is enough to connect both sides.
+- **Nearby devices** - On the same network, pick a device and send. Pair once by
+  comparing a six-digit number; later transfers only need the recipient to
+  accept.
 - **End-to-end encrypted** - Traffic is protected by TLS 1.3. The TLS
   certificates are automatically derived from the shared passphrase and mutual
   authentication is mandatory, so no CA certificate is required and
@@ -95,6 +98,51 @@ Gonc's expected IPv4 traversal support:
 | Type 2 | Type 2, 3, or 4 | Works with TCP and UDP |
 | Type 3 | Type 3 or 4 | Works with UDP |
 | Type 4 | Type 4 | Does not work directly; connect through a user-provided SOCKS5 proxy server that supports UDP ASSOCIATE |
+
+## Nearby (Same Network)
+
+The **Nearby** page lists Gonc devices on the same local network. No
+passphrase is needed.
+
+1. Open **Nearby** on both devices. (From **Send Files** or **Receive Files**,
+   use the **Send to nearby devices** link or the **Receive from Nearby**
+   button.) A device can be found only while its Nearby page is open; the
+   banner at the top shows the name others see it as.
+2. Add files, folders, text or clipboard content.
+3. On the other device's card, choose how to send:
+   - **Pair & send** shows the same six-digit number on both devices. Confirm
+     on both if they match. The devices stay paired, and later transfers to a
+     paired device skip this step.
+   - **Send** (unpaired devices only) sends without comparing numbers. Use it
+     for files that are fine for anyone on the network to see: nothing proves
+     who the other device is, and the devices do not become paired.
+4. The recipient sees the sender's name and the file list and clicks
+   **Accept**. A request from an unpaired device is marked **Not paired**.
+   Files are saved to the folder shown under **This device**; an existing file
+   is never overwritten (a copy is saved as `name (1).ext`). To receive only
+   from paired devices, turn off **Accept files from unpaired devices** under
+   **This device**.
+
+Nearby transfers go directly between the two devices over TLS 1.3 and never
+contact the MQTT or STUN servers, so they also work on a network with no
+internet access. Devices find each other with multicast on UDP port 19731 and
+accept connections on TCP port 19732. Gonc sends discovery traffic only while
+the Nearby page is open; on other pages it stays quiet on the network, and
+transfers already running carry on. A device whose firewall blocks incoming
+connections still works: every announcement asks nearby devices to reply, and
+when a direct connection is not answered, both devices meet the way
+passphrase LAN mode does, by multicasting to each other and dialing each other
+at the same time. The **Activity** log (bottom right) shows which path was
+used. Where the other device is not listed (some guest or office Wi-Fi
+blocks multicast, or the devices are on different networks), use
+**Send Files** and **Receive Files** with a passphrase instead.
+
+Advertisements carry a value that changes over time instead of a fixed device
+ID, so the device cannot be tracked across networks; the device name is still
+visible to others on the same network. Turn off **Visible to nearby devices**
+to stop advertising. Pairing keys are encrypted with Windows DPAPI; on macOS
+and Linux they are currently stored in a file readable only by the current
+user.
 
 ## Send Files
 

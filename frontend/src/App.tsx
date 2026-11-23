@@ -11,6 +11,7 @@ import {TransferInlineQr} from './TransferInlineQr';
 import {ConnectionDetails} from './ConnectionDetails';
 import {ProfileStrip} from './ProfileStrip';
 import {ProfileDeleteDialog} from './ProfileDeleteDialog';
+import {NearbyDialogs, NearbyPage, nearbyText, useNearbyModel} from './NearbyPage';
 import {ReceiveComparison} from './ReceiveComparison';
 import {acceptReceiveReport, isPeerWaitTimeout} from './receiveConnectionState';
 import {readLastMode, saveLastMode, startupFileMode} from './pagePreference';
@@ -59,6 +60,8 @@ import {
   IsAdministrator,
   ImportClipboard,
   LoadVPNProfiles,
+  NearbyLogs,
+  NearbySetDiscovering,
   OpenSaveDir,
   RemoteFiles,
   ReleaseGeneratedSharePaths,
@@ -263,6 +266,10 @@ const text = {
     startShare: '开始分享',
     startReceive: '连接对方',
     generateAndReceive: '生成口令准备接收',
+    receiveNearby: '从附近设备接收',
+    receiveNearbySub: '同一网络，无需口令',
+    sendNearbyHint: '对方在同一网络？',
+    sendNearbyLink: '发送到附近设备，无需口令',
     startVpnServer: '启动 VPN 服务端',
     startVpnClient: '连接 VPN',
     vpnConnectAdminPrompt: '将请求管理员权限',
@@ -588,6 +595,10 @@ const text = {
     startShare: 'Start Sharing',
     startReceive: 'Connect',
     generateAndReceive: 'Generate passphrase and connect',
+    receiveNearby: 'Receive from Nearby',
+    receiveNearbySub: 'Same network, no passphrase',
+    sendNearbyHint: 'Other device on the same network?',
+    sendNearbyLink: 'Send to nearby devices without a passphrase',
     startVpnServer: 'Start VPN Server',
     startVpnClient: 'Connect VPN',
     vpnConnectAdminPrompt: 'Administrator permission required',
@@ -1063,6 +1074,14 @@ function App() {
     try { return readLastMode(window.localStorage); } catch { return 'send'; }
   });
   const modeManuallySelected = useRef(false);
+  // Nearby shares the Send page's content list, so while it is shown the
+  // underlying mode stays 'send' and drops, pasting and startup files work there.
+  const [nearbyActive, setNearbyActive] = useState<boolean>(() => {
+    // Send Files is the first page on a first run.
+    try { return window.localStorage.getItem('gonc.nearbyActive') === '1'; } catch { return false; }
+  });
+  const nearbyModel = useNearbyModel(lang);
+  const nearbyT = nearbyText(lang);
   const [sendPassword, setSendPassword] = useState('');
   const [receivePassword, setReceivePassword] = useState('');
   const [vpnServerPassword, setVpnServerPassword] = useState('');
@@ -1217,6 +1236,12 @@ function App() {
   useEffect(() => {
     try { saveLastMode(window.localStorage, mode); } catch { /* Storage can be unavailable. */ }
   }, [mode]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('gonc.nearbyActive', nearbyActive ? '1' : '0'); } catch { /* Storage can be unavailable. */ }
+    // Nearby announces this device only while its page is open.
+    NearbySetDiscovering(nearbyActive).catch(() => undefined);
+  }, [nearbyActive]);
 
   useEffect(() => {
     if (startupWindowFitted.current) return;
@@ -1718,6 +1743,17 @@ function App() {
       OnFileDropOff();
     };
   }, [mode]);
+
+  // Nearby writes discovery and connection steps to the same activity log.
+  useEffect(() => {
+    NearbyLogs()
+      .then((lines) => {
+        if (lines && lines.length > 0) setLogs((current) => [...(lines as LogEvent[]), ...current].slice(-400));
+      })
+      .catch(() => undefined);
+    EventsOn('nearby:log', (event: LogEvent) => setLogs((current) => [...current.slice(-399), event]));
+    return () => EventsOff('nearby:log');
+  }, []);
 
   async function refreshStatus() {
     try {
@@ -3114,6 +3150,19 @@ function App() {
   const passphraseToggleLabel = passwordVisibility[mode] ? t.hidePassphrase : t.showPassphrase;
   const securityHint = mode === 'send' ? t.senderPasswordHint : (mode === 'receive' ? t.receiverPasswordHint : '');
   const currentStatus = mode === 'send' ? sendStatus : (mode === 'receive' ? receiveStatus : (mode === 'vpnServer' ? vpnServerStatus : vpnClientStatus));
+  // The Nearby page keeps the Send Files mode underneath, so the status bar
+  // shows Nearby's own transfers there instead of the passphrase share's.
+  const nearbyLive = nearbyModel.transfers.filter((item) => ['connecting', 'waiting', 'offered', 'transferring'].includes(item.status));
+  const nearbyMoving = nearbyLive.filter((item) => item.status === 'transferring');
+  const nearbyStatus: ConnectionStatus = nearbyMoving.length > 0
+    ? {label: nearbyLive.length > 1 ? `${nearbyT.status.transferring} · ${nearbyLive.length}` : nearbyT.status.transferring, tone: 'connected'}
+    : nearbyLive.length > 0
+      ? {label: nearbyT.status[nearbyLive[0].status] || nearbyLive[0].status, tone: 'connecting'}
+      : {label: t.idle, tone: 'idle'};
+  const nearbySpeed = nearbyMoving.reduce((sum, item) => sum + (item.bytesPerSecond || 0), 0);
+  const barStatus = nearbyActive ? nearbyStatus : currentStatus;
+  const barTone = nearbyActive ? nearbyStatus.tone : statusTone;
+  const barSpeed = nearbyActive ? nearbySpeed : transferSpeed;
   const pageTitle = mode === 'send' ? t.sendTitle : (mode === 'receive' ? t.receiveTitle : (mode === 'vpnServer' ? t.vpnServerTitle : t.vpnClient));
   const vpnClientSubtitle = vpnDisconnectDisplay === 'pending' ? t.vpnDisconnectingSubtitle
     : vpnDisconnectDisplay === 'stopped' ? t.vpnDisconnectedSubtitle
@@ -3167,12 +3216,13 @@ function App() {
 
   function navItem(target: Mode, icon: IconName, label: string) {
     const tone = navTone[target];
+    const active = !nearbyActive && mode === target;
     return (
       <button
         type="button"
-        className={`nav-item${mode === target ? ' active' : ''}`}
-        aria-current={mode === target ? 'page' : undefined}
-        onClick={() => { modeManuallySelected.current = true; setMode(target); }}
+        className={`nav-item${active ? ' active' : ''}`}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => { modeManuallySelected.current = true; setNearbyActive(false); setMode(target); }}
       >
         <Icon name={icon} />
         <span className="nav-label">{label}</span>
@@ -3211,6 +3261,12 @@ function App() {
       {toolButton('qr', t.qr, showPasswordQr, !vpnClientPassword)}
     </>
   );
+
+  function openNearby() {
+    modeManuallySelected.current = true;
+    setNearbyActive(true);
+    setMode('send');
+  }
 
   const passphraseField = (
     <div className="field">
@@ -3257,6 +3313,15 @@ function App() {
         </span>
       </p>
       {securityHint && securityInfoOpen && <p className="field-hint security-detail">{securityHint}</p>}
+      {mode === 'send' && !sendRunning && (
+        <p className="nearby-shortcut">
+          <Icon name="nearby" />
+          <span>
+            {t.sendNearbyHint}{' '}
+            <button type="button" className="link-button" onClick={openNearby}>{t.sendNearbyLink}</button>
+          </span>
+        </p>
+      )}
     </div>
   );
 
@@ -3300,6 +3365,12 @@ function App() {
             <Icon name="qr" />{t.vpnProfileQr}
           </button>
         )}
+        {mode === 'receive' && !receiveRunning && (
+          <button type="button" className="secondary big-action receive-nearby" disabled={startPending} onClick={openNearby}>
+            <span className="big-action-label"><Icon name="nearby" />{t.receiveNearby}</span>
+            <span className="button-subtext">{t.receiveNearbySub}</span>
+          </button>
+        )}
         <div className="action-main">
           {runButton()}
           {startHint && <span className="action-hint">{startHint}</span>}
@@ -3341,8 +3412,7 @@ function App() {
     );
   }
 
-  const sendPage = (
-    <>
+  const shareContentCard = (
       <section className="card share-content-card">
         <div className="card-head">
           <h2>{t.shareContent}</h2>
@@ -3398,8 +3468,22 @@ function App() {
           </div>
         </div>
       </section>
+  );
+  const sendPage = (
+    <>
+      {shareContentCard}
       {setupCard()}
     </>
+  );
+  const nearbyPage = (
+    <NearbyPage
+      model={nearbyModel}
+      onAddContent={openAddPicker}
+      onOpenMode={(target) => { modeManuallySelected.current = true; setNearbyActive(false); setMode(target); }}
+      shareCard={shareContentCard}
+      sharePaths={sharePaths}
+      onReveal={revealSharePath}
+    />
   );
 
   const saveDirectoryField = (
@@ -3918,6 +4002,15 @@ function App() {
         </div>
         <nav className="nav" aria-label={t.brand}>
           <span className="nav-group">{t.navTransfer}</span>
+          <button
+            type="button"
+            className={`nav-item${nearbyActive ? ' active' : ''}`}
+            aria-current={nearbyActive ? 'page' : undefined}
+            onClick={openNearby}
+          >
+            <Icon name="nearby" />
+            <span className="nav-label">{nearbyT.title}</span>
+          </button>
           {navItem('send', 'send', t.send)}
           {navItem('receive', 'receive', t.receive)}
           <span className="nav-group">{t.navTunnel}</span>
@@ -3941,17 +4034,19 @@ function App() {
       </aside>
 
       <main className="main" ref={mainRef}>
-        <div className={`page${mode === 'send' ? ' page--send' : mode === 'receive' && receiveSessionCompact ? ' page--receive-connected' : ''}`}>
+        <div className={`page${nearbyActive ? ' page--nearby' : mode === 'send' ? ' page--send' : mode === 'receive' && receiveSessionCompact ? ' page--receive-connected' : ''}`}>
           <header className="page-head">
-            <h1>{pageTitle}</h1>
-            <p>{pageSubtitle}</p>
+            <h1>{nearbyActive ? nearbyT.title : pageTitle}</h1>
+            <p>{nearbyActive ? nearbyT.subtitle : pageSubtitle}</p>
           </header>
           {error && <div className="alert" role="alert">{error}</div>}
           <div className="page-stack">
-            {mode === 'send' ? sendPage : mode === 'receive' ? receivePage : mode === 'vpnClient' ? vpnClientPage : vpnServerPage}
+            {nearbyActive ? nearbyPage : mode === 'send' ? sendPage : mode === 'receive' ? receivePage : mode === 'vpnClient' ? vpnClientPage : vpnServerPage}
           </div>
         </div>
       </main>
+
+      <NearbyDialogs model={nearbyModel} onAccepted={openNearby} />
 
       {logOpen && (
         <section
@@ -3971,7 +4066,7 @@ function App() {
               <button type="button" className="icon-button" onClick={() => setLogOpen(false)} aria-label={t.close} title={t.close}><Icon name="close" /></button>
             </div>
           </div>
-          <div className="status-grid">
+          {!nearbyActive && <div className="status-grid">
             <Metric label={t.p2pStatus} value={mode === 'receive' && isPeerWaitTimeout(activeP2PReport?.status || '') ? t.peerWaitTimeout : activeP2PReport?.status || (currentRunning ? 'starting' : 'idle')} />
             <Metric label={t.peer} value={activeP2PReport?.peer || '-'} />
             <Metric label={t.network} value={activeP2PReport?.network || '-'} />
@@ -3980,7 +4075,7 @@ function App() {
             {mode === 'vpnClient' && <Metric label={t.linkConfig} value={vpnClientSocks5Endpoint || '-'} />}
             {mode === 'vpnClient' && <Metric label={t.peerIpv6} value={peerIpv6Label(vpnClientPeerIPv6, t)} />}
             {mode === 'vpnClient' && <Metric label={t.vpnLatestConnection} value={formatVPNConnectedAt(vpnDetails?.lastConnectedAt, lang)} />}
-          </div>
+          </div>}
           <div className="logs" ref={logsRef} tabIndex={-1}>
             {logs.length === 0 ? (
               <p className="muted">{t.logHint}</p>
@@ -3996,10 +4091,10 @@ function App() {
 
       <footer className="statusbar">
         <span className="status-segment">
-          <span className={`dot ${statusTone}`} aria-hidden="true" />
-          {currentStatus.label}
+          <span className={`dot ${barTone}`} aria-hidden="true" />
+          {barStatus.label}
         </span>
-        {(mode === 'send' || mode === 'vpnServer') && (
+        {!nearbyActive && (mode === 'send' || mode === 'vpnServer') && (
           <>
             <span className="status-divider" />
             <ConnectionDetails
@@ -4025,7 +4120,7 @@ function App() {
           </>
         )}
         <span className="status-divider" />
-        <span className="status-segment">{formatRate(transferSpeed)}</span>
+        <span className="status-segment">{formatRate(barSpeed)}</span>
         <span className="status-spacer" />
         <button type="button" className={`statusbar-button${logOpen ? ' active' : ''}`} aria-expanded={logOpen} onClick={() => { setLogFocusTarget(null); setLogOpen((value) => !value); }}>
           <Icon name="terminal" />
