@@ -218,19 +218,290 @@ export namespace main {
 
 }
 
-export namespace receivecompare {
+export namespace nearby {
+	
+	export class Device {
+	    id: string;
+	    nickname: string;
+	    deviceType: string;
+	    addresses: string[];
+	    peerId?: string;
+	    paired: boolean;
+	    verified: boolean;
+	    quickReceive: boolean;
+	    // Go type: time
+	    lastSeen: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Device(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.nickname = source["nickname"];
+	        this.deviceType = source["deviceType"];
+	        this.addresses = source["addresses"];
+	        this.peerId = source["peerId"];
+	        this.paired = source["paired"];
+	        this.verified = source["verified"];
+	        this.quickReceive = source["quickReceive"];
+	        this.lastSeen = this.convertValues(source["lastSeen"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
+}
+
+export namespace nearbyapp {
+	
+	export class FileSummary {
+	    name: string;
+	    isDir: boolean;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.isDir = source["isDir"];
+	        this.size = source["size"];
+	    }
+	}
+	export class LogLine {
+	    type: string;
+	    mode: string;
+	    level: string;
+	    message: string;
+	    time: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LogLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.mode = source["mode"];
+	        this.level = source["level"];
+	        this.message = source["message"];
+	        this.time = source["time"];
+	    }
+	}
+	export class PairingInfo {
+	    id: string;
+	    incoming: boolean;
+	    peerName: string;
+	    peerType: string;
+	    code: string;
+	    deviceId?: string;
+	    status: string;
+	    error?: string;
+	    peerId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PairingInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.incoming = source["incoming"];
+	        this.peerName = source["peerName"];
+	        this.peerType = source["peerType"];
+	        this.code = source["code"];
+	        this.deviceId = source["deviceId"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.peerId = source["peerId"];
+	    }
+	}
+	export class PeerInfo {
+	    peerId: string;
+	    nickname: string;
+	    deviceType: string;
+	    // Go type: time
+	    pairedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new PeerInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerId = source["peerId"];
+	        this.nickname = source["nickname"];
+	        this.deviceType = source["deviceType"];
+	        this.pairedAt = this.convertValues(source["pairedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class State {
+	    running: boolean;
+	    error?: string;
+	    discoveryError?: string;
+	    nickname: string;
+	    visible: boolean;
+	    quickReceive: boolean;
+	    saveDir: string;
+	    storageProtected: boolean;
+	    port: number;
+	    addresses: string[];
+	    devices: nearby.Device[];
+	    peers: PeerInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new State(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.error = source["error"];
+	        this.discoveryError = source["discoveryError"];
+	        this.nickname = source["nickname"];
+	        this.visible = source["visible"];
+	        this.quickReceive = source["quickReceive"];
+	        this.saveDir = source["saveDir"];
+	        this.storageProtected = source["storageProtected"];
+	        this.port = source["port"];
+	        this.addresses = source["addresses"];
+	        this.devices = this.convertValues(source["devices"], nearby.Device);
+	        this.peers = this.convertValues(source["peers"], PeerInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TransferInfo {
+	    id: string;
+	    direction: string;
+	    deviceId?: string;
+	    peerName: string;
+	    status: string;
+	    message?: string;
+	    items?: FileSummary[];
+	    fileCount: number;
+	    totalBytes: number;
+	    doneBytes: number;
+	    doneFiles: number;
+	    bytesPerSecond: number;
+	    saveDir?: string;
+	    savedPaths?: string[];
+	    quick?: boolean;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new TransferInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.direction = source["direction"];
+	        this.deviceId = source["deviceId"];
+	        this.peerName = source["peerName"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.items = this.convertValues(source["items"], FileSummary);
+	        this.fileCount = source["fileCount"];
+	        this.totalBytes = source["totalBytes"];
+	        this.doneBytes = source["doneBytes"];
+	        this.doneFiles = source["doneFiles"];
+	        this.bytesPerSecond = source["bytesPerSecond"];
+	        this.saveDir = source["saveDir"];
+	        this.savedPaths = source["savedPaths"];
+	        this.quick = source["quick"];
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace receivecompare {
+	
 	export class ActiveReceive {
 	    id: number;
 	    path: string;
 	    checking: boolean;
 	    doneBytes: number;
 	    totalBytes: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ActiveReceive(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -255,11 +526,11 @@ export namespace receivecompare {
 	    selected: boolean;
 	    outcome: string;
 	    error: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Item(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.linkTarget = source["linkTarget"];
@@ -308,11 +579,11 @@ export namespace receivecompare {
 	    deleteMode: string;
 	    page: number;
 	    items: Item[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.batchTotal = source["batchTotal"];
@@ -345,7 +616,7 @@ export namespace receivecompare {
 	        this.page = source["page"];
 	        this.items = this.convertValues(source["items"], Item);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

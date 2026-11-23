@@ -1,0 +1,542 @@
+/* Nearby page and dialogs. Colors come from the theme tokens in App.css. */
+
+.nearby-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--success);
+  font-weight: 600;
+}
+
+.nearby-warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.nearby-muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.nearby-searching {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px 8px;
+  text-align: center;
+}
+
+.nearby-searching p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.nearby-pulse {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  animation: nearby-pulse 1.8s ease-in-out infinite;
+}
+
+.nearby-pulse .icon {
+  width: 24px;
+  height: 24px;
+}
+
+@keyframes nearby-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nearby-pulse { animation: none; }
+}
+
+.nearby-device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.nearby-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.nearby-device.paired {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.nearby-device-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-muted);
+}
+
+.nearby-device.paired .nearby-device-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.nearby-device-text {
+  display: grid;
+  flex: 1 1 120px;
+  min-width: 0;
+  gap: 2px;
+}
+
+.nearby-device-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nearby-device-text span {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.nearby-device-text span.ok {
+  color: var(--success);
+}
+
+.nearby-device-text span.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nearby-device.sending {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.nearby-device-text .nearby-progress {
+  margin-top: 4px;
+}
+
+.nearby-device-actions .spinner-dot {
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
+.nearby-device-actions {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.nearby-forget {
+  font-size: 12px;
+}
+
+.nearby-forget.confirming {
+  color: var(--danger);
+}
+
+.nearby-fallback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 12px;
+}
+
+.nearby-fallback p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.nearby-fallback-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.nearby-transfer-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nearby-transfer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.nearby-transfer-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.nearby-transfer.ok .nearby-transfer-icon {
+  background: var(--accent-soft);
+  color: var(--success);
+}
+
+.nearby-transfer.error .nearby-transfer-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.nearby-transfer.muted .nearby-transfer-icon {
+  background: var(--bg);
+  color: var(--text-faint);
+}
+
+.nearby-transfer-main {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+
+.nearby-transfer-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nearby-transfer-status {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.nearby-transfer.error .nearby-transfer-status {
+  color: var(--danger);
+}
+
+.nearby-transfer-detail {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nearby-progress {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.nearby-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.nearby-transfer-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.nearby-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.nearby-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.nearby-toggle input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.nearby-toggle span {
+  display: grid;
+  gap: 2px;
+}
+
+.nearby-toggle small {
+  color: var(--text-muted);
+}
+
+.nearby-save-to code {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+  user-select: all;
+}
+
+.nearby-backdrop {
+  z-index: 40;
+}
+
+.nearby-dialog {
+  box-sizing: border-box;
+  width: min(440px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nearby-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.nearby-dialog p {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.nearby-code {
+  margin: 6px 0 16px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+.nearby-offer-summary {
+  font-weight: 600;
+}
+
+.nearby-offer-items {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  list-style: none;
+}
+
+.nearby-offer-items li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.nearby-offer-items li span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nearby-offer-items li em {
+  flex: none;
+  color: var(--text-faint);
+  font-style: normal;
+}
+
+.nearby-offer-items li.more {
+  color: var(--text-muted);
+}
+
+.nearby-save-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.nearby-save-to code {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nearby-dialog p.nearby-hint {
+  margin: 0 0 14px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.nearby-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nearby-unverified {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nearby-unverified .icon {
+  flex: none;
+  margin-top: 1px;
+}
+
+.nearby-unpaired-tag {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.nearby-ready {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--accent-soft);
+}
+
+.nearby-ready.hidden {
+  background: var(--surface);
+}
+
+.nearby-ready-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.nearby-ready.hidden .nearby-ready-icon {
+  color: var(--text-muted);
+}
+
+.nearby-ready-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nearby-ready-text strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nearby-ready-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Keep a little room when an accepted transfer is scrolled into view. */
+.nearby-transfers-card,
+.nearby-transfer {
+  scroll-margin: 16px;
+}
+
+/* Shown on Nearby instead of the content card until something is added. It
+   accepts dropped files like the card's drop zone. */
+.nearby-send-hint {
+  --wails-drop-target: drop;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  border-style: dashed;
+  padding: 12px 16px;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.nearby-send-hint.wails-drop-target-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.nearby-send-hint-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.nearby-send-hint-text {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nearby-send-hint-text strong {
+  font-size: 13.5px;
+}
+
+.nearby-send-hint-text small {
+  color: var(--text-muted);
+  font-size: 12px;
+}

@@ -19,6 +19,7 @@ import (
 	"gonc-gui/internal/appupdate"
 	"gonc-gui/internal/goncrunner"
 	"gonc-gui/internal/httpdownload"
+	"gonc-gui/internal/nearbyapp"
 	"gonc-gui/internal/receivecompare"
 	"gonc-gui/internal/receivedfile"
 	"gonc-gui/internal/sharecontent"
@@ -53,6 +54,7 @@ type App struct {
 	importNativeClipboard func() (sharecontent.ClipboardResult, error)
 	clipboardGetText      func(context.Context) (string, error)
 	createShareText       func(string, string) (string, error)
+	nearby                *nearbyapp.Manager
 }
 
 type TransferRequest struct {
@@ -145,9 +147,13 @@ func NewApp(startupSharePaths []string) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.startNearby()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.nearby != nil {
+		a.nearby.Close()
+	}
 	if err := a.cleanup(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "Application cleanup failed:", err)
 	}

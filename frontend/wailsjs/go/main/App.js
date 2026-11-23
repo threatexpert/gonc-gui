@@ -50,6 +50,78 @@ export function LoadVPNProfiles() {
   return window['go']['main']['App']['LoadVPNProfiles']();
 }
 
+export function NearbyAccept(arg1) {
+  return window['go']['main']['App']['NearbyAccept'](arg1);
+}
+
+export function NearbyCancel(arg1) {
+  return window['go']['main']['App']['NearbyCancel'](arg1);
+}
+
+export function NearbyChooseSaveDir(arg1) {
+  return window['go']['main']['App']['NearbyChooseSaveDir'](arg1);
+}
+
+export function NearbyClearFinished() {
+  return window['go']['main']['App']['NearbyClearFinished']();
+}
+
+export function NearbyConfirmPairing(arg1, arg2) {
+  return window['go']['main']['App']['NearbyConfirmPairing'](arg1, arg2);
+}
+
+export function NearbyDecline(arg1) {
+  return window['go']['main']['App']['NearbyDecline'](arg1);
+}
+
+export function NearbyForget(arg1) {
+  return window['go']['main']['App']['NearbyForget'](arg1);
+}
+
+export function NearbyLogs() {
+  return window['go']['main']['App']['NearbyLogs']();
+}
+
+export function NearbyPair(arg1) {
+  return window['go']['main']['App']['NearbyPair'](arg1);
+}
+
+export function NearbyQuickSend(arg1, arg2) {
+  return window['go']['main']['App']['NearbyQuickSend'](arg1, arg2);
+}
+
+export function NearbyRefresh() {
+  return window['go']['main']['App']['NearbyRefresh']();
+}
+
+export function NearbySend(arg1, arg2) {
+  return window['go']['main']['App']['NearbySend'](arg1, arg2);
+}
+
+export function NearbySetDiscovering(arg1) {
+  return window['go']['main']['App']['NearbySetDiscovering'](arg1);
+}
+
+export function NearbySetNickname(arg1) {
+  return window['go']['main']['App']['NearbySetNickname'](arg1);
+}
+
+export function NearbySetQuickReceive(arg1) {
+  return window['go']['main']['App']['NearbySetQuickReceive'](arg1);
+}
+
+export function NearbySetVisible(arg1) {
+  return window['go']['main']['App']['NearbySetVisible'](arg1);
+}
+
+export function NearbyState() {
+  return window['go']['main']['App']['NearbyState']();
+}
+
+export function NearbyTransfers() {
+  return window['go']['main']['App']['NearbyTransfers']();
+}
+
 export function OpenSaveDir(arg1) {
   return window['go']['main']['App']['OpenSaveDir'](arg1);
 }

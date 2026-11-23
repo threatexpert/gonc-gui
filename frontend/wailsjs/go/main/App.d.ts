@@ -5,6 +5,7 @@ import {httpdownload} from '../models';
 import {main} from '../models';
 import {sharecontent} from '../models';
 import {vpnprofile} from '../models';
+import {nearbyapp} from '../models';
 import {receivecompare} from '../models';
 
 export function CancelReceivedComparison(arg1:string,arg2:boolean):Promise<void>;
@@ -30,6 +31,42 @@ export function ImportClipboard():Promise<sharecontent.ClipboardResult>;
 export function IsAdministrator():Promise<boolean>;
 
 export function LoadVPNProfiles():Promise<vpnprofile.Store>;
+
+export function NearbyAccept(arg1:string):Promise<void>;
+
+export function NearbyCancel(arg1:string):Promise<void>;
+
+export function NearbyChooseSaveDir(arg1:string):Promise<string>;
+
+export function NearbyClearFinished():Promise<void>;
+
+export function NearbyConfirmPairing(arg1:string,arg2:boolean):Promise<void>;
+
+export function NearbyDecline(arg1:string):Promise<void>;
+
+export function NearbyForget(arg1:string):Promise<void>;
+
+export function NearbyLogs():Promise<Array<nearbyapp.LogLine>>;
+
+export function NearbyPair(arg1:string):Promise<nearbyapp.PairingInfo>;
+
+export function NearbyQuickSend(arg1:string,arg2:Array<string>):Promise<string>;
+
+export function NearbyRefresh():Promise<void>;
+
+export function NearbySend(arg1:string,arg2:Array<string>):Promise<string>;
+
+export function NearbySetDiscovering(arg1:boolean):Promise<void>;
+
+export function NearbySetNickname(arg1:string):Promise<void>;
+
+export function NearbySetQuickReceive(arg1:boolean):Promise<void>;
+
+export function NearbySetVisible(arg1:boolean):Promise<void>;
+
+export function NearbyState():Promise<nearbyapp.State>;
+
+export function NearbyTransfers():Promise<Array<nearbyapp.TransferInfo>>;
 
 export function OpenSaveDir(arg1:string):Promise<string>;
 
