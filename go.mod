@@ -7,10 +7,10 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.14-0.20261123083546-676fce732e53
+	github.com/threatexpert/gonc/v2 v2.6.14-0.20261123135011-939c83b2044e
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zeebo/blake3 v0.2.4
-	golang.org/x/image v0.41.0
+	golang.org/x/image v0.42.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
@@ -74,9 +74,12 @@ require (
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49 // indirect
+	golang.org/x/mobile v0.0.0-20260611195102-4dd8f1dbf5d2 // indirect
+	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gvisor.dev/gvisor v0.0.0-20261010064756-cd110d9dec04 // indirect
 	rsc.io/qr v0.2.0 // indirect
@@ -84,3 +87,5 @@ require (
 
 // Keep upstream import paths, but pin our fork with deferred TCP and IPv6 rejection.
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261120121624-b0ed9683704c
+
+tool golang.org/x/mobile/cmd/gobind

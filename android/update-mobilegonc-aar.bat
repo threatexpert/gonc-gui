@@ -3,7 +3,8 @@ setlocal
 cd /d "%~dp0"
 
 set "ANDROID_DIR=%~dp0"
-rem Use the gonc checkout's pinned fork, never an inherited desktop workspace.
+rem Build from gonc-gui: its go.mod decides which gonc version goes into the
+rem AAR, the same version the desktop app uses. Never use a Go workspace.
 set "GOWORK=off"
 
 if "%ANDROID_HOME%"=="" set "ANDROID_HOME=D:\Android\sdk"
@@ -16,14 +17,14 @@ echo ANDROID_HOME=%ANDROID_HOME%
 echo ANDROID_SDK_ROOT=%ANDROID_SDK_ROOT%
 echo.
 
-cd /d "%ANDROID_DIR%..\..\gonetcat"
+cd /d "%ANDROID_DIR%.."
 if errorlevel 1 (
-    echo Failed to enter ..\..\gonetcat
+    echo Failed to enter the gonc-gui directory
     timeout 5 >nul 2>nul || ping -n 6 127.0.0.1 >nul
     exit /b 1
 )
 
-gomobile bind -target=android/arm64 -androidapi=26 -trimpath -ldflags="-s -w -buildid= -checklinkname=0" -o "%ANDROID_DIR%app\libs\mobilegonc.aar" github.com/threatexpert/gonc/v2/mobilegonc
+gomobile bind -target=android/arm64 -androidapi=26 -trimpath -ldflags="-s -w -buildid= -checklinkname=0" -o "%ANDROID_DIR%app\libs\mobilegonc.aar" github.com/threatexpert/gonc/v2/mobilegonc gonc-gui/android/nearbygo
 if errorlevel 1 (
     echo.
     echo gomobile bind failed.
