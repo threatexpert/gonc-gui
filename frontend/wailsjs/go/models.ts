@@ -432,6 +432,7 @@ export namespace nearbyapp {
 	    peerName: string;
 	    status: string;
 	    message?: string;
+	    errorCode?: string;
 	    items?: FileSummary[];
 	    fileCount: number;
 	    totalBytes: number;
@@ -441,6 +442,7 @@ export namespace nearbyapp {
 	    saveDir?: string;
 	    savedPaths?: string[];
 	    quick?: boolean;
+	    endpoint?: string;
 	    // Go type: time
 	    updatedAt: any;
 	
@@ -456,6 +458,7 @@ export namespace nearbyapp {
 	        this.peerName = source["peerName"];
 	        this.status = source["status"];
 	        this.message = source["message"];
+	        this.errorCode = source["errorCode"];
 	        this.items = this.convertValues(source["items"], FileSummary);
 	        this.fileCount = source["fileCount"];
 	        this.totalBytes = source["totalBytes"];
@@ -465,6 +468,7 @@ export namespace nearbyapp {
 	        this.saveDir = source["saveDir"];
 	        this.savedPaths = source["savedPaths"];
 	        this.quick = source["quick"];
+	        this.endpoint = source["endpoint"];
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }
 	

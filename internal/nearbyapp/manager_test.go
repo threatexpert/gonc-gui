@@ -1,6 +1,9 @@
 package nearbyapp
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -8,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/threatexpert/gonc/v2/nearby"
 )
 
 type recorder struct {
@@ -357,5 +362,20 @@ func TestCancelShowsImmediately(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 			}
 		})
+	}
+}
+
+func TestErrorCodesNameFailuresAppsWordThemselves(t *testing.T) {
+	for err, want := range map[error]string{
+		nearby.ErrNotPaired: "not-paired",
+		fmt.Errorf("LAN rendezvous: %w", nearby.ErrNotPaired): "not-paired",
+		nearby.ErrQuickRefused:                                "quick-refused",
+		nearby.ErrBusy:                                        "busy",
+		context.DeadlineExceeded:                              "timeout",
+		errors.New("disk full"):                               "",
+	} {
+		if got := errorCode(err); got != want {
+			t.Errorf("errorCode(%v) = %q, want %q", err, got, want)
+		}
 	}
 }
