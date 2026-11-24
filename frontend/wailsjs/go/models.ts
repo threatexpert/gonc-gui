@@ -231,6 +231,7 @@ export namespace nearby {
 	    quickReceive: boolean;
 	    // Go type: time
 	    lastSeen: any;
+	    status: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Device(source);
@@ -247,6 +248,7 @@ export namespace nearby {
 	        this.verified = source["verified"];
 	        this.quickReceive = source["quickReceive"];
 	        this.lastSeen = this.convertValues(source["lastSeen"], null);
+	        this.status = source["status"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -342,6 +344,8 @@ export namespace nearbyapp {
 	    deviceType: string;
 	    // Go type: time
 	    pairedAt: any;
+	    // Go type: time
+	    lastSeen: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new PeerInfo(source);
@@ -353,6 +357,7 @@ export namespace nearbyapp {
 	        this.nickname = source["nickname"];
 	        this.deviceType = source["deviceType"];
 	        this.pairedAt = this.convertValues(source["pairedAt"], null);
+	        this.lastSeen = this.convertValues(source["lastSeen"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -375,6 +380,9 @@ export namespace nearbyapp {
 	}
 	export class State {
 	    running: boolean;
+	    discovering: boolean;
+	    deviceFadeMs: number;
+	    deviceExpiryMs: number;
 	    error?: string;
 	    discoveryError?: string;
 	    nickname: string;
@@ -394,6 +402,9 @@ export namespace nearbyapp {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.running = source["running"];
+	        this.discovering = source["discovering"];
+	        this.deviceFadeMs = source["deviceFadeMs"];
+	        this.deviceExpiryMs = source["deviceExpiryMs"];
 	        this.error = source["error"];
 	        this.discoveryError = source["discoveryError"];
 	        this.nickname = source["nickname"];
