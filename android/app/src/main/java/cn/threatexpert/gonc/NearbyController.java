@@ -6,6 +6,7 @@ import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -74,6 +75,20 @@ final class NearbyController {
     /** Send progress shown in the Activity panel while Nearby mode is on. */
     private final TransferMetrics sendMetrics = new TransferMetrics();
     private final Set<String> announcedOffers = new HashSet<>();
+    /**
+     * Every device seen since Nearby started, so a row with a send in
+     * progress stays on screen after its device leaves the list.
+     */
+    private final Map<String, NearbyModel.Device> lastKnown = new HashMap<>();
+    /** Rows of fading devices; their look and "last seen" text update every second. */
+    private final Map<String, View> fadingRows = new HashMap<>();
+    private final Map<String, TextView> fadingStatus = new HashMap<>();
+    private final Runnable vitalityTick = this::tickVitality;
+    private boolean vitalityScheduled;
+    /** Whether "Paired, not nearby" shows every pairing or only the first few. */
+    private boolean showAllAway;
+    /** Paired devices that are not nearby, listed before "Show more". */
+    private static final int AWAY_SHOWN = 3;
 
     private boolean foreground;
     private String screen = "";
@@ -138,6 +153,11 @@ final class NearbyController {
     void setForeground(boolean on) {
         foreground = on;
         updateDiscovery();
+        if (on && discovering) {
+            // Announce at once and join the network again if it changed
+            // while the app was in the background.
+            call(NearbyNode::refresh);
+        }
     }
 
     /** Called whenever the visible module changes. */
@@ -236,7 +256,7 @@ final class NearbyController {
                     return;
                 }
                 node = result;
-                state = NearbyModel.State.parse(result.stateJSON());
+                setState(NearbyModel.State.parse(result.stateJSON()));
                 discovering = false;
                 updateDiscovery();
                 host.requestRender();
@@ -332,7 +352,7 @@ final class NearbyController {
         }
         switch (kind) {
             case "state":
-                state = NearbyModel.State.parse(payload);
+                setState(NearbyModel.State.parse(payload));
                 if (nearbyOnScreen()) {
                     host.requestRender();
                 }
@@ -389,6 +409,111 @@ final class NearbyController {
         if (!updateSendRowInPlace(t)) {
             host.requestRender();
         }
+    }
+
+    private void setState(NearbyModel.State next) {
+        state = next;
+        for (NearbyModel.Device d : next.devices) {
+            lastKnown.put(d.id, d);
+        }
+    }
+
+    private NearbyModel.Device listedDevice(String id) {
+        for (NearbyModel.Device d : state.devices) {
+            if (d.id.equals(id)) return d;
+        }
+        return null;
+    }
+
+    private void scheduleVitalityTick() {
+        if (vitalityScheduled || fadingRows.isEmpty()) {
+            return;
+        }
+        vitalityScheduled = true;
+        host.mainHandler().postDelayed(vitalityTick, 1000);
+    }
+
+    /** Fades rows of silent devices and counts their "last seen" seconds in place. */
+    private void tickVitality() {
+        vitalityScheduled = false;
+        if (!nearbyOnScreen()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Context c = host.context();
+        for (Map.Entry<String, View> e : fadingRows.entrySet()) {
+            NearbyModel.Device d = listedDevice(e.getKey());
+            if (d == null || !d.fading()) continue;
+            e.getValue().animate().alpha(NearbyModel.vitality(d, now, state.deviceFadeMs, state.deviceExpiryMs))
+                    .setDuration(900).start();
+            TextView status = fadingStatus.get(e.getKey());
+            if (status != null) {
+                status.setText(c.getString(R.string.nearby_last_seen, NearbyModel.secondsSilent(d, now)));
+            }
+        }
+        scheduleVitalityTick();
+    }
+
+    /** A small dot before a device name: online, fading or away. */
+    private View presenceDot(String presence) {
+        UiKit u = host.ui();
+        View dot = new View(host.context());
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        if ("online".equals(presence)) {
+            g.setColor(Color.rgb(22, 163, 74));
+        } else if ("fading".equals(presence)) {
+            g.setColor(Color.TRANSPARENT);
+            g.setStroke(Math.max(2, u.dp(1) * 3 / 2), Color.rgb(148, 163, 184));
+        } else {
+            g.setColor(Color.rgb(203, 213, 225));
+        }
+        dot.setBackground(g);
+        return dot;
+    }
+
+    private static String presenceOf(NearbyModel.Device device) {
+        if (device == null) return "away";
+        return device.fading() ? "fading" : "online";
+    }
+
+    /** A device name with its presence dot in front. */
+    private LinearLayout nameLine(String name, String presence, int size, int color, int style) {
+        UiKit u = host.ui();
+        LinearLayout line = u.row();
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(u.dp(8), u.dp(8));
+        dotParams.setMarginEnd(u.dp(6));
+        line.addView(presenceDot(presence), dotParams);
+        TextView text = u.text(name, size, color, style);
+        text.setSingleLine(true);
+        text.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        line.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return line;
+    }
+
+    /** The last row of the list: Nearby keeps looking after devices appear. */
+    private View searchingMoreRow() {
+        UiKit u = host.ui();
+        Context c = host.context();
+        LinearLayout row = u.row();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(u.dp(12), u.dp(9), u.dp(10), u.dp(9));
+        GradientDrawable border = new GradientDrawable();
+        border.setCornerRadius(u.dp(7));
+        border.setColor(Color.TRANSPARENT);
+        border.setStroke(Math.max(1, u.dp(1)), Color.rgb(203, 213, 225), u.dp(4), u.dp(3));
+        row.setBackground(border);
+        LinearLayout.LayoutParams pulseParams = new LinearLayout.LayoutParams(u.dp(22), u.dp(22));
+        pulseParams.setMarginEnd(u.dp(10));
+        row.addView(new PulseView(c, Color.rgb(40, 112, 216)), pulseParams);
+        LinearLayout labels = u.column();
+        labels.addView(u.text(c.getString(R.string.nearby_searching_more), 13, u.muted(), Typeface.BOLD));
+        TextView hint = u.text(c.getString(R.string.nearby_searching_more_hint), 12, u.muted(), Typeface.NORMAL);
+        hint.setSingleLine(false);
+        labels.addView(hint);
+        row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return row;
     }
 
     private boolean nearbyOnScreen() {
@@ -705,7 +830,22 @@ final class NearbyController {
         }
         sendStatusViews.clear();
         sendProgressViews.clear();
-        if (state.devices.isEmpty()) {
+        fadingRows.clear();
+        fadingStatus.clear();
+        // Rows with a send or a connection attempt stay after their device
+        // leaves the list.
+        Set<String> listed = new HashSet<>();
+        for (NearbyModel.Device d : state.devices) listed.add(d.id);
+        Set<String> pinned = new HashSet<>(busyDevices);
+        for (NearbyModel.Transfer t : transfers.values()) {
+            if (t.isSend() && !t.finished() && !t.deviceId.isEmpty()) pinned.add(t.deviceId);
+        }
+        List<NearbyModel.Device> away = new ArrayList<>();
+        for (String id : pinned) {
+            NearbyModel.Device d = lastKnown.get(id);
+            if (!listed.contains(id) && d != null) away.add(d);
+        }
+        if (state.devices.isEmpty() && away.isEmpty()) {
             LinearLayout empty = u.column();
             empty.setGravity(Gravity.CENTER_HORIZONTAL);
             empty.setPadding(u.dp(12), u.dp(18), u.dp(12), u.dp(14));
@@ -721,14 +861,67 @@ final class NearbyController {
             box.addView(empty, u.blockParams(u.dp(6)));
         } else {
             for (NearbyModel.Device device : state.devices) {
-                box.addView(deviceRow(device, items), u.blockParams(u.dp(8)));
+                box.addView(deviceRow(device, items, false), u.blockParams(u.dp(8)));
+            }
+            for (NearbyModel.Device device : away) {
+                box.addView(deviceRow(device, items, true), u.blockParams(u.dp(8)));
+            }
+            if (state.discovering) {
+                box.addView(searchingMoreRow(), u.blockParams(u.dp(8)));
+            }
+        }
+        List<NearbyModel.Peer> awayPeers = new ArrayList<>();
+        for (NearbyModel.Peer peer : NearbyModel.byLastSeen(state.peers)) {
+            String id = "p-" + peer.peerId;
+            if (!listed.contains(id) && !pinned.contains(id) && peerDevice(peer.peerId) == null) awayPeers.add(peer);
+        }
+        if (!awayPeers.isEmpty()) {
+            box.addView(u.text(c.getString(R.string.nearby_paired_away), 12, u.muted(), Typeface.BOLD), u.blockParams(u.dp(14)));
+            int shown = showAllAway ? awayPeers.size() : Math.min(AWAY_SHOWN, awayPeers.size());
+            for (NearbyModel.Peer peer : awayPeers.subList(0, shown)) {
+                LinearLayout row = nameLine(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, "away", 13, u.muted(), Typeface.NORMAL);
+                row.setPadding(u.dp(4), u.dp(6), u.dp(4), u.dp(2));
+                row.addView(u.text(lastSeenText(peer), 12, Color.rgb(148, 163, 184), Typeface.NORMAL));
+                box.addView(row);
+            }
+            if (awayPeers.size() > AWAY_SHOWN) {
+                TextView more = u.text(showAllAway ? c.getString(R.string.nearby_show_less)
+                        : c.getString(R.string.nearby_show_more, awayPeers.size() - AWAY_SHOWN), 13,
+                        Color.rgb(40, 112, 216), Typeface.BOLD);
+                more.setPadding(u.dp(4), u.dp(8), u.dp(4), u.dp(4));
+                more.setOnClickListener(v -> {
+                    showAllAway = !showAllAway;
+                    host.requestImmediateRender();
+                });
+                box.addView(more);
             }
         }
         box.addView(fallbackRow(), u.blockParams(u.dp(12)));
+        scheduleVitalityTick();
         return box;
     }
 
-    private View deviceRow(NearbyModel.Device device, List<ShareItem> items) {
+    /** "Last seen 3 days ago" for a paired device that is not nearby. */
+    private String lastSeenText(NearbyModel.Peer peer) {
+        Context c = host.context();
+        if (peer.lastSeenMs <= 0) {
+            return c.getString(R.string.nearby_never_seen);
+        }
+        long now = System.currentTimeMillis();
+        CharSequence ago = android.text.format.DateUtils.getRelativeTimeSpanString(
+                Math.min(peer.lastSeenMs, now), now, android.text.format.DateUtils.MINUTE_IN_MILLIS);
+        return c.getString(R.string.nearby_last_seen_ago, ago);
+    }
+
+    /** The listed device behind a saved pairing, or null when it is not nearby. */
+    private NearbyModel.Device peerDevice(String peerId) {
+        for (NearbyModel.Device d : state.devices) {
+            if (d.paired && peerId.equals(d.peerId)) return d;
+        }
+        return null;
+    }
+
+    private View deviceRow(NearbyModel.Device device, List<ShareItem> items, boolean away) {
         UiKit u = host.ui();
         Context c = host.context();
         LinearLayout row = u.row();
@@ -737,10 +930,10 @@ final class NearbyController {
         row.setBackground(u.rounded(Color.rgb(251, 253, 255), u.dp(7), Color.rgb(226, 232, 240), 1));
 
         LinearLayout labels = u.column();
-        TextView name = u.text(device.displayName(), 14, Color.rgb(38, 56, 79), Typeface.BOLD);
-        name.setSingleLine(true);
-        labels.addView(name);
+        String presence = away ? "away" : presenceOf(device);
+        labels.addView(nameLine(device.displayName(), presence, 14, Color.rgb(38, 56, 79), Typeface.BOLD));
         NearbyModel.Transfer sending = activeSendTo(device.id);
+        boolean busy = busyDevices.contains(device.id);
         if (sending != null) {
             TextView status = u.text(sendStatus(sending), 12, Color.rgb(40, 112, 216), Typeface.BOLD);
             labels.addView(status);
@@ -752,6 +945,19 @@ final class NearbyController {
                 sendStatusViews.put(sending.id, status);
                 sendProgressViews.put(sending.id, bar);
             }
+        } else if (away) {
+            labels.addView(u.text(c.getString(R.string.nearby_not_nearby), 12, u.muted(), Typeface.NORMAL));
+        } else if (device.fading()) {
+            long now = System.currentTimeMillis();
+            TextView status = u.text(c.getString(R.string.nearby_last_seen, NearbyModel.secondsSilent(device, now)), 12,
+                    u.muted(), Typeface.NORMAL);
+            labels.addView(status);
+            if (!busy) {
+                // A row the user is working with stays fully visible.
+                row.setAlpha(NearbyModel.vitality(device, now, state.deviceFadeMs, state.deviceExpiryMs));
+                fadingRows.put(device.id, row);
+                fadingStatus.put(device.id, status);
+            }
         } else {
             TextView status = u.text(c.getString(device.paired ? R.string.nearby_paired : R.string.nearby_not_paired), 12,
                     device.paired ? Color.rgb(15, 111, 83) : u.muted(), Typeface.NORMAL);
@@ -759,11 +965,20 @@ final class NearbyController {
         }
         row.addView(labels, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
+        if (away) {
+            GradientDrawable dashed = new GradientDrawable();
+            dashed.setCornerRadius(u.dp(7));
+            dashed.setColor(Color.rgb(251, 253, 255));
+            dashed.setStroke(Math.max(1, u.dp(1)), Color.rgb(203, 213, 225), u.dp(4), u.dp(3));
+            row.setBackground(dashed);
+        }
         if (sending != null) {
             Button cancel = u.compactGhostButton(c.getString(R.string.cancel));
             cancel.setOnClickListener(v -> cancel(sending.id));
             row.addView(cancel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(36)));
-        } else if (busyDevices.contains(device.id)) {
+        } else if (away) {
+            // Not nearby: nothing to start until it comes back.
+        } else if (busy) {
             Button wait = rowButton(u.secondaryButton(c.getString(R.string.nearby_connecting)));
             u.setControlEnabled(wait, false);
             row.addView(wait, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(ROW_BUTTON_DP)));
@@ -848,6 +1063,14 @@ final class NearbyController {
         boolean visible = state.visible;
         banner.setBackground(u.rounded(visible ? Color.rgb(230, 246, 238) : Color.rgb(248, 250, 252), u.dp(8),
                 visible ? Color.rgb(171, 222, 197) : Color.rgb(226, 232, 240), 1));
+        if (visible && state.discovering) {
+            // This device is announcing itself: show it is on the air.
+            LinearLayout.LayoutParams pulseParams = new LinearLayout.LayoutParams(u.dp(28), u.dp(28));
+            pulseParams.setMarginEnd(u.dp(10));
+            PulseView pulse = new PulseView(c, Color.rgb(15, 111, 83));
+            pulse.setContentDescription(c.getString(R.string.nearby_broadcasting));
+            banner.addView(pulse, pulseParams);
+        }
         LinearLayout labels = u.column();
         int titleColor = visible ? Color.rgb(15, 111, 83) : u.ink();
         TextView title = u.text(visible ? c.getString(R.string.nearby_ready_title, state.nickname)
@@ -890,8 +1113,12 @@ final class NearbyController {
             for (NearbyModel.Peer peer : state.peers) {
                 LinearLayout row = u.row();
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                TextView name = u.text(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, 14, u.ink(), Typeface.NORMAL);
-                name.setSingleLine(true);
+                NearbyModel.Device nearbyNow = peerDevice(peer.peerId);
+                LinearLayout name = nameLine(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, presenceOf(nearbyNow),
+                        14, u.ink(), Typeface.NORMAL);
+                if (nearbyNow == null) {
+                    name.addView(u.text(lastSeenText(peer), 12, Color.rgb(148, 163, 184), Typeface.NORMAL));
+                }
                 row.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
                 Button forget = u.compactGhostButton(c.getString(R.string.nearby_forget));
                 forget.setTextColor(Color.rgb(138, 46, 46));

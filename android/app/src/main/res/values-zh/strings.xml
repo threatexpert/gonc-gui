@@ -364,6 +364,16 @@
     <string name="nearby_receive_cancelled">%1$s 取消了发送</string>
     <string name="nearby_receive_failed">接收 %1$s 的文件失败：%2$s</string>
     <string name="nearby_start_failed">附近设备无法启动：%1$s</string>
+    <string name="nearby_searching_more">正在继续查找设备…</string>
+    <string name="nearby_searching_more_hint">在另一台设备上打开 Gonc 并切换到「附近设备」，它就会出现在这里。</string>
+    <string name="nearby_last_seen">%1$d 秒前在线</string>
+    <string name="nearby_not_nearby">暂时不在附近</string>
+    <string name="nearby_paired_away">已配对，暂不在附近</string>
+    <string name="nearby_last_seen_ago">%1$s在线</string>
+    <string name="nearby_never_seen">配对后未再出现</string>
+    <string name="nearby_show_more">显示其余 %1$d 台</string>
+    <string name="nearby_show_less">收起</string>
+    <string name="nearby_broadcasting">附近设备现在可以发现本机</string>
     <string name="nearby_error_not_paired">对方已不再识别此配对</string>
     <string name="nearby_error_quick_refused">对方只接收已配对设备的文件，请先配对。</string>
     <string name="nearby_error_busy">对方正忙，请稍后再试。</string>
