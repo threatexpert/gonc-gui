@@ -19,7 +19,7 @@ type Source interface {
 	ReadDir(name string) string
 	Open(name string) int64
 	Read(handle int64, maxBytes int) []byte
-	Seek(handle int64, offset int64, whence int) int64
+	SeekTo(handle int64, offset int64, whence int) int64
 	Close(handle int64)
 }
 
@@ -231,7 +231,7 @@ func (f *mobileFile) Seek(offset int64, whence int) (int64, error) {
 	if f.closed {
 		return 0, fs.ErrClosed
 	}
-	position := f.source.Seek(f.handle, offset, whence)
+	position := f.source.SeekTo(f.handle, offset, whence)
 	if position < 0 {
 		return 0, fs.ErrInvalid
 	}

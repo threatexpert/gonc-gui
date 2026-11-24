@@ -91,7 +91,7 @@ func (s *memorySource) Read(handle int64, maxBytes int) []byte {
 	return out
 }
 
-func (s *memorySource) Seek(handle int64, offset int64, whence int) int64 {
+func (s *memorySource) SeekTo(handle int64, offset int64, whence int) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := s.handles[handle]

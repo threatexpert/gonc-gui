@@ -156,7 +156,7 @@ final class AndroidFileSource implements mobilegonc.AndroidFileSource {
     }
 
     @Override
-    public long seek(long handle, long offset, long whence) {
+    public long seekTo(long handle, long offset, long whence) {
         OpenHandle openHandle;
         synchronized (streams) {
             openHandle = streams.get(handle);
