@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/net/ipv4"
@@ -54,8 +56,10 @@ type discovery struct {
 	raw  net.PacketConn
 	conn *ipv4.PacketConn
 
-	mu     sync.Mutex
-	joined map[int]bool
+	mu sync.Mutex
+	// joined maps each interface the group is joined on to its IPv4
+	// addresses at the time; index 0 is the system default interface.
+	joined map[int]string
 	ifaces []net.Interface
 	warned map[string]bool
 
@@ -76,63 +80,95 @@ func openDiscovery(port int, logger *log.Logger) (*discovery, error) {
 		logger: logger,
 		raw:    raw,
 		conn:   ipv4.NewPacketConn(raw),
-		joined: map[int]bool{},
+		joined: map[int]string{},
 		warned: map[string]bool{},
 	}
 	_ = d.conn.SetMulticastLoopback(true)
 	_ = d.conn.SetMulticastTTL(1)
-	if err := d.refreshInterfaces(); err != nil {
+	if _, err := d.refreshInterfaces(); err != nil {
 		d.close()
 		return nil, err
 	}
 	return d, nil
 }
 
-// refreshInterfaces joins the group on interfaces that appeared since the
-// last call, such as after Wi-Fi reconnects.
-func (d *discovery) refreshInterfaces() error {
+// refreshInterfaces joins the group on interfaces that appeared, or whose
+// IPv4 addresses changed, since the last call, such as after Wi-Fi
+// reconnects. It reports whether it joined on any interface.
+func (d *discovery) refreshInterfaces() (bool, error) {
 	ifaces, err := net.Interfaces()
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	group := &net.UDPAddr{IP: d.group.IP}
 	var usable []net.Interface
+	seen := map[int]bool{}
+	joinedAny := false
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 || !hasIPv4(iface) {
+		addrs := ipv4Key(iface)
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 || addrs == "" {
+			if _, ok := d.joined[iface.Index]; ok {
+				// Leave so a later join on the same interface succeeds.
+				_ = d.conn.LeaveGroup(&iface, group)
+				delete(d.joined, iface.Index)
+			}
 			continue
 		}
 		usable = append(usable, iface)
-		if d.joined[iface.Index] {
+		seen[iface.Index] = true
+		prev, ok := d.joined[iface.Index]
+		if ok && prev == addrs {
 			continue
 		}
-		if jerr := d.conn.JoinGroup(&iface, &net.UDPAddr{IP: d.group.IP}); jerr == nil {
-			d.joined[iface.Index] = true
+		if ok {
+			_ = d.conn.LeaveGroup(&iface, group)
+			delete(d.joined, iface.Index)
+		}
+		jerr := d.conn.JoinGroup(&iface, group)
+		if jerr != nil {
+			// The system may still hold an earlier membership.
+			_ = d.conn.LeaveGroup(&iface, group)
+			jerr = d.conn.JoinGroup(&iface, group)
+		}
+		if jerr == nil {
+			d.joined[iface.Index] = addrs
+			joinedAny = true
 		} else {
 			d.warnLocked("join:"+iface.Name, "nearby: join multicast on %s: %v", iface.Name, jerr)
 		}
 	}
+	for index := range d.joined {
+		if index != 0 && !seen[index] {
+			delete(d.joined, index)
+		}
+	}
 	d.ifaces = usable
 	if len(d.joined) == 0 {
-		if jerr := d.conn.JoinGroup(nil, &net.UDPAddr{IP: d.group.IP}); jerr != nil {
+		if jerr := d.conn.JoinGroup(nil, group); jerr != nil {
 			if err != nil {
-				return fmt.Errorf("nearby: list interfaces: %v; join multicast: %w", err, jerr)
+				return false, fmt.Errorf("nearby: list interfaces: %v; join multicast: %w", err, jerr)
 			}
-			return fmt.Errorf("nearby: join multicast group: %w", jerr)
+			return false, fmt.Errorf("nearby: join multicast group: %w", jerr)
 		}
-		d.joined[0] = true
+		d.joined[0] = ""
+		joinedAny = true
 	}
-	return nil
+	return joinedAny, nil
 }
 
-func hasIPv4(iface net.Interface) bool {
+// ipv4Key lists an interface's IPv4 addresses, or returns "" if it has none.
+func ipv4Key(iface net.Interface) string {
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return false
+		return ""
 	}
+	var ips []string
 	for _, a := range addrs {
 		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil {
-			return true
+			ips = append(ips, ipn.IP.String())
 		}
 	}
-	return false
+	sort.Strings(ips)
+	return strings.Join(ips, ",")
 }
 
 func (d *discovery) warnLocked(key, format string, args ...any) {

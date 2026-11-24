@@ -55,10 +55,26 @@ type PeerInfo struct {
 	Nickname   string    `json:"nickname"`
 	DeviceType string    `json:"deviceType"`
 	PairedAt   time.Time `json:"pairedAt"`
+	// LastSeen is when the device was last nearby; zero if never since
+	// pairing.
+	LastSeen time.Time `json:"lastSeen"`
 }
 
+// peerSeenSaveEvery limits how often a paired device's last sighting is
+// written to the store while it stays nearby. The time it leaves is always
+// written.
+const peerSeenSaveEvery = time.Hour
+
 type State struct {
-	Running          bool            `json:"running"`
+	Running bool `json:"running"`
+	// Discovering is true while the device list is being kept current,
+	// that is while the Nearby page is open and discovery works.
+	Discovering bool `json:"discovering"`
+	// DeviceFadeMs and DeviceExpiryMs are nearby.DeviceFadeAfter and
+	// nearby.DeviceExpiry, so apps can show how close a device is to
+	// leaving the list.
+	DeviceFadeMs     int64           `json:"deviceFadeMs"`
+	DeviceExpiryMs   int64           `json:"deviceExpiryMs"`
 	Error            string          `json:"error,omitempty"`
 	DiscoveryError   string          `json:"discoveryError,omitempty"`
 	Nickname         string          `json:"nickname"`
@@ -160,6 +176,10 @@ type Manager struct {
 	// discovering is whether the Nearby page is open. Discovery traffic is
 	// sent only then; see SetDiscovering.
 	discovering bool
+
+	// nearbyPeers is when each paired device now in the list was last
+	// heard from, by installation ID; see notePeersSeen.
+	nearbyPeers map[string]time.Time
 
 	// finishers wait for FinishReceive in ExternalDownload mode.
 	finishers map[string]chan receiveResult
@@ -318,6 +338,12 @@ func (m *Manager) setStartErr(err error) {
 
 func (m *Manager) Close() {
 	m.mu.Lock()
+	running := m.svc
+	m.mu.Unlock()
+	if running != nil {
+		m.notePeersSeen(running.Devices(), true)
+	}
+	m.mu.Lock()
 	svc := m.svc
 	m.svc = nil
 	cancels := make([]context.CancelFunc, 0, len(m.cancels))
@@ -366,6 +392,8 @@ func (m *Manager) State() State {
 		QuickReceive:     !m.store.RefuseQuick,
 		SaveDir:          m.saveDirLocked(),
 		StorageProtected: nearbystore.Protected,
+		DeviceFadeMs:     nearby.DeviceFadeAfter.Milliseconds(),
+		DeviceExpiryMs:   nearby.DeviceExpiry.Milliseconds(),
 		Devices:          []nearby.Device{},
 		Peers:            []PeerInfo{},
 	}
@@ -379,9 +407,10 @@ func (m *Manager) State() State {
 		if err := m.svc.DiscoveryError(); err != nil {
 			st.DiscoveryError = err.Error()
 		}
+		st.Discovering = m.discovering && st.DiscoveryError == ""
 	}
 	for _, p := range m.store.Peers {
-		st.Peers = append(st.Peers, PeerInfo{p.InstallationID, p.Nickname, p.DeviceType, p.PairedAt})
+		st.Peers = append(st.Peers, PeerInfo{p.InstallationID, p.Nickname, p.DeviceType, p.PairedAt, m.store.PeerLastSeen[p.InstallationID]})
 	}
 	return st
 }
@@ -479,11 +508,15 @@ func (m *Manager) updateStore(change func(*nearbystore.Store), apply func(*nearb
 // from devices that reach it and finishes transfers already running.
 func (m *Manager) SetDiscovering(on bool) {
 	m.mu.Lock()
+	changed := m.discovering != on
 	m.discovering = on
 	if m.svc != nil {
 		m.svc.SetDiscovering(on)
 	}
 	m.mu.Unlock()
+	if changed {
+		m.emitState()
+	}
 }
 
 func (m *Manager) Refresh() error {
@@ -1119,7 +1152,62 @@ func (p *shareProgress) snapshot() (int64, int64) {
 
 type handler struct{ m *Manager }
 
-func (h handler) DevicesChanged([]nearby.Device) { h.m.emitState() }
+func (h handler) DevicesChanged(devices []nearby.Device) {
+	h.m.notePeersSeen(devices, false)
+	h.m.emitState()
+}
+
+// notePeersSeen records when paired devices were last nearby: when one is
+// first seen, at most every peerSeenSaveEvery while it stays, and when it
+// leaves the list. With flush set, every listed device is recorded, as the
+// app closes.
+func (m *Manager) notePeersSeen(devices []nearby.Device, flush bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	present := map[string]time.Time{}
+	for _, d := range devices {
+		if d.Paired && d.PeerID != "" && !d.LastSeen.IsZero() {
+			present[d.PeerID] = d.LastSeen
+		}
+	}
+	updates := map[string]time.Time{}
+	for id, seen := range present {
+		if prev := m.store.PeerLastSeen[id]; flush || prev.IsZero() || seen.Sub(prev) >= peerSeenSaveEvery {
+			updates[id] = seen
+		}
+	}
+	for id, seen := range m.nearbyPeers {
+		if _, still := present[id]; !still && seen.After(m.store.PeerLastSeen[id]) {
+			updates[id] = seen
+		}
+	}
+	m.nearbyPeers = present
+	paired := map[string]bool{}
+	for _, p := range m.store.Peers {
+		paired[p.InstallationID] = true
+	}
+	next := m.store
+	next.PeerLastSeen = map[string]time.Time{}
+	for id, seen := range m.store.PeerLastSeen {
+		next.PeerLastSeen[id] = seen
+	}
+	changed := false
+	for id, seen := range updates {
+		if paired[id] && !seen.Equal(next.PeerLastSeen[id]) {
+			next.PeerLastSeen[id] = seen
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	next.Peers = append([]nearby.PeerRecord(nil), m.store.Peers...)
+	next.Addresses = append([]string(nil), m.store.Addresses...)
+	if err := nearbystore.SaveWith(m.StorePath, m.storeOptions(), next); err != nil {
+		return // keep the old times; the next change tries again
+	}
+	m.store = next
+}
 
 func (h handler) IncomingPairing(p *nearby.Pairing) { h.m.trackPairing(p, "") }
 

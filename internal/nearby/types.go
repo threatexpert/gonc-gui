@@ -64,7 +64,16 @@ type Device struct {
 	// is not paired with (see OpenQuickTransfer).
 	QuickReceive bool      `json:"quickReceive"`
 	LastSeen     time.Time `json:"lastSeen"`
+	// Status is DeviceOnline, or DeviceFading once the device has been
+	// silent for DeviceFadeAfter. It is removed after DeviceExpiry.
+	Status string `json:"status"`
 }
+
+// Device statuses.
+const (
+	DeviceOnline = "online"
+	DeviceFading = "fading"
+)
 
 // Handler receives events that need the application's attention. Calls are
 // made from service goroutines and must not block for long.
