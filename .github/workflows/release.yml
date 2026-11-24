@@ -181,14 +181,18 @@ jobs:
     name: Android APK
     runs-on: ubuntu-24.04
     env:
-      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      GOWORK: "off"
+      ANDROID_NDK_VERSION: "27.2.12479018"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Setup JDK
         uses: actions/setup-java@v4
@@ -212,6 +216,11 @@ jobs:
 
       - name: Check Android signing secrets
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           missing=0
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
@@ -225,16 +234,48 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          sdkmanager="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          sdkmanager="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"
           if [[ ! -x "${sdkmanager}" ]]; then
             echo "::error::sdkmanager was not found at ${sdkmanager}"
             exit 1
           fi
           yes | "${sdkmanager}" --licenses >/dev/null || true
-          "${sdkmanager}" "platforms;android-35" "build-tools;35.0.0"
+          "${sdkmanager}" "platforms;android-35" "build-tools;35.0.0" "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_HOME=${sdk_root}" >> "${GITHUB_ENV}"
+          echo "ANDROID_NDK_HOME=${sdk_root}/ndk/${ANDROID_NDK_VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Build Android AAR from source
+        shell: bash
+        env:
+          GOFLAGS: "-buildvcs=false"
+        run: |
+          work_dir="$(mktemp -d "${RUNNER_TEMP}/gonc-aar.XXXXXX")"
+          export GOBIN="${work_dir}/bin"
+          export PATH="${GOBIN}:${PATH}"
+          go install -mod=readonly golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+
+          aar="${work_dir}/mobilegonc.aar"
+          gomobile bind -target=android/arm64 -androidapi=26 -trimpath \
+            -bootclasspath="${ANDROID_HOME}/platforms/android-35/android.jar" \
+            -ldflags="-s -w -buildid= -checklinkname=0" \
+            -o "${aar}" gonc-gui/android/mobilegonc gonc-gui/android/nearbygo
+
+          library="jni/arm64-v8a/libgojni.so"
+          (cd "${work_dir}" && jar --extract --file "${aar}" "${library}")
+          test -s "${work_dir}/${library}"
+          "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            --strip-unneeded "${work_dir}/${library}"
+          jar --update --file "${aar}" --no-manifest -C "${work_dir}" "${library}"
+          install -m 0644 "${aar}" android/app/libs/mobilegonc.aar
 
       - name: Configure Android signing
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           printf "%s" "${ANDROID_KEYSTORE_BASE64}" | base64 -d > gonc-release.jks
           cat > android/keystore.properties <<EOF
