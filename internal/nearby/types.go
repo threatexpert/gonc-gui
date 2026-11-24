@@ -81,4 +81,6 @@ type Handler interface {
 	DevicesChanged(devices []Device)
 	IncomingPairing(p *Pairing)
 	IncomingTransfer(t *IncomingTransfer)
+	// PeerNicknameVerified reports the name the peer sent over the authenticated verification session.
+	PeerNicknameVerified(peerID, pairID, nickname string)
 }

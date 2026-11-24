@@ -809,7 +809,7 @@ func (s *Service) startVerify(id string) {
 			return
 		}
 		defer func() { <-s.verifySem }()
-		ok := s.verifyDevice(id)
+		peer, ok := s.verifyDevice(id)
 		s.mu.Lock()
 		d, exists := s.devices[id]
 		changed := false
@@ -821,44 +821,51 @@ func (s *Service) startVerify(id string) {
 			}
 		}
 		s.mu.Unlock()
+		if ok && s.handler != nil {
+			s.handler.PeerNicknameVerified(peer.InstallationID, peer.PairID, peer.Nickname)
+		}
 		if changed {
 			s.notify()
 		}
 	}()
 }
 
-// verifyDevice proves that a paired device holds the pairing key, using
-// the same connection paths as a transfer.
-func (s *Service) verifyDevice(id string) bool {
+// verifyDevice proves that a paired device holds the pairing key and reads
+// its nickname, using the same connection paths as a transfer.
+func (s *Service) verifyDevice(id string) (PeerRecord, bool) {
 	d, self, err := s.device(id)
 	if err != nil {
-		return false
+		return PeerRecord{}, false
 	}
 	s.mu.Lock()
 	rec, ok := s.peers[d.PeerID]
 	s.mu.Unlock()
 	if !ok {
-		return false
+		return PeerRecord{}, false
 	}
 	ctx, cancel := s.context(rendezvousWindow + 2*sessionStepTimeout)
 	defer cancel()
 	conn, err := s.connect(ctx, d, knockSession, &rec)
 	if err != nil {
-		return false
+		return PeerRecord{}, false
 	}
 	defer conn.Close()
 	tc, _, err := sessionInitiate(ctx, conn, self, s.port, rec)
 	if err != nil {
 		s.logf("could not verify %s: %v", rec.Nickname, err)
-		return false
+		return PeerRecord{}, false
 	}
 	defer tc.Close()
 	_ = tc.SetDeadline(time.Now().Add(sessionStepTimeout))
 	if err := writeMsg(tc, &wireMsg{Op: opVerify}); err != nil {
-		return false
+		return PeerRecord{}, false
 	}
 	m, err := readMsg(tc)
-	return err == nil && m.Op == opVerified
+	if err != nil || m.Op != opVerified {
+		return PeerRecord{}, false
+	}
+	rec.Nickname = m.Name
+	return rec, true
 }
 
 func (s *Service) logf(format string, args ...any) {

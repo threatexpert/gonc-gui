@@ -110,10 +110,10 @@ func (o Options) unprotect(data []byte) ([]byte, error) {
 }
 
 func (o Options) defaultName() string {
-	if name := strings.TrimSpace(o.DefaultName); name != "" {
+	if name := nearby.NormalizeDeviceName(o.DefaultName); name != "" {
 		return name
 	}
-	return defaultNickname()
+	return nearby.NormalizeDeviceName(defaultNickname())
 }
 
 // LoadAt is Load for an explicit file path.
@@ -144,7 +144,8 @@ func LoadWith(path string, opt Options) (Store, error) {
 	if store.InstallationID == "" || len(store.IRK) == 0 {
 		return Store{}, errors.New("nearby store is missing its identity")
 	}
-	if strings.TrimSpace(store.Nickname) == "" {
+	store.Nickname = nearby.NormalizeDeviceName(store.Nickname)
+	if store.Nickname == "" {
 		store.Nickname = opt.defaultName()
 	}
 	return store, nil

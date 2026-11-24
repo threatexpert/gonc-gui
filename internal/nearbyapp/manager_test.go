@@ -7,12 +7,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"gonc-gui/internal/nearby"
+	"gonc-gui/internal/nearbystore"
 )
 
 type recorder struct {
@@ -90,6 +93,30 @@ func startManager(t *testing.T, name string) (*Manager, *recorder, string) {
 
 func loopback(m *Manager) string {
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(m.State().Port))
+}
+
+func TestDeviceNamesAreBoundedForStorageAndDisplay(t *testing.T) {
+	m, _, _ := startManager(t, "Desk")
+	localName := strings.Repeat("机", 23)
+	if err := m.SetNickname(localName + "📱多余"); err != nil {
+		t.Fatal(err)
+	}
+	peerName := strings.Repeat("端", 22) + "📱"
+	legacyNickname := peerName + "旧版本设备"
+	if err := m.savePeer(nearby.PeerRecord{InstallationID: "legacy", Nickname: legacyNickname}); err != nil {
+		t.Fatal(err)
+	}
+	state := m.State()
+	if state.Nickname != localName || len(state.Peers) != 1 || state.Peers[0].Nickname != peerName {
+		t.Fatalf("unexpected displayed names: local %q, peers %+v", state.Nickname, state.Peers)
+	}
+	store, err := nearbystore.LoadWith(m.StorePath, m.storeOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Nickname != localName || len(store.Peers) != 1 || store.Peers[0].Nickname != legacyNickname {
+		t.Fatalf("unexpected stored names: local %q, peers %+v", store.Nickname, store.Peers)
+	}
 }
 
 func TestPairSendAcceptAndSaveWithoutOverwriting(t *testing.T) {
@@ -192,6 +219,48 @@ func TestPairSendAcceptAndSaveWithoutOverwriting(t *testing.T) {
 			t.Fatalf("staging folder left behind: %s", e.Name())
 		}
 	}
+
+	t.Run("remember nickname from background verification", func(t *testing.T) {
+		before, err := nearbystore.LoadWith(alice.StorePath, alice.storeOptions())
+		if err != nil || len(before.Peers) != 1 {
+			t.Fatalf("load the original pairing: %v", err)
+		}
+		original := before.Peers[0]
+		handler{alice}.PeerNicknameVerified(original.InstallationID, "superseded-pairing", "Stale name")
+		if err := bob.SetNickname("Bob's new name"); err != nil {
+			t.Fatal(err)
+		}
+		device, err := alice.AddAddress(loopback(bob))
+		if err != nil || device.Nickname != "Bob's new name" {
+			t.Fatalf("the discovery nickname is %q: %v", device.Nickname, err)
+		}
+		if got := alice.State().Peers[0].Nickname; got != original.Nickname {
+			t.Fatalf("the saved nickname changed before verification: %q", got)
+		}
+
+		// Restarting causes the next ordinary background verification on discovery.
+		alice.Close()
+		if err := alice.Start(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for alice.State().Peers[0].Nickname != "Bob's new name" && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		bob.Close()
+		alice.Close()
+		if state := alice.State(); len(state.Devices) != 0 || state.Peers[0].Nickname != "Bob's new name" {
+			t.Fatalf("unexpected nickname for the offline peer: %+v", state.Peers)
+		}
+		saved, err := nearbystore.LoadWith(alice.StorePath, alice.storeOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		original.Nickname = "Bob's new name"
+		if !reflect.DeepEqual(saved.Peers, []nearby.PeerRecord{original}) {
+			t.Fatal("the verified nickname was not persisted, or other pairing fields changed")
+		}
+	})
 }
 
 func TestDeclinedTransferReportsToSender(t *testing.T) {

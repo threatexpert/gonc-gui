@@ -334,7 +334,7 @@
     <string name="nearby_hidden_body">其他设备无法发现本机。</string>
     <string name="nearby_show_device">让本机可见</string>
     <string name="nearby_rename">改名</string>
-    <string name="nearby_rename_title">设备名称</string>
+    <string name="nearby_rename_title">设备名称（最多 %1$d 个字符）</string>
     <string name="nearby_accept_unpaired">接收未配对设备发送的文件</string>
     <string name="nearby_accept_unpaired_hint">每次都会先询问你。关闭后只接收已配对设备发送的文件。</string>
     <string name="nearby_paired_devices">已配对设备</string>
@@ -368,11 +368,12 @@
     <string name="nearby_searching_more_hint">在另一台设备上打开 Gonc 并切换到「附近设备」，它就会出现在这里。</string>
     <string name="nearby_last_seen">%1$d 秒前在线</string>
     <string name="nearby_not_nearby">暂时不在附近</string>
-    <string name="nearby_paired_away">已配对，暂不在附近</string>
+    <string name="nearby_paired_away">离线已配对设备</string>
+    <string name="nearby_paired_away_count">（%1$d）</string>
+    <string name="nearby_paired_away_expanded">已展开</string>
+    <string name="nearby_paired_away_collapsed">已收起</string>
     <string name="nearby_last_seen_ago">%1$s在线</string>
     <string name="nearby_never_seen">配对后未再出现</string>
-    <string name="nearby_show_more">显示其余 %1$d 台</string>
-    <string name="nearby_show_less">收起</string>
     <string name="nearby_broadcasting">附近设备现在可以发现本机</string>
     <string name="nearby_error_not_paired">对方已不再识别此配对</string>
     <string name="nearby_error_quick_refused">对方只接收已配对设备的文件，请先配对。</string>

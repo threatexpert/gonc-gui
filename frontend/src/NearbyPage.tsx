@@ -24,6 +24,8 @@ import './Nearby.css';
 
 type Lang = 'zh' | 'en';
 
+const DEVICE_NAME_MAX_LENGTH = 24;
+
 const strings = {
   en: {
     title: 'Nearby',
@@ -39,13 +41,12 @@ const strings = {
     locale: 'en',
     lastSeenAgo: (ago: string) => `Last seen ${ago}`,
     neverSeen: 'Not seen since pairing',
-    showMore: (n: number) => `Show ${n} more`,
-    showLess: 'Show less',
     searchingMore: 'Looking for more devices…',
     searchingMoreHint: 'Open Nearby in Gonc on another device to see it here.',
     lastSeen: (seconds: number) => `Last seen ${seconds} s ago`,
     notNearby: 'Not nearby right now',
-    pairedAway: 'Paired, not nearby',
+    pairedAway: 'Offline paired devices',
+    pairedAwayCount: (count: number) => `(${count})`,
     searchingHint: 'Open Nearby in Gonc on the other device and keep both on the same network.',
     paired: 'Paired',
     notPaired: 'Not paired',
@@ -75,7 +76,7 @@ const strings = {
     cancel: 'Cancel',
     reveal: 'Show in folder',
     thisDevice: 'This device',
-    deviceName: 'Device name',
+    deviceName: (maxLength: number) => `Device name (up to ${maxLength} characters)`,
     save: 'Save',
     visible: 'Visible to nearby devices',
     visibleHint: 'Others can see this name while this page is open.',
@@ -141,13 +142,12 @@ const strings = {
     locale: 'zh-CN',
     lastSeenAgo: (ago: string) => `${ago}在线`,
     neverSeen: '配对后未再出现',
-    showMore: (n: number) => `显示其余 ${n} 台`,
-    showLess: '收起',
     searchingMore: '正在继续查找设备…',
     searchingMoreHint: '在另一台设备的 Gonc 中打开“附近设备”，它就会出现在这里。',
     lastSeen: (seconds: number) => `${seconds} 秒前在线`,
     notNearby: '暂时不在附近',
-    pairedAway: '已配对，暂不在附近',
+    pairedAway: '离线已配对设备',
+    pairedAwayCount: (count: number) => `（${count}）`,
     searchingHint: '请在另一台设备的 Gonc 中打开“附近设备”，并保持两台设备在同一网络。',
     paired: '已配对',
     notPaired: '未配对',
@@ -177,7 +177,7 @@ const strings = {
     cancel: '取消',
     reveal: '在文件夹中显示',
     thisDevice: '本机',
-    deviceName: '设备名称',
+    deviceName: (maxLength: number) => `设备名称（最多 ${maxLength} 个字符）`,
     save: '保存',
     visible: '允许附近设备发现本机',
     visibleHint: '此页面打开期间，其他设备可以看到此名称。',
@@ -261,8 +261,6 @@ function formatCode(code: string) {
   return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
 }
 
-/** Paired devices that are not nearby, listed before "Show more". */
-const AWAY_SHOWN = 3;
 
 /** A time in the past as "3 days ago", "yesterday" or "3 天前" in the app's language. */
 function agoText(ms: number, now: number, locale: string) {
@@ -624,7 +622,7 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
     .filter((device): device is nearby.Device => !!device);
 
   // An unpaired device that leaves fades out instead of vanishing. A paired
-  // one moves to "Paired, not nearby" below.
+  // one moves to "Offline paired devices" below.
   const [leaving, setLeaving] = useState<Record<string, nearby.Device>>({});
   const previousDevices = useRef<nearby.Device[]>([]);
   useEffect(() => {
@@ -651,7 +649,6 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
   ];
   // Paired devices that are not nearby, most recently seen first. Pairings
   // never seen since are ordered by when they were paired.
-  const [showAllAway, setShowAllAway] = useState(false);
   const awayPeers = (state?.peers || [])
     .filter((peer) => {
       const id = `p-${peer.peerId}`;
@@ -659,7 +656,6 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
     })
     .map((peer) => ({peer, seen: timeMs(peer.lastSeen)}))
     .sort((a, b) => (b.seen || timeMs(b.peer.pairedAt)) - (a.seen || timeMs(a.peer.pairedAt)));
-  const awayShown = showAllAway ? awayPeers : awayPeers.slice(0, AWAY_SHOWN);
   const now = useNow(devices.some((device) => device.status === 'fading'));
 
   // Coming back to the window is when a refresh helps: it announces this
@@ -882,11 +878,22 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
               )}
             </div>
           )}
+          <div className="nearby-fallback">
+            <p>{t.fallbackHint}</p>
+            <div className="nearby-fallback-actions">
+              <button type="button" className="quiet-action" onClick={() => onOpenMode('send')}><Icon name="send" />{t.useSend}</button>
+              <button type="button" className="quiet-action" onClick={() => onOpenMode('receive')}><Icon name="receive" />{t.useReceive}</button>
+            </div>
+          </div>
           {awayPeers.length > 0 && (
-            <div className="nearby-away">
-              <h3>{t.pairedAway}</h3>
+            <details className="nearby-away">
+              <summary>
+                <span>{t.pairedAway}</span>
+                <span>{t.pairedAwayCount(awayPeers.length)}</span>
+                <Icon name="chevron" className="nearby-away-chevron" />
+              </summary>
               <ul>
-                {awayShown.map(({peer, seen}) => {
+                {awayPeers.map(({peer, seen}) => {
                   const key = `peer-${peer.peerId}`;
                   return (
                     <li key={peer.peerId}>
@@ -908,20 +915,8 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
                   );
                 })}
               </ul>
-              {awayPeers.length > AWAY_SHOWN && (
-                <button type="button" className="quiet-action nearby-away-more" aria-expanded={showAllAway} onClick={() => setShowAllAway((v) => !v)}>
-                  {showAllAway ? t.showLess : t.showMore(awayPeers.length - AWAY_SHOWN)}
-                </button>
-              )}
-            </div>
+            </details>
           )}
-          <div className="nearby-fallback">
-            <p>{t.fallbackHint}</p>
-            <div className="nearby-fallback-actions">
-              <button type="button" className="quiet-action" onClick={() => onOpenMode('send')}><Icon name="send" />{t.useSend}</button>
-              <button type="button" className="quiet-action" onClick={() => onOpenMode('receive')}><Icon name="receive" />{t.useReceive}</button>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -950,9 +945,9 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
             event.preventDefault();
             if (nameDraft !== null) model.run(async () => { await NearbySetNickname(nameDraft); setNameDraft(null); });
           }}>
-            <label htmlFor="nearby-name">{t.deviceName}</label>
+            <label htmlFor="nearby-name">{t.deviceName(DEVICE_NAME_MAX_LENGTH)}</label>
             <div className="input-group">
-              <input id="nearby-name" value={nameDraft ?? state?.nickname ?? ''} onChange={(event) => setNameDraft(event.target.value)} maxLength={64} />
+              <input id="nearby-name" value={nameDraft ?? state?.nickname ?? ''} onChange={(event) => setNameDraft(event.target.value)} maxLength={DEVICE_NAME_MAX_LENGTH} />
               {nameDraft !== null && nameDraft !== state?.nickname && <button type="submit" className="secondary">{t.save}</button>}
             </div>
           </form>

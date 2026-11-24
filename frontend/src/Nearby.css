@@ -185,20 +185,41 @@
 
 /* Paired devices that are not on the network right now. */
 .nearby-away {
-  margin-top: 14px;
+  margin-top: 4px;
 }
 
-.nearby-away h3 {
-  margin: 0 0 6px;
+.nearby-away summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
+  text-align: end;
+  cursor: pointer;
+  list-style: none;
+}
+
+.nearby-away summary::-webkit-details-marker {
+  display: none;
+}
+
+.nearby-away summary:hover {
+  background: var(--bg);
+}
+
+.nearby-away[open] .nearby-away-chevron {
+  transform: rotate(90deg);
 }
 
 .nearby-away ul {
   display: grid;
   gap: 4px;
-  margin: 0;
+  margin: 4px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -241,10 +262,6 @@
   color: var(--text-faint);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.nearby-away-more {
-  margin: 4px 0 0 6px;
 }
 
 .nearby-device-icon {

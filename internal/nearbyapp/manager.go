@@ -402,6 +402,9 @@ func (m *Manager) State() State {
 	}
 	if m.svc != nil {
 		st.Devices = m.svc.Devices()
+		for i := range st.Devices {
+			st.Devices[i].Nickname = nearby.NormalizeDeviceName(st.Devices[i].Nickname)
+		}
 		st.Port = m.svc.Port()
 		st.Addresses = localAddresses(st.Port)
 		if err := m.svc.DiscoveryError(); err != nil {
@@ -410,7 +413,7 @@ func (m *Manager) State() State {
 		st.Discovering = m.discovering && st.DiscoveryError == ""
 	}
 	for _, p := range m.store.Peers {
-		st.Peers = append(st.Peers, PeerInfo{p.InstallationID, p.Nickname, p.DeviceType, p.PairedAt, m.store.PeerLastSeen[p.InstallationID]})
+		st.Peers = append(st.Peers, PeerInfo{p.InstallationID, nearby.NormalizeDeviceName(p.Nickname), p.DeviceType, p.PairedAt, m.store.PeerLastSeen[p.InstallationID]})
 	}
 	return st
 }
@@ -450,7 +453,7 @@ func localAddresses(port int) []string {
 }
 
 func (m *Manager) SetNickname(name string) error {
-	name = strings.TrimSpace(name)
+	name = nearby.NormalizeDeviceName(name)
 	if name == "" {
 		return errors.New("enter a device name")
 	}
@@ -552,6 +555,7 @@ func (m *Manager) AddAddress(address string) (nearby.Device, error) {
 		}
 		s.Addresses = append(s.Addresses, address)
 	}, nil)
+	dev.Nickname = nearby.NormalizeDeviceName(dev.Nickname)
 	return dev, nil
 }
 
@@ -617,7 +621,7 @@ func (m *Manager) Pair(deviceID string) (PairingInfo, error) {
 }
 
 func (m *Manager) trackPairing(p *nearby.Pairing, deviceID string) PairingInfo {
-	info := PairingInfo{ID: p.ID, Incoming: p.Incoming, PeerName: p.PeerName, PeerType: p.PeerType, Code: p.Code, DeviceID: deviceID, Status: "waiting"}
+	info := PairingInfo{ID: p.ID, Incoming: p.Incoming, PeerName: nearby.NormalizeDeviceName(p.PeerName), PeerType: p.PeerType, Code: p.Code, DeviceID: deviceID, Status: "waiting"}
 	m.mu.Lock()
 	m.pairings[p.ID] = p
 	m.mu.Unlock()
@@ -657,6 +661,33 @@ func (m *Manager) savePeer(rec nearby.PeerRecord) error {
 	}
 	m.store = next
 	return nil
+}
+
+func (m *Manager) updatePeerNickname(peerID, pairID, nickname string) (bool, error) {
+	nickname = nearby.NormalizeDeviceName(nickname)
+	if nickname == "" {
+		return false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, peer := range m.store.Peers {
+		// A verification can finish after the device was forgotten or re-paired.
+		if peer.InstallationID != peerID || peer.PairID != pairID {
+			continue
+		}
+		if peer.Nickname == nickname {
+			return false, nil
+		}
+		next := m.store
+		next.Peers = append([]nearby.PeerRecord(nil), m.store.Peers...)
+		next.Peers[i].Nickname = nickname
+		if err := nearbystore.SaveWith(m.StorePath, m.storeOptions(), next); err != nil {
+			return false, err
+		}
+		m.store = next
+		return true, nil
+	}
+	return false, nil
 }
 
 // ConfirmPairing passes the user's decision on whether the codes match.
@@ -896,7 +927,7 @@ func (m *Manager) sendSource(deviceID string, source httpfileshare.FileSource, i
 	peerName := deviceID
 	for _, d := range svc.Devices() {
 		if d.ID == deviceID {
-			peerName = d.Nickname
+			peerName = nearby.NormalizeDeviceName(d.Nickname)
 			if !d.Paired && !quick {
 				return "", errors.New("pair with this device first")
 			}
@@ -1157,6 +1188,15 @@ func (h handler) DevicesChanged(devices []nearby.Device) {
 	h.m.emitState()
 }
 
+func (h handler) PeerNicknameVerified(peerID, pairID, nickname string) {
+	changed, err := h.m.updatePeerNickname(peerID, pairID, nickname)
+	if err != nil {
+		h.m.logf("could not save the verified device name: %v", err)
+	} else if changed {
+		h.m.emitState()
+	}
+}
+
 // notePeersSeen records when paired devices were last nearby: when one is
 // first seen, at most every peerSeenSaveEvery while it stays, and when it
 // leaves the list. With flush set, every listed device is recorded, as the
@@ -1275,7 +1315,7 @@ type receiveConn struct {
 }
 
 func (m *Manager) runReceive(t *nearby.IncomingTransfer) {
-	info := TransferInfo{ID: t.ID, Direction: "receive", PeerName: t.PeerName, Status: "connecting", Quick: !t.Verified}
+	info := TransferInfo{ID: t.ID, Direction: "receive", PeerName: nearby.NormalizeDeviceName(t.PeerName), Status: "connecting", Quick: !t.Verified}
 	if t.PeerID != "" {
 		info.DeviceID = "p-" + t.PeerID
 	}

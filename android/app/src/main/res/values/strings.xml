@@ -341,7 +341,7 @@
     <string name="nearby_hidden_body">Other devices can\'t find this one.</string>
     <string name="nearby_show_device">Show this device</string>
     <string name="nearby_rename">Rename</string>
-    <string name="nearby_rename_title">Device name</string>
+    <string name="nearby_rename_title">Device name (up to %1$d characters)</string>
     <string name="nearby_accept_unpaired">Accept files from unpaired devices</string>
     <string name="nearby_accept_unpaired_hint">You\'re always asked first. Turn this off to receive only from paired devices.</string>
     <string name="nearby_paired_devices">Paired devices</string>
@@ -375,11 +375,12 @@
     <string name="nearby_searching_more_hint">Open Gonc on another device and switch to Nearby devices to see it here.</string>
     <string name="nearby_last_seen">Last seen %1$d s ago</string>
     <string name="nearby_not_nearby">Not nearby right now</string>
-    <string name="nearby_paired_away">Paired, not nearby</string>
+    <string name="nearby_paired_away">Offline paired devices</string>
+    <string name="nearby_paired_away_count">(%1$d)</string>
+    <string name="nearby_paired_away_expanded">Expanded</string>
+    <string name="nearby_paired_away_collapsed">Collapsed</string>
     <string name="nearby_last_seen_ago">Last seen %1$s</string>
     <string name="nearby_never_seen">Not seen since pairing</string>
-    <string name="nearby_show_more">Show %1$d more</string>
-    <string name="nearby_show_less">Show less</string>
     <string name="nearby_broadcasting">Visible to nearby devices now</string>
     <string name="nearby_error_not_paired">it no longer recognizes this pairing</string>
     <string name="nearby_error_quick_refused">it only accepts files from paired devices. Pair with it first.</string>

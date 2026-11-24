@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"unicode"
+	"unicode/utf16"
 )
 
 const (
@@ -132,6 +133,21 @@ func expectOp(m *wireMsg, op string) error {
 // cleanName strips control characters and bounds the length of a nickname
 // or other short text that a peer supplies for display.
 func cleanName(s string) string { return cleanText(s, maxNameRunes) }
+
+// NormalizeDeviceName applies the device-name limit used by both app inputs.
+// The wire format keeps its own limit for compatibility with older peers.
+func NormalizeDeviceName(s string) string {
+	const maxLength = 24 // UTF-16 code units, as in the desktop and Android inputs.
+	name := cleanName(strings.TrimSpace(s))
+	remaining := maxLength
+	for i, r := range name {
+		remaining -= utf16.RuneLen(r)
+		if remaining < 0 {
+			return strings.TrimSpace(name[:i])
+		}
+	}
+	return name
+}
 
 func cleanText(s string, limit int) string {
 	var b strings.Builder

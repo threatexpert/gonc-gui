@@ -11,6 +11,7 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.provider.Settings;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -18,9 +19,12 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+
+import androidx.core.view.ViewCompat;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -59,6 +63,7 @@ final class NearbyController {
     static final String SCREEN_RECEIVE = "receive";
     private static final String PREF_SEND_MODE = "nearby_send_mode";
     private static final String PREF_RECEIVE_MODE = "nearby_receive_mode";
+    private static final int DEVICE_NAME_MAX_LENGTH = 24;
     private static final int OFFER_ITEMS_SHOWN = 6;
 
     private ModuleHost host;
@@ -85,10 +90,7 @@ final class NearbyController {
     private final Map<String, TextView> fadingStatus = new HashMap<>();
     private final Runnable vitalityTick = this::tickVitality;
     private boolean vitalityScheduled;
-    /** Whether "Paired, not nearby" shows every pairing or only the first few. */
-    private boolean showAllAway;
-    /** Paired devices that are not nearby, listed before "Show more". */
-    private static final int AWAY_SHOWN = 3;
+    private boolean awayPeersExpanded;
 
     private boolean foreground;
     private String screen = "";
@@ -139,6 +141,7 @@ final class NearbyController {
 
     void setNearbySend(boolean on) {
         host.prefs().edit().putBoolean(PREF_SEND_MODE, on).apply();
+        if (!on) awayPeersExpanded = false;
         updateDiscovery();
         host.requestImmediateRender();
     }
@@ -163,6 +166,7 @@ final class NearbyController {
     /** Called whenever the visible module changes. */
     void setScreen(String module) {
         screen = module == null ? "" : module;
+        if (!SCREEN_SEND.equals(screen)) awayPeersExpanded = false;
         updateDiscovery();
     }
 
@@ -490,6 +494,23 @@ final class NearbyController {
         text.setEllipsize(android.text.TextUtils.TruncateAt.END);
         line.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         return line;
+    }
+
+    private void addDeviceIcon(LinearLayout row, String type, boolean highlighted, boolean compact) {
+        UiKit u = host.ui();
+        ImageView icon = new ImageView(host.context());
+        boolean mobile = "phone".equals(type) || "tablet".equals(type);
+        icon.setImageResource(mobile ? R.drawable.ic_nearby_phone : R.drawable.ic_nearby_monitor);
+        icon.setColorFilter(highlighted ? Color.rgb(40, 112, 216) : u.muted());
+        icon.setBackground(u.rounded(highlighted ? Color.rgb(232, 241, 255) : Color.rgb(241, 245, 249),
+                u.dp(7), 0, 0));
+        int inset = u.dp(compact ? 4 : 6);
+        icon.setPadding(inset, inset, inset, inset);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        int size = u.dp(compact ? 24 : 32);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(size, size);
+        params.setMarginEnd(u.dp(compact ? 6 : 8));
+        row.addView(icon, 0, params);
     }
 
     /** The last row of the list: Nearby keeps looking after devices appear. */
@@ -875,30 +896,68 @@ final class NearbyController {
             String id = "p-" + peer.peerId;
             if (!listed.contains(id) && !pinned.contains(id) && peerDevice(peer.peerId) == null) awayPeers.add(peer);
         }
-        if (!awayPeers.isEmpty()) {
-            box.addView(u.text(c.getString(R.string.nearby_paired_away), 12, u.muted(), Typeface.BOLD), u.blockParams(u.dp(14)));
-            int shown = showAllAway ? awayPeers.size() : Math.min(AWAY_SHOWN, awayPeers.size());
-            for (NearbyModel.Peer peer : awayPeers.subList(0, shown)) {
-                LinearLayout row = nameLine(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, "away", 13, u.muted(), Typeface.NORMAL);
-                row.setPadding(u.dp(4), u.dp(6), u.dp(4), u.dp(2));
-                row.addView(u.text(lastSeenText(peer), 12, Color.rgb(148, 163, 184), Typeface.NORMAL));
-                box.addView(row);
-            }
-            if (awayPeers.size() > AWAY_SHOWN) {
-                TextView more = u.text(showAllAway ? c.getString(R.string.nearby_show_less)
-                        : c.getString(R.string.nearby_show_more, awayPeers.size() - AWAY_SHOWN), 13,
-                        Color.rgb(40, 112, 216), Typeface.BOLD);
-                more.setPadding(u.dp(4), u.dp(8), u.dp(4), u.dp(4));
-                more.setOnClickListener(v -> {
-                    showAllAway = !showAllAway;
-                    host.requestImmediateRender();
-                });
-                box.addView(more);
-            }
-        }
         box.addView(fallbackRow(), u.blockParams(u.dp(12)));
+        if (awayPeers.isEmpty()) {
+            awayPeersExpanded = false;
+        } else {
+            box.addView(awayPeersSection(awayPeers), u.blockParams(u.dp(4)));
+        }
         scheduleVitalityTick();
         return box;
+    }
+
+    private View awayPeersSection(List<NearbyModel.Peer> peers) {
+        UiKit u = host.ui();
+        Context c = host.context();
+        LinearLayout section = u.column();
+        LinearLayout header = u.row();
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setMinimumHeight(u.dp(48));
+        header.setPadding(u.dp(8), u.dp(4), u.dp(8), u.dp(4));
+        header.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.rgb(219, 231, 249)),
+                null, u.rounded(Color.WHITE, u.dp(8), 0, 0)));
+        header.setFocusable(true);
+
+        String title = c.getString(R.string.nearby_paired_away);
+        String count = c.getString(R.string.nearby_paired_away_count, peers.size());
+        TextView titleView = u.text(title, 12, u.muted(), Typeface.BOLD);
+        titleView.setGravity(Gravity.END);
+        header.addView(titleView,
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout.LayoutParams countParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        countParams.setMarginStart(u.dp(4));
+        header.addView(u.text(count, 12, u.muted(), Typeface.BOLD), countParams);
+        ImageView chevron = new ImageView(c);
+        chevron.setImageResource(R.drawable.ic_chevron_right);
+        chevron.setColorFilter(u.muted());
+        header.addView(chevron, new LinearLayout.LayoutParams(u.dp(18), u.dp(18)));
+        header.setContentDescription(title + " " + count);
+        ViewCompat.setScreenReaderFocusable(header, true);
+        section.addView(header, u.blockParams(0));
+
+        LinearLayout list = u.column();
+        for (NearbyModel.Peer peer : peers) {
+            LinearLayout row = nameLine(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, "away", 13, u.muted(), Typeface.NORMAL);
+            row.setPadding(u.dp(4), u.dp(6), u.dp(4), u.dp(2));
+            addDeviceIcon(row, peer.deviceType, false, true);
+            row.addView(u.text(lastSeenText(peer), 12, Color.rgb(148, 163, 184), Typeface.NORMAL));
+            list.addView(row);
+        }
+        section.addView(list, u.blockParams(0));
+
+        Runnable updateExpansion = () -> {
+            list.setVisibility(awayPeersExpanded ? View.VISIBLE : View.GONE);
+            chevron.setRotation(awayPeersExpanded ? 90f : 0f);
+            ViewCompat.setStateDescription(header, c.getString(awayPeersExpanded
+                    ? R.string.nearby_paired_away_expanded : R.string.nearby_paired_away_collapsed));
+        };
+        updateExpansion.run();
+        header.setOnClickListener(v -> {
+            awayPeersExpanded = !awayPeersExpanded;
+            updateExpansion.run();
+        });
+        return section;
     }
 
     /** "Last seen 3 days ago" for a paired device that is not nearby. */
@@ -928,6 +987,7 @@ final class NearbyController {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(u.dp(12), u.dp(9), u.dp(10), u.dp(9));
         row.setBackground(u.rounded(Color.rgb(251, 253, 255), u.dp(7), Color.rgb(226, 232, 240), 1));
+        addDeviceIcon(row, device.deviceType, device.paired && !away, false);
 
         LinearLayout labels = u.column();
         String presence = away ? "away" : presenceOf(device);
@@ -1114,6 +1174,7 @@ final class NearbyController {
                 LinearLayout row = u.row();
                 row.setGravity(Gravity.CENTER_VERTICAL);
                 NearbyModel.Device nearbyNow = peerDevice(peer.peerId);
+                addDeviceIcon(row, nearbyNow == null ? peer.deviceType : nearbyNow.deviceType, nearbyNow != null, true);
                 LinearLayout name = nameLine(peer.nickname.isEmpty() ? peer.peerId : peer.nickname, presenceOf(nearbyNow),
                         14, u.ink(), Typeface.NORMAL);
                 if (nearbyNow == null) {
@@ -1266,13 +1327,14 @@ final class NearbyController {
         EditText input = new EditText(c);
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(DEVICE_NAME_MAX_LENGTH)});
         input.setText(state.nickname);
         input.setSelectAllOnFocus(true);
         LinearLayout content = u.column();
         content.setPadding(u.dp(20), u.dp(8), u.dp(20), 0);
         content.addView(input);
         new AlertDialog.Builder(c)
-                .setTitle(R.string.nearby_rename_title)
+                .setTitle(c.getString(R.string.nearby_rename_title, DEVICE_NAME_MAX_LENGTH))
                 .setView(content)
                 .setNegativeButton(R.string.cancel, null)
                 .setPositiveButton(R.string.nearby_rename, (d, w) -> {

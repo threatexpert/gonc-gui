@@ -197,6 +197,7 @@ func (h *testHandler) DevicesChanged(d []Device) {
 }
 func (h *testHandler) IncomingPairing(p *Pairing)           { h.pairings <- p }
 func (h *testHandler) IncomingTransfer(t *IncomingTransfer) { h.transfers <- t }
+func (h *testHandler) PeerNicknameVerified(_, _, _ string)  {}
 
 func startTestService(t *testing.T, id Identity, port int, h Handler) *Service {
 	t.Helper()
