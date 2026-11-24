@@ -185,20 +185,18 @@ final class SendController {
             }
         }
 
+        card.addView(u.sectionDivider(), u.dividerParams(u.dp(8)));
         if (nearby != null) {
             // Nearby replaces the passphrase area while no passphrase share runs.
             boolean nearbyMode = nearby.isNearbySend() && session == null;
-            card.addView(u.sectionDivider(), u.dividerParams(u.dp(8)));
             card.addView(nearby.modeSwitch(nearbyMode, session == null, nearby::setNearbySend), u.blockParams(u.dp(10)));
             if (nearbyMode) {
                 card.addView(nearby.sendSection(shareItems));
                 return card;
             }
-            card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), false), u.blockParams(u.dp(10)));
-        } else {
-            card.addView(u.sectionBoundaryTitle(string(R.string.passphrase_config), true), u.blockParams(u.dp(8)));
         }
-        card.addView(passwordField());
+        card.addView(u.text(string(R.string.passphrase_hint), 12, u.muted(), Typeface.NORMAL), u.blockParams(u.dp(10)));
+        card.addView(passwordField(), u.blockParams(u.dp(8)));
         card.addView(u.sectionDivider(), u.dividerParams(u.dp(6)));
         card.addView(protocolToggle());
 

@@ -315,10 +315,12 @@
     <string name="editable_passphrase">Passphrase (editable)</string>
     <string name="receive_passphrase_placeholder">Passphrase or scan</string>
     <string name="connection_peer_wait_timeout">Peer wait timed out</string>
-    <string name="nearby_mode_passphrase">Passphrase</string>
-    <string name="nearby_mode_nearby">Nearby</string>
+    <string name="transfer_method">Transfer method</string>
+    <string name="nearby_mode_passphrase">Use passphrase</string>
+    <string name="nearby_mode_nearby">Nearby devices</string>
+    <string name="nearby_send_method_hint">On the same local network, select the other device. No passphrase needed.</string>
     <string name="nearby_searching">Looking for devices…</string>
-    <string name="nearby_searching_hint">Open Gonc on the other device and switch it to Nearby. Keep both on the same Wi-Fi.</string>
+    <string name="nearby_searching_hint">Open Gonc on the other device and switch to Nearby devices.</string>
     <string name="nearby_starting">Starting Nearby…</string>
     <string name="nearby_not_listed">Not listed? Use a passphrase instead. It also works between different networks.</string>
     <string name="nearby_use_passphrase">Use passphrase</string>
@@ -328,7 +330,7 @@
     <string name="nearby_pair">Pair</string>
     <string name="nearby_send">Send</string>
     <string name="nearby_connecting">Connecting…</string>
-    <string name="nearby_add_first">Add files above, then choose a device.</string>
+    <string name="nearby_add_first">Add files before sending.</string>
     <string name="nearby_status_connecting">Connecting…</string>
     <string name="nearby_status_waiting">Waiting for them to accept…</string>
     <string name="nearby_status_sending">Sending %1$d%%</string>

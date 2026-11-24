@@ -409,19 +409,17 @@ final class ReceiveController {
         chooseParams.setMargins(dp(8), 0, 0, 0);
         save.addView(choose, chooseParams);
         card.addView(save, blockParams());
+        card.addView(sectionDivider(), dividerParams(dp(14)));
         if (nearby != null) {
             boolean nearbyMode = nearby.isNearbyReceive();
-            card.addView(sectionDivider(), dividerParams(dp(14)));
             card.addView(nearby.modeSwitch(nearbyMode, canStartReceiveConnection(), nearby::setNearbyReceive),
                     blockParams(dp(10)));
             if (nearbyMode) {
                 card.addView(nearby.receiveSection());
                 return card;
             }
-            card.addView(sectionBoundaryTitle(string(R.string.passphrase_config), false), blockParams(dp(10)));
-        } else {
-            card.addView(sectionBoundaryTitle(string(R.string.passphrase_config), true), blockParams(dp(14)));
         }
+        card.addView(text(string(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(10)));
         card.addView(passwordField());
         card.addView(sectionDivider(), dividerParams(dp(12)));
         card.addView(protocolToggle());
@@ -1464,8 +1462,6 @@ final class ReceiveController {
     private View passwordField() {
         boolean locked = receiveSession != null;
         LinearLayout box = column();
-        box.addView(text(string(R.string.passphrase_hint), 12, muted(), Typeface.NORMAL), blockParams(dp(4)));
-
         LinearLayout line = row();
         EditText input = new EditText(context());
         input.setSingleLine(true);

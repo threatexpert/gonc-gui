@@ -2,9 +2,11 @@ package cn.threatexpert.gonc;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.RippleDrawable;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.provider.Settings;
@@ -562,12 +564,12 @@ final class NearbyController {
     }
 
     private void sendTo(NearbyModel.Device device, List<ShareItem> items, boolean quick) {
-        NearbyNode current = node;
-        if (current == null) {
-            return;
-        }
         if (items.isEmpty()) {
             host.toast(R.string.nearby_add_first);
+            return;
+        }
+        NearbyNode current = node;
+        if (current == null) {
             return;
         }
         List<ShareItem> snapshot = new ArrayList<>(items);
@@ -639,25 +641,51 @@ final class NearbyController {
 
     // --- views -----------------------------------------------------------
 
-    /** The Passphrase / Nearby switch shown at the top of the passphrase area. */
+    /** The transfer method selector shared by Send and Receive. */
     View modeSwitch(boolean nearby, boolean enabled, Consumer<Boolean> onChange) {
         UiKit u = host.ui();
-        LinearLayout box = u.row();
-        box.setPadding(u.dp(3), u.dp(3), u.dp(3), u.dp(3));
-        box.setBackground(u.rounded(Color.rgb(241, 245, 249), u.dp(8), 0, 0));
-        Button passphrase = u.segmentedButton(host.context().getString(R.string.nearby_mode_passphrase), !nearby);
-        Button near = u.segmentedButton(host.context().getString(R.string.nearby_mode_nearby), nearby);
+        Context c = host.context();
+        LinearLayout box = u.column();
+        box.addView(u.sectionBoundaryTitle(c.getString(R.string.transfer_method), false));
+
+        LinearLayout options = u.row();
+        options.setPadding(u.dp(3), u.dp(2), u.dp(3), u.dp(2));
+        options.setBackground(u.rounded(Color.rgb(241, 245, 249), u.dp(11), Color.rgb(226, 232, 240), 1));
+        Button passphrase = transferMethodButton(c.getString(R.string.nearby_mode_passphrase), !nearby);
         passphrase.setOnClickListener(v -> {
             if (nearby) onChange.accept(false);
         });
+        Button near = transferMethodButton(c.getString(R.string.nearby_mode_nearby), nearby);
         near.setOnClickListener(v -> {
             if (!nearby) onChange.accept(true);
         });
         u.setControlEnabled(passphrase, enabled);
         u.setControlEnabled(near, enabled);
-        box.addView(passphrase, new LinearLayout.LayoutParams(0, u.dp(36), 1));
-        box.addView(near, new LinearLayout.LayoutParams(0, u.dp(36), 1));
+        LinearLayout.LayoutParams passphraseParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
+        passphraseParams.setMarginEnd(u.dp(4));
+        options.addView(passphrase, passphraseParams);
+        options.addView(near, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        box.addView(options, u.blockParams(u.dp(6)));
         return box;
+    }
+
+    private Button transferMethodButton(String label, boolean selected) {
+        UiKit u = host.ui();
+        int fill = selected ? Color.WHITE : Color.TRANSPARENT;
+        int textColor = selected ? Color.rgb(31, 91, 175) : u.muted();
+        Button button = u.button(selected ? "✓  " + label : label, textColor, fill);
+        button.setContentDescription(label);
+        button.setSelected(selected);
+        button.setTextSize(13);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(u.dp(36));
+        button.setMinimumHeight(u.dp(36));
+        button.setPadding(u.dp(8), u.dp(5), u.dp(8), u.dp(5));
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.rgb(219, 231, 249)),
+                u.rounded(fill, u.dp(8), Color.rgb(190, 210, 240), selected ? 1 : 0),
+                u.rounded(Color.WHITE, u.dp(8), 0, 0)));
+        return button;
     }
 
     /** Device list shown on Send Files in Nearby mode. */
@@ -665,6 +693,8 @@ final class NearbyController {
         UiKit u = host.ui();
         Context c = host.context();
         LinearLayout box = u.column();
+        box.addView(u.text(c.getString(R.string.nearby_send_method_hint), 12, u.muted(), Typeface.NORMAL),
+                u.blockParams(u.dp(8)));
         if (node == null) {
             box.addView(statusLine(startError.isEmpty() ? c.getString(R.string.nearby_starting)
                     : c.getString(R.string.nearby_start_failed, startError)), u.blockParams(u.dp(10)));
@@ -749,7 +779,6 @@ final class NearbyController {
                 Button send = rowButton(u.primaryButton(c.getString(R.string.nearby_send)));
                 boolean quick = !device.paired;
                 send.setOnClickListener(v -> sendTo(device, items, quick));
-                u.setControlEnabled(send, !items.isEmpty());
                 LinearLayout.LayoutParams sendParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, u.dp(ROW_BUTTON_DP));
                 sendParams.setMargins(u.dp(6), 0, 0, 0);
                 row.addView(send, sendParams);

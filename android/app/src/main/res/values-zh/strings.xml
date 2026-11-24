@@ -308,10 +308,12 @@
     <string name="editable_passphrase">口令（可编辑）</string>
     <string name="receive_passphrase_placeholder">输入口令或扫码连接</string>
     <string name="connection_peer_wait_timeout">等待对端超时</string>
-    <string name="nearby_mode_passphrase">口令</string>
+    <string name="transfer_method">传输方式</string>
+    <string name="nearby_mode_passphrase">使用口令</string>
     <string name="nearby_mode_nearby">附近设备</string>
+    <string name="nearby_send_method_hint">同一局域网内，直接选择对方设备，无需口令。</string>
     <string name="nearby_searching">正在查找设备…</string>
-    <string name="nearby_searching_hint">请在另一台设备上打开 Gonc 并切换到“附近设备”，两台设备需连接同一 Wi-Fi。</string>
+    <string name="nearby_searching_hint">请在另一台设备上打开 Gonc 并切换到「附近设备」。</string>
     <string name="nearby_starting">正在启动附近设备…</string>
     <string name="nearby_not_listed">对方没有出现？可以改用口令方式，不同网络之间也能使用。</string>
     <string name="nearby_use_passphrase">改用口令</string>
@@ -321,7 +323,7 @@
     <string name="nearby_pair">配对</string>
     <string name="nearby_send">发送</string>
     <string name="nearby_connecting">正在连接…</string>
-    <string name="nearby_add_first">请先在上方添加文件，再选择设备。</string>
+    <string name="nearby_add_first">请先添加要发送的文件。</string>
     <string name="nearby_status_connecting">正在连接…</string>
     <string name="nearby_status_waiting">等待对方接收…</string>
     <string name="nearby_status_sending">正在发送 %1$d%%</string>
