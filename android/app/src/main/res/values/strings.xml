@@ -371,6 +371,16 @@
     <string name="nearby_receive_cancelled">%1$s cancelled sending</string>
     <string name="nearby_receive_failed">Receiving from %1$s failed: %2$s</string>
     <string name="nearby_start_failed">Nearby could not start: %1$s</string>
+    <string name="nearby_searching_more">Looking for more devices…</string>
+    <string name="nearby_searching_more_hint">Open Gonc on another device and switch to Nearby devices to see it here.</string>
+    <string name="nearby_last_seen">Last seen %1$d s ago</string>
+    <string name="nearby_not_nearby">Not nearby right now</string>
+    <string name="nearby_paired_away">Paired, not nearby</string>
+    <string name="nearby_last_seen_ago">Last seen %1$s</string>
+    <string name="nearby_never_seen">Not seen since pairing</string>
+    <string name="nearby_show_more">Show %1$d more</string>
+    <string name="nearby_show_less">Show less</string>
+    <string name="nearby_broadcasting">Visible to nearby devices now</string>
     <string name="nearby_error_not_paired">it no longer recognizes this pairing</string>
     <string name="nearby_error_quick_refused">it only accepts files from paired devices. Pair with it first.</string>
     <string name="nearby_error_busy">it is busy. Try again in a moment.</string>

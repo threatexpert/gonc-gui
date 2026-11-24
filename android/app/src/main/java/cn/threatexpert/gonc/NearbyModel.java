@@ -24,6 +24,14 @@ final class NearbyModel {
         String peerId = "";
         boolean paired;
         boolean quickReceive;
+        /** "online", or "fading" once the device has stopped announcing itself. */
+        String status = "online";
+        /** When the device was last heard from, in epoch milliseconds, or 0. */
+        long lastSeenMs;
+
+        boolean fading() {
+            return "fading".equals(status);
+        }
 
         String displayName() {
             return nickname.isEmpty() ? id : nickname;
@@ -34,6 +42,21 @@ final class NearbyModel {
         String peerId = "";
         String nickname = "";
         String deviceType = "";
+        /** When the pairing was made and when the device was last nearby, in epoch ms, or 0. */
+        long pairedAtMs;
+        long lastSeenMs;
+    }
+
+    /**
+     * Paired devices most recently seen first. Pairings not seen since they
+     * were made are ordered by when they were made.
+     */
+    static List<Peer> byLastSeen(List<Peer> peers) {
+        List<Peer> sorted = new ArrayList<>(peers);
+        Collections.sort(sorted, (a, b) -> Long.compare(
+                b.lastSeenMs > 0 ? b.lastSeenMs : b.pairedAtMs,
+                a.lastSeenMs > 0 ? a.lastSeenMs : a.pairedAtMs));
+        return sorted;
     }
 
     static final class State {
@@ -42,6 +65,9 @@ final class NearbyModel {
         boolean quickReceive = true;
         boolean discovering;
         String discoveryError = "";
+        /** See nearby.DeviceFadeAfter and nearby.DeviceExpiry. */
+        long deviceFadeMs = 7000;
+        long deviceExpiryMs = 16000;
         List<Device> devices = Collections.emptyList();
         List<Peer> peers = Collections.emptyList();
 
@@ -54,6 +80,8 @@ final class NearbyModel {
                 state.quickReceive = o.optBoolean("quickReceive", true);
                 state.discovering = o.optBoolean("discovering", false);
                 state.discoveryError = o.optString("discoveryError", "");
+                state.deviceFadeMs = o.optLong("deviceFadeMs", state.deviceFadeMs);
+                state.deviceExpiryMs = o.optLong("deviceExpiryMs", state.deviceExpiryMs);
                 List<Device> devices = new ArrayList<>();
                 JSONArray list = o.optJSONArray("devices");
                 for (int i = 0; list != null && i < list.length(); i++) {
@@ -66,6 +94,8 @@ final class NearbyModel {
                     device.peerId = d.optString("peerId", "");
                     device.paired = d.optBoolean("paired", false);
                     device.quickReceive = d.optBoolean("quickReceive", false);
+                    device.status = d.optString("status", "online");
+                    device.lastSeenMs = parseTime(d.optString("lastSeen", ""));
                     if (!device.id.isEmpty()) devices.add(device);
                 }
                 state.devices = devices;
@@ -78,6 +108,8 @@ final class NearbyModel {
                     peer.peerId = p.optString("peerId", "");
                     peer.nickname = p.optString("nickname", "");
                     peer.deviceType = p.optString("deviceType", "");
+                    peer.pairedAtMs = parseTime(p.optString("pairedAt", ""));
+                    peer.lastSeenMs = parseTime(p.optString("lastSeen", ""));
                     if (!peer.peerId.isEmpty()) peers.add(peer);
                 }
                 state.peers = peers;
@@ -86,6 +118,43 @@ final class NearbyModel {
             }
             return state;
         }
+    }
+
+    /** Parses a Go time in JSON, such as 2026-11-24T08:33:57.7477666+09:00, or returns 0. */
+    static long parseTime(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0;
+        }
+        try {
+            long ms = java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli();
+            return Math.max(0, ms);
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * How present a device looks, from 1 down to 0.5. It stays at 1 while the
+     * device announces itself normally; once the service marks it fading it
+     * eases toward 0.5 at 90% of the time after which it leaves the list. The
+     * desktop page uses the same rule.
+     */
+    static float vitality(Device d, long now, long fadeMs, long expiryMs) {
+        if (!d.fading() || d.lastSeenMs <= 0) {
+            return 1f;
+        }
+        long age = now - d.lastSeenMs;
+        if (age <= fadeMs) {
+            return 1f;
+        }
+        double end = Math.max(fadeMs + 1, expiryMs * 0.9);
+        double p = Math.min(1.0, (age - fadeMs) / (end - fadeMs));
+        return (float) (1.0 - 0.5 * p);
+    }
+
+    /** Whole seconds since the device was last heard from, at least 1. */
+    static int secondsSilent(Device d, long now) {
+        return (int) Math.max(1, Math.round((now - d.lastSeenMs) / 1000.0));
     }
 
     static final class Pairing {

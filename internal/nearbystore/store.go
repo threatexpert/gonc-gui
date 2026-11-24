@@ -32,6 +32,10 @@ type Store struct {
 	// Addresses are host:port entries the user added by hand.
 	Addresses []string            `json:"addresses,omitempty"`
 	Peers     []nearby.PeerRecord `json:"peers"`
+	// PeerLastSeen is when each paired device, by installation ID, was
+	// last on the network with this one. The app uses it to order and
+	// describe paired devices that are not nearby.
+	PeerLastSeen map[string]time.Time `json:"peerLastSeen,omitempty"`
 }
 
 // Identity returns the nearby.Identity described by the store.
@@ -55,6 +59,7 @@ func (s *Store) RemovePeer(installationID string) bool {
 	for i := range s.Peers {
 		if s.Peers[i].InstallationID == installationID {
 			s.Peers = append(s.Peers[:i], s.Peers[i+1:]...)
+			delete(s.PeerLastSeen, installationID)
 			return true
 		}
 	}

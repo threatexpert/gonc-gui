@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	announceFast       = 1 * time.Second
-	announceSlow       = 2 * time.Second
-	fastPhase          = 5 * time.Second
-	deviceExpiry       = 16 * time.Second
-	tagRotation        = 15 * time.Minute
-	interfaceRefresh   = 30 * time.Second
+	announceFast = 1 * time.Second
+	announceSlow = 2 * time.Second
+	fastPhase    = 5 * time.Second
+	tagRotation  = 15 * time.Minute
+	// interfaceRefresh is how often interfaces are checked, so the group is
+	// joined again soon after a network change such as a Wi-Fi reconnect.
+	interfaceRefresh   = 5 * time.Second
 	maxDevices         = 64
 	maxAddresses       = 4
 	maxActiveConns     = 16
@@ -37,6 +38,15 @@ const (
 	// manualProbeSkip skips the check when the device was heard from by
 	// other means more recently than this.
 	manualProbeSkip = 4 * time.Second
+)
+
+// A device announces itself every announceSlow. One that has been silent
+// for DeviceFadeAfter, about three missed announcements, is marked
+// DeviceFading; after DeviceExpiry it is removed from the list. Apps use
+// both to show a device that is going away instead of dropping it abruptly.
+const (
+	DeviceFadeAfter = 7 * time.Second
+	DeviceExpiry    = 16 * time.Second
 )
 
 // Config starts a Service.
@@ -386,8 +396,13 @@ func (s *Service) SetPeers(records []PeerRecord) {
 	s.notify()
 }
 
-// Refresh asks nearby devices to announce themselves now.
+// Refresh joins the multicast group on any new or changed interface and
+// asks nearby devices to announce themselves now. Apps call it when they
+// come to the foreground or the network changes.
 func (s *Service) Refresh() {
+	if s.disc != nil {
+		_, _ = s.disc.refreshInterfaces()
+	}
 	s.mu.Lock()
 	s.fastUntil = time.Now().Add(fastPhase)
 	s.mu.Unlock()
@@ -551,11 +566,16 @@ func (s *Service) announceLoop() {
 		case <-timer.C:
 		}
 		now := time.Now()
+		rejoined := false
 		if s.disc != nil && now.Sub(lastIfaceRefresh) >= interfaceRefresh {
-			_ = s.disc.refreshInterfaces()
+			rejoined, _ = s.disc.refreshInterfaces()
 			lastIfaceRefresh = now
 		}
 		s.mu.Lock()
+		if rejoined {
+			// The network changed: find devices quickly on it.
+			s.fastUntil = now.Add(fastPhase)
+		}
 		if now.Sub(s.tagAt) >= tagRotation {
 			_ = s.rotateTagLocked()
 		}
@@ -587,11 +607,17 @@ func (s *Service) announceLoop() {
 	}
 }
 
+// pruneLocked removes expired devices and marks silent ones as fading.
 func (s *Service) pruneLocked(now time.Time) bool {
 	changed := false
 	for id, d := range s.devices {
-		if now.Sub(d.LastSeen) > deviceExpiry {
+		age := now.Sub(d.LastSeen)
+		switch {
+		case age > DeviceExpiry:
 			delete(s.devices, id)
+			changed = true
+		case age > DeviceFadeAfter && d.Status != DeviceFading:
+			d.Status = DeviceFading
 			changed = true
 		}
 	}
@@ -699,6 +725,10 @@ func (s *Service) observeLocked(a *advert, ip string, src net.Addr, now time.Tim
 	}
 	d.tag = a.Tag
 	d.LastSeen = now
+	if d.Status != DeviceOnline {
+		d.Status = DeviceOnline
+		changed = true
+	}
 	if src != nil {
 		d.src = src
 	}

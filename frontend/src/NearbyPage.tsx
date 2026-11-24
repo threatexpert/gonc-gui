@@ -35,8 +35,17 @@ const strings = {
     showMe: 'Show this device',
     rename: 'Rename',
     devices: 'Nearby devices',
-    refresh: 'Look again',
     searching: 'Looking for devices…',
+    locale: 'en',
+    lastSeenAgo: (ago: string) => `Last seen ${ago}`,
+    neverSeen: 'Not seen since pairing',
+    showMore: (n: number) => `Show ${n} more`,
+    showLess: 'Show less',
+    searchingMore: 'Looking for more devices…',
+    searchingMoreHint: 'Open Nearby in Gonc on another device to see it here.',
+    lastSeen: (seconds: number) => `Last seen ${seconds} s ago`,
+    notNearby: 'Not nearby right now',
+    pairedAway: 'Paired, not nearby',
     searchingHint: 'Open Nearby in Gonc on the other device and keep both on the same network.',
     paired: 'Paired',
     notPaired: 'Not paired',
@@ -116,6 +125,7 @@ const strings = {
     } as Record<string, (name: string) => string>,
     forgetPairing: 'Forget pairing',
     dismiss: 'Dismiss',
+    broadcasting: 'Visible to nearby devices now.',
   },
   zh: {
     title: '附近设备',
@@ -127,8 +137,17 @@ const strings = {
     showMe: '让本机可见',
     rename: '改名',
     devices: '附近的设备',
-    refresh: '重新查找',
     searching: '正在查找设备…',
+    locale: 'zh-CN',
+    lastSeenAgo: (ago: string) => `${ago}在线`,
+    neverSeen: '配对后未再出现',
+    showMore: (n: number) => `显示其余 ${n} 台`,
+    showLess: '收起',
+    searchingMore: '正在继续查找设备…',
+    searchingMoreHint: '在另一台设备的 Gonc 中打开“附近设备”，它就会出现在这里。',
+    lastSeen: (seconds: number) => `${seconds} 秒前在线`,
+    notNearby: '暂时不在附近',
+    pairedAway: '已配对，暂不在附近',
     searchingHint: '请在另一台设备的 Gonc 中打开“附近设备”，并保持两台设备在同一网络。',
     paired: '已配对',
     notPaired: '未配对',
@@ -208,6 +227,7 @@ const strings = {
     } as Record<string, (name: string) => string>,
     forgetPairing: '忘记配对',
     dismiss: '关闭',
+    broadcasting: '附近设备现在可以发现本机。',
   },
 };
 
@@ -241,11 +261,59 @@ function formatCode(code: string) {
   return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
 }
 
+/** Paired devices that are not nearby, listed before "Show more". */
+const AWAY_SHOWN = 3;
+
+/** A time in the past as "3 days ago", "yesterday" or "3 天前" in the app's language. */
+function agoText(ms: number, now: number, locale: string) {
+  const rtf = new Intl.RelativeTimeFormat(locale, {numeric: 'auto'});
+  const minutes = Math.max(1, Math.round((now - ms) / 60000));
+  if (minutes < 60) return rtf.format(-minutes, 'minute');
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return rtf.format(-hours, 'hour');
+  const days = Math.round(hours / 24);
+  if (days < 30) return rtf.format(-days, 'day');
+  const months = Math.round(days / 30);
+  if (months < 12) return rtf.format(-months, 'month');
+  return rtf.format(-Math.round(days / 365), 'year');
+}
+
+/** A Go time as epoch milliseconds, or 0 for Go's zero time or bad input. */
+function timeMs(value: unknown) {
+  const ms = Date.parse(String(value ?? ''));
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
 function deviceIcon(type: string): IconName {
   return type === 'phone' || type === 'tablet' ? 'phone' : 'monitor';
 }
 
 /** State and actions shared by the Nearby page and the app-wide dialogs. */
+/**
+ * How present a device looks, from 1 down to 0.5. A device stays at 1 while
+ * it announces itself normally; once the service marks it fading, it eases
+ * toward 0.5 at 90% of the time after which it leaves the list.
+ */
+export function deviceVitality(device: nearby.Device, now: number, fadeMs: number, expiryMs: number) {
+  if (device.status !== 'fading') return 1;
+  const age = now - Date.parse(String(device.lastSeen));
+  if (!Number.isFinite(age) || age <= fadeMs) return 1;
+  const end = Math.max(fadeMs + 1, expiryMs * 0.9);
+  return 1 - 0.5 * Math.min(1, (age - fadeMs) / (end - fadeMs));
+}
+
+/** The current time, updated every second while active is true. */
+function useNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
 export function useNearbyModel(lang: Lang) {
   const t = strings[lang];
   const [state, setState] = useState<nearbyapp.State | null>(null);
@@ -269,13 +337,20 @@ export function useNearbyModel(lang: Lang) {
   // When the user picks an unpaired device to send to, the send starts
   // automatically once pairing succeeds.
   const sendAfterPairing = useRef<{pairingId: string; paths: string[]} | null>(null);
+  // Every device seen since the page opened, so a card with a send in
+  // progress or a failure stays on screen after the device leaves the list.
+  const lastKnown = useRef<Record<string, nearby.Device>>({});
+  const remember = useCallback((next: nearbyapp.State) => {
+    for (const device of next.devices || []) lastKnown.current[device.id] = device;
+    setState(next);
+  }, []);
 
   useEffect(() => {
-    NearbyState().then(setState).catch(() => undefined);
+    NearbyState().then(remember).catch(() => undefined);
     NearbyTransfers()
       .then((list) => setTransfers(Object.fromEntries((list || []).map((item) => [item.id, item]))))
       .catch(() => undefined);
-    EventsOn('nearby:state', (next: nearbyapp.State) => setState(next));
+    EventsOn('nearby:state', (next: nearbyapp.State) => remember(next));
     EventsOn('nearby:transfer', (item: nearbyapp.TransferInfo) => {
       setTransfers((current) => {
         if (item.direction === 'send' && item.status === 'failed' && item.deviceId && current[item.id]?.status !== 'failed') {
@@ -426,7 +501,7 @@ export function useNearbyModel(lang: Lang) {
   return {
     t, state, transfers: transferList, pairing, pairingConfirmed, offer, notice, error,
     busyDevices, cancelling, activeSends, revealTransfer, setRevealTransfer,
-    failedSends, dismissFailure, revealDevice, setRevealDevice,
+    failedSends, dismissFailure, revealDevice, setRevealDevice, lastKnown: lastKnown.current,
     setError, setNotice, run, sendTo, quickSend, pairOnly, answerPairing, cancelTransfer,
     clearFinished: async () => {
       await NearbyClearFinished();
@@ -529,9 +604,80 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   // Forgetting asks for a second click; WebView hosts do not all support window.confirm.
   const [confirmForget, setConfirmForget] = useState<string | null>(null);
-  const devices = state?.devices || [];
+  const devices = useMemo(() => state?.devices || [], [state]);
   const hasFinished = transfers.some((item) => !activeStatuses.has(item.status));
   const {revealTransfer, setRevealTransfer} = model;
+  const discovering = !!state?.discovering;
+  const fadeMs = state?.deviceFadeMs || 7000;
+  const expiryMs = state?.deviceExpiryMs || 16000;
+
+  // Cards with a send, a connection attempt or a failure stay on screen even
+  // when their device leaves the list; they show it is not nearby.
+  const presentIds = useMemo(() => new Set(devices.map((device) => device.id)), [devices]);
+  const pinnedIds = useMemo(
+    () => new Set([...Object.keys(model.activeSends), ...Object.keys(model.busyDevices), ...Object.keys(model.failedSends)]),
+    [model.activeSends, model.busyDevices, model.failedSends],
+  );
+  const awayCards = [...pinnedIds]
+    .filter((id) => !presentIds.has(id))
+    .map((id) => model.lastKnown[id])
+    .filter((device): device is nearby.Device => !!device);
+
+  // An unpaired device that leaves fades out instead of vanishing. A paired
+  // one moves to "Paired, not nearby" below.
+  const [leaving, setLeaving] = useState<Record<string, nearby.Device>>({});
+  const previousDevices = useRef<nearby.Device[]>([]);
+  useEffect(() => {
+    // A device that rotated its tag is listed again under a new ID with the
+    // same name; it has not left.
+    const names = new Set(devices.map((device) => device.nickname));
+    const gone = previousDevices.current.filter((device) => !presentIds.has(device.id) && !device.paired
+      && !pinnedIds.has(device.id) && !names.has(device.nickname));
+    previousDevices.current = devices;
+    if (gone.length === 0) return;
+    setLeaving((current) => ({...current, ...Object.fromEntries(gone.map((device) => [device.id, device]))}));
+    window.setTimeout(() => setLeaving((current) => {
+      const next = {...current};
+      for (const device of gone) delete next[device.id];
+      return next;
+    }), 400);
+  }, [devices, presentIds, pinnedIds]);
+  const leavingCards = Object.values(leaving).filter((device) => !presentIds.has(device.id) && !pinnedIds.has(device.id));
+
+  const cards = [
+    ...devices.map((device) => ({device, away: false, leaving: false})),
+    ...awayCards.map((device) => ({device, away: true, leaving: false})),
+    ...leavingCards.map((device) => ({device, away: false, leaving: true})),
+  ];
+  // Paired devices that are not nearby, most recently seen first. Pairings
+  // never seen since are ordered by when they were paired.
+  const [showAllAway, setShowAllAway] = useState(false);
+  const awayPeers = (state?.peers || [])
+    .filter((peer) => {
+      const id = `p-${peer.peerId}`;
+      return !presentIds.has(id) && !pinnedIds.has(id) && !devices.some((device) => device.peerId === peer.peerId);
+    })
+    .map((peer) => ({peer, seen: timeMs(peer.lastSeen)}))
+    .sort((a, b) => (b.seen || timeMs(b.peer.pairedAt)) - (a.seen || timeMs(a.peer.pairedAt)));
+  const awayShown = showAllAway ? awayPeers : awayPeers.slice(0, AWAY_SHOWN);
+  const now = useNow(devices.some((device) => device.status === 'fading'));
+
+  // Coming back to the window is when a refresh helps: it announces this
+  // device at once and joins the network again if it changed.
+  useEffect(() => {
+    let last = 0;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 3000) return;
+      last = Date.now();
+      NearbyRefresh().catch(() => undefined);
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
 
   // After the user accepts files, make sure the transfer is on screen. The
   // row may render a moment later, so fall back to the Transfers card.
@@ -573,12 +719,16 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
 
   async function forget(device: nearby.Device) {
     if (!device.peerId) return;
-    if (confirmForget !== device.id) {
-      setConfirmForget(device.id);
+    await forgetPeer(device.id, device.peerId);
+  }
+
+  async function forgetPeer(key: string, peerId: string) {
+    if (confirmForget !== key) {
+      setConfirmForget(key);
       return;
     }
     setConfirmForget(null);
-    await model.run(() => NearbyForget(device.peerId!));
+    await model.run(() => NearbyForget(peerId));
   }
 
   return (
@@ -588,8 +738,10 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
       {notice && <div className="nearby-notice" role="status"><Icon name="check" />{notice}</div>}
 
       {state && !state.error && (
-        <section className={`nearby-ready${state.visible ? '' : ' hidden'}`} aria-live="polite">
-          <span className="nearby-ready-icon"><Icon name={state.visible ? 'receive' : 'eyeOff'} /></span>
+        <section className={`nearby-ready${state.visible ? '' : ' hidden'}${state.visible && discovering ? ' broadcasting' : ''}`} aria-live="polite">
+          <span className="nearby-ready-icon" title={state.visible && discovering ? t.broadcasting : undefined}>
+            <Icon name={state.visible ? 'receive' : 'eyeOff'} />
+          </span>
           <div className="nearby-ready-text">
             <strong>{state.visible ? t.readyTitle(state.nickname) : t.hiddenTitle}</strong>
             <small>{state.visible ? t.readyBody : t.hiddenBody}</small>
@@ -618,15 +770,10 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
       <section className="card nearby-devices-card">
         <div className="card-head">
           <h2>{t.devices}</h2>
-          <div className="card-actions">
-            <button type="button" className="icon-button" onClick={() => model.run(NearbyRefresh)} aria-label={t.refresh} title={t.refresh}>
-              <Icon name="refresh" />
-            </button>
-          </div>
         </div>
         <div className="card-body">
           {state?.discoveryError && <p className="nearby-warning">{t.discoveryWarning}</p>}
-          {devices.length === 0 ? (
+          {cards.length === 0 ? (
             <div className="empty-state compact nearby-searching">
               <span className="nearby-pulse" aria-hidden="true"><Icon name="nearby" /></span>
               <strong>{t.searching}</strong>
@@ -634,27 +781,44 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
             </div>
           ) : (
             <div className="nearby-device-grid">
-              {devices.map((device) => {
+              {cards.map(({device, away, leaving: isLeaving}) => {
                 const busy = !!model.busyDevices[device.id];
                 const sending = model.activeSends[device.id];
                 const sendPercent = sending && sending.totalBytes > 0 ? Math.min(100, Math.round((sending.doneBytes / sending.totalBytes) * 100)) : 0;
                 const failure = sending ? undefined : model.failedSends[device.id];
+                const fading = !away && !isLeaving && device.status === 'fading';
+                // A card the user is working with stays fully visible.
+                const vitality = sending || busy || failure ? 1 : deviceVitality(device, now, fadeMs, expiryMs);
+                const silentFor = fading ? Math.max(1, Math.round((now - Date.parse(String(device.lastSeen))) / 1000)) : 0;
+                const presence = away || isLeaving ? 'away' : fading ? 'fading' : 'online';
                 return (
-                <div key={device.id} id={`nearby-device-${device.id}`} className={`nearby-device${device.paired ? ' paired' : ''}${sending ? ' sending' : ''}${failure ? ' failed' : ''}`}>
+                <div
+                  key={device.id}
+                  id={`nearby-device-${device.id}`}
+                  className={`nearby-device${device.paired ? ' paired' : ''}${sending ? ' sending' : ''}${failure ? ' failed' : ''}${away ? ' away' : ''}${isLeaving ? ' leaving' : ''}`}
+                  style={vitality < 1 ? {opacity: vitality} : undefined}
+                >
                   <span className="nearby-device-icon"><Icon name={deviceIcon(device.deviceType)} /></span>
                   <div className="nearby-device-text">
-                    <strong title={device.nickname}>{device.nickname || device.addresses?.[0]}</strong>
+                    <strong title={device.nickname}>
+                      <span className={`nearby-presence ${presence}`} aria-hidden="true" />
+                      {device.nickname || device.addresses?.[0]}
+                    </strong>
                     {sending ? (
                       <span className="active" role="status">
                         {t.activeSend(sending.status === 'transferring' ? `${sendPercent}%` : (t.cardStatus[sending.status] || t.status[sending.status] || sending.status))}
                       </span>
+                    ) : away ? (
+                      <span>{t.notNearby}</span>
+                    ) : fading ? (
+                      <span>{t.lastSeen(silentFor)}</span>
                     ) : (
                       <span className={device.paired ? 'ok' : ''}>{device.paired ? t.paired : t.notPaired}</span>
                     )}
                     {sending?.status === 'transferring' && <div className="nearby-progress" aria-hidden="true"><span style={{width: `${sendPercent}%`}} /></div>}
                   </div>
                   <div className="nearby-device-actions">
-                    {device.paired && !sending && (
+                    {device.paired && !sending && !away && (
                       <button
                         type="button"
                         className={`ghost nearby-forget${confirmForget === device.id ? ' confirming' : ''}`}
@@ -669,7 +833,7 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
                       <button type="button" className="ghost" disabled={!!model.cancelling[sending.id]} onClick={() => model.cancelTransfer(sending.id)}>
                         {model.cancelling[sending.id] ? t.cancelling : t.cancel}
                       </button>
-                    ) : busy ? (
+                    ) : away || isLeaving ? null : busy ? (
                       <button type="button" className="secondary" disabled aria-busy="true">
                         <span className="spinner-dot" aria-hidden="true" />{t.connectingTo}
                       </button>
@@ -707,6 +871,48 @@ export function NearbyPage({model, onAddContent, onOpenMode, shareCard, sharePat
                 </div>
                 );
               })}
+              {discovering && (
+                <div className="nearby-device nearby-device-placeholder" aria-live="off">
+                  <span className="nearby-pulse small" aria-hidden="true"><Icon name="nearby" /></span>
+                  <div className="nearby-device-text">
+                    <strong>{t.searchingMore}</strong>
+                    <span>{t.searchingMoreHint}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {awayPeers.length > 0 && (
+            <div className="nearby-away">
+              <h3>{t.pairedAway}</h3>
+              <ul>
+                {awayShown.map(({peer, seen}) => {
+                  const key = `peer-${peer.peerId}`;
+                  return (
+                    <li key={peer.peerId}>
+                      <span className="nearby-device-icon"><Icon name={deviceIcon(peer.deviceType)} /></span>
+                      <span className="nearby-away-name" title={peer.nickname}>{peer.nickname}</span>
+                      <span className="nearby-away-status" title={seen ? new Date(seen).toLocaleString(t.locale) : undefined}>
+                        {seen ? t.lastSeenAgo(agoText(seen, Date.now(), t.locale)) : t.neverSeen}
+                      </span>
+                      <button
+                        type="button"
+                        className={`ghost nearby-forget${confirmForget === key ? ' confirming' : ''}`}
+                        onClick={() => forgetPeer(key, peer.peerId)}
+                        onBlur={() => setConfirmForget((current) => (current === key ? null : current))}
+                        title={confirmForget === key ? t.forgetConfirm(peer.nickname) : t.forget}
+                      >
+                        {confirmForget === key ? t.forgetSure : t.forget}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {awayPeers.length > AWAY_SHOWN && (
+                <button type="button" className="quiet-action nearby-away-more" aria-expanded={showAllAway} onClick={() => setShowAllAway((v) => !v)}>
+                  {showAllAway ? t.showLess : t.showMore(awayPeers.length - AWAY_SHOWN)}
+                </button>
+              )}
             </div>
           )}
           <div className="nearby-fallback">

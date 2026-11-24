@@ -95,4 +95,40 @@ public class NearbyModelTest {
         assertEquals("idle", m.p2pStatus);
         assertEquals("last send's total stays visible", 1000, m.outBytes);
     }
+
+    @Test public void silentDevicesFadeTowardHalf() {
+        NearbyModel.State state = NearbyModel.State.parse("{\"deviceFadeMs\":7000,\"deviceExpiryMs\":16000,"
+                + "\"devices\":[{\"id\":\"a\",\"status\":\"fading\",\"lastSeen\":\"2026-11-24T08:33:50.5+09:00\"},"
+                + "{\"id\":\"b\",\"lastSeen\":\"0001-01-01T00:00:00Z\"}]}");
+        assertEquals(7000, state.deviceFadeMs);
+        assertEquals(16000, state.deviceExpiryMs);
+        NearbyModel.Device a = state.devices.get(0);
+        NearbyModel.Device b = state.devices.get(1);
+        assertTrue(a.fading());
+        assertEquals(java.time.Instant.parse("2026-11-23T23:33:50.500Z").toEpochMilli(), a.lastSeenMs);
+        assertFalse("status defaults to online", b.fading());
+        assertEquals("Go's zero time means unknown", 0, b.lastSeenMs);
+
+        long seen = a.lastSeenMs;
+        assertEquals(1f, NearbyModel.vitality(a, seen + 7000, 7000, 16000), 0.001);
+        assertEquals(0.5f, NearbyModel.vitality(a, seen + 14400, 7000, 16000), 0.001);
+        assertEquals(0.75f, NearbyModel.vitality(a, seen + 10700, 7000, 16000), 0.001);
+        assertEquals("never below half", 0.5f, NearbyModel.vitality(a, seen + 60000, 7000, 16000), 0.001);
+        assertEquals("online devices stay solid", 1f, NearbyModel.vitality(b, seen + 60000, 7000, 16000), 0.001);
+        assertEquals(9, NearbyModel.secondsSilent(a, seen + 9200));
+        assertEquals("at least one second", 1, NearbyModel.secondsSilent(a, seen));
+        assertEquals(0, NearbyModel.parseTime("not a time"));
+    }
+
+    @Test public void awayPairingsAreOrderedByLastSeen() {
+        NearbyModel.State state = NearbyModel.State.parse("{\"peers\":["
+                + "{\"peerId\":\"old\",\"pairedAt\":\"2026-01-01T00:00:00Z\",\"lastSeen\":\"2026-02-01T00:00:00Z\"},"
+                + "{\"peerId\":\"never\",\"pairedAt\":\"2026-11-20T00:00:00Z\",\"lastSeen\":\"0001-01-01T00:00:00Z\"},"
+                + "{\"peerId\":\"recent\",\"pairedAt\":\"2025-06-01T00:00:00Z\",\"lastSeen\":\"2026-11-23T00:00:00Z\"}]}");
+        assertEquals(0, state.peers.get(1).lastSeenMs);
+        java.util.List<NearbyModel.Peer> sorted = NearbyModel.byLastSeen(state.peers);
+        assertEquals("recent", sorted.get(0).peerId);
+        assertEquals("never seen: ordered by when it was paired", "never", sorted.get(1).peerId);
+        assertEquals("old", sorted.get(2).peerId);
+    }
 }
