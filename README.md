@@ -373,7 +373,14 @@ gonc-gui/
   frontend/                 Desktop React UI
   internal/goncrunner/      Embedded gonc session runner
   internal/httpdownload/    Desktop HTTP receive downloader
+  internal/nearby/          Nearby discovery, pairing, and transfer protocol
+  internal/nearbyapp/       Nearby service shared by desktop and Android
+  internal/tunengine/       Shared tun2socks engine for desktop and Android VPN
   android/                  Android app
+  android/mobilegonc/       Go bindings for passphrase transfers and VPN
+  android/nearbygo/         Go bindings for Android Nearby
+  android/internal/mobilefilesource/
+                            Shared Android file source adapter
   android/update-mobilegonc-aar.bat
                             Rebuild the Android mobilegonc.aar
 ```

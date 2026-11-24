@@ -2,6 +2,8 @@
 
 **Status** Desktop implementation in progress; protocol not yet reviewed. See [Implementation notes](#implementation-notes-2026-11-22) for where the code differs from this draft.
 
+**2026-11-24 update.** The Nearby protocol moved from gonc’s public `github.com/threatexpert/gonc/v2/nearby` package to gonc-gui’s [`internal/nearby`](../internal/nearby) so the protocol can evolve alongside its desktop and Android callers. It continues to use gonc’s `easyp2p` and `secure` packages.
+
 The goal is fast file sharing between devices on the same local network. The sender selects files and picks a nearby device. On their first transfer, the users compare a six-digit number shown on both devices. On later transfers, Gonc authenticates the devices automatically and the recipient only needs to accept the file request.
 
 The `gonc` repository contains the shared Go implementation. Desktop and Android use it through `goncembed` and `mobilegonc`. The application owns device identity, persistent pairing records, and user decisions. The CLI keeps its existing dependency graph.

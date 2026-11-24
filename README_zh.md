@@ -302,7 +302,14 @@ gonc-gui/
   frontend/                 桌面端 React UI
   internal/goncrunner/      内嵌的 gonc 会话运行器
   internal/httpdownload/    桌面端 HTTP 接收下载器
+  internal/nearby/          附近设备发现、配对和传输协议
+  internal/nearbyapp/       桌面与 Android 共用的附近设备服务
+  internal/tunengine/       桌面与 Android VPN 共用的 tun2socks 引擎
   android/                  Android 应用
+  android/mobilegonc/       口令传输和 VPN 的 Go 绑定
+  android/nearbygo/         Android 附近设备功能的 Go 绑定
+  android/internal/mobilefilesource/
+                            共用的 Android 文件源适配器
   android/update-mobilegonc-aar.bat
                             重建 Android mobilegonc.aar
 ```
