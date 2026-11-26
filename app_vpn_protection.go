@@ -9,8 +9,16 @@ import (
 )
 
 func confirmVPNBypassOverrides(ctx context.Context, plan goncrunner.ProtectionPlan, language string, show closeDialogFunc) (bool, error) {
-	title, yes, no := "Confirm VPN bypass overrides", "Start VPN", "Cancel"
+	title := "Confirm VPN bypass overrides"
 	zh := language == "zh"
+	// Wails uses native Yes/No responses on Windows and Linux.
+	dialogType, yes, no := wailsruntime.QuestionDialog, "Yes", "No"
+	if runtime.GOOS == "darwin" {
+		dialogType, yes, no = wailsruntime.WarningDialog, "Start VPN", "Cancel"
+		if zh {
+			yes, no = "继续启用 VPN", "取消"
+		}
+	}
 	local := plan.Local
 	auto := "Automatic physical source selection"
 	dnsNote := "The DNS setting also affects other default DNS lookups in this app."
@@ -31,9 +39,9 @@ func confirmVPNBypassOverrides(ctx context.Context, plan goncrunner.ProtectionPl
 	}
 	message := "Advanced arguments override the disconnect protection settings:\n" + strings.Join(plan.Overrides, "\n") + "\n\nEffective DNS: " + plan.DNS + "\nEffective local source: " + local + "\n\nAn incorrect source or DNS may prevent connection/reconnection. " + dnsNote + " Continue?"
 	if zh {
-		title, yes, no = "确认 VPN 旁路参数覆盖", "继续启用 VPN", "取消"
+		title = "确认 VPN 旁路参数覆盖"
 		message = "高级参数将覆盖断网保护自动准备的值：\n" + strings.Join(plan.Overrides, "\n") + "\n\n最终 DNS：" + plan.DNS + "\n最终本地出口：" + local + "\n\n出口或 DNS 配置不正确可能导致连接、重连失败。" + dnsNote + "是否继续？"
 	}
-	answer, err := show(ctx, wailsruntime.MessageDialogOptions{Type: wailsruntime.WarningDialog, Title: title, Message: message, Buttons: []string{yes, no}, DefaultButton: no, CancelButton: no})
+	answer, err := show(ctx, wailsruntime.MessageDialogOptions{Type: dialogType, Title: title, Message: message, Buttons: []string{yes, no}, DefaultButton: no, CancelButton: no})
 	return err == nil && answer == yes, err
 }
