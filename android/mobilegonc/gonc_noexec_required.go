@@ -3,8 +3,9 @@
 package mobilegonc
 
 // The Android binding uses gonc only for its network features. Build it with
-// -tags gonc_noexec so gonc's shell, external commands (-e) and -daemon are
-// left out: android/update-mobilegonc-aar.bat and the release workflow do.
+// -tags gonc_noexec to disable gonc's shell server (:sh, -shellagent), shell
+// client (-shell), raw terminal mode (-pty), external command execution (-e),
+// and daemon mode (-daemon). The AAR update script and release workflow pass this tag.
 // This file is compiled only when the tag is missing, and stops the build
 // with:
 //

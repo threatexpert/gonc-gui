@@ -8,7 +8,7 @@ require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
-	github.com/threatexpert/gonc/v2 v2.6.14-0.20261123160155-c4b5503a1d0e
+	github.com/threatexpert/gonc/v2 v2.6.15
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	github.com/zeebo/blake3 v0.2.4

@@ -1,8 +1,17 @@
-# Gonc
+<h1 align="center">Gonc</h1>
 
-[中文说明](README_zh.md)
+<p align="center">
+  <strong>Cross-platform secure peer-to-peer file transfer and private networking</strong><br>
+  End-to-end encryption for file transfers · Direct connections within or across networks, with no data relay · No account required
+</p>
 
-Point-to-point secure file transfer and VPN tunneling for desktop and Android.
+<p align="center">
+  Join the discussion in the WeChat group <img src="./wechat-qr.svg" width="57" height="57" align="absmiddle" alt="WeChat group QR code">
+</p>
+
+<p align="center"><a href="README_zh.md">简体中文</a> | English</p>
+
+---
 
 Gonc helps two devices find each other with a shared passphrase. On the same
 LAN, peers can quickly discover each other and connect directly over the local
@@ -10,6 +19,8 @@ network. Across different networks, Gonc uses NAT traversal and hole punching to
 establish a peer-to-peer direct connection. No account, no cloud upload, no file
 size gate. Gonc also includes a VPN mode for building an encrypted tunnel
 between your own devices.
+
+## Usage Demo
 
 ![Gonc desktop file sender](ui-pc.gif)
 
@@ -311,8 +322,10 @@ scripts.
 
 
 Every gonc-gui build, desktop and Android, uses the `gonc_noexec` build tag.
-It leaves gonc's shell (`:sh`, `-shellagent`), external commands (`-e`) and
-`-daemon` out of the app, which only needs gonc's network features. The supplied scripts and the release workflow pass it. A build
+It disables gonc's shell server (`:sh`, `-shellagent`), shell client
+(`-shell`), raw terminal mode (`-pty`), external command execution (`-e`),
+and daemon mode (`-daemon`). The supplied scripts and the release workflow
+pass the tag. A build
 without it stops with `undefined: build_gonc_gui_with_tags_gonc_noexec`, so
 pass it to your own commands too, for example `wails dev -tags gonc_noexec` or
 `go test -tags gonc_noexec ./...`.

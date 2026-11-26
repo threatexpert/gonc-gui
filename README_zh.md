@@ -1,12 +1,25 @@
-# Gonc
+<h1 align="center">Gonc</h1>
 
-面向桌面端和 Android 的点对点安全文件传输与远程组网工具。
+<p align="center">
+  <strong>跨平台点对点安全传输与远程组网</strong><br>
+  文件传输端到端加密 · 同网跨网均可直连，数据无需中转 · 无需账号
+</p>
+
+<p align="center">
+  欢迎扫码加入微信群讨论 <img src="./wechat-qr.svg" width="57" height="57" align="absmiddle" alt="微信群二维码">
+</p>
+
+<p align="center">简体中文 | <a href="README.md">English</a></p>
+
+---
 
 Gonc 通过共享口令帮助两台设备找到彼此，在相同内网可快速发现彼此并直接
 内网直连，不同网络则通过 NAT 穿透和打洞建立点对点直连。不需要账号，不
 上传到云端，也没有文件大小限制。Gonc 还
 包含远程组网模式，可在外面轻松地和家里网络或公司网络直连组网。不用
 服务器，不用账号，设备之间直接建立加密连接。
+
+## 操作演示
 
 ![Gonc desktop file sender](ui-pc.gif)
 
@@ -244,9 +257,9 @@ Android 可能会限制长时间运行的后台任务。请允许 Gonc 忽略电
 通过 gomobile 生成，使用 `go.mod` 锁定的 gonc 版本。
 
 gonc-gui 的所有构建（桌面端和 Android）都使用 `gonc_noexec` 构建标签。它把
-gonc 的 shell（`:sh`、`-shellagent`）、外部命令（`-e`）和 `-daemon`
-排除在应用之外，应用只需要 gonc 的网络功能。仓库提供的脚本和发布
-工作流都会传入该标签。缺少它时构建会报错
+gonc 的 Shell 服务端（`:sh`、`-shellagent`）、Shell 客户端（`-shell`）、
+终端原始模式（`-pty`）、外部命令执行（`-e`）和守护进程模式（`-daemon`）
+排除在应用之外。仓库提供的脚本和发布工作流都会传入该标签。缺少它时构建会报错
 `undefined: build_gonc_gui_with_tags_gonc_noexec`，因此自行执行的命令也需要
 加上，例如 `wails dev -tags gonc_noexec` 或 `go test -tags gonc_noexec ./...`。
 
