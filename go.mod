@@ -3,6 +3,7 @@ module gonc-gui
 go 1.27.1
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
 	github.com/klauspost/compress v1.20.1
@@ -19,7 +20,6 @@ require (
 )
 
 require (
-	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/ajg/form v1.9.0 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/creack/pty v1.1.24 // indirect
@@ -89,3 +89,5 @@ require (
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/threatexpert/tun2socks/v2 v2.0.0-20261120121624-b0ed9683704c
 
 tool golang.org/x/mobile/cmd/gobind
+
+replace git.sr.ht/~jackmordaunt/go-toast/v2 => ./third_party/go-toast

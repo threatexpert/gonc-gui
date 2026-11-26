@@ -174,6 +174,14 @@ export function SetUILanguage(arg1) {
   return window['go']['main']['App']['SetUILanguage'](arg1);
 }
 
+export function SetupNotifications() {
+  return window['go']['main']['App']['SetupNotifications']();
+}
+
+export function ShowNotification(arg1, arg2) {
+  return window['go']['main']['App']['ShowNotification'](arg1, arg2);
+}
+
 export function StartHTTPDownload(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['StartHTTPDownload'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
