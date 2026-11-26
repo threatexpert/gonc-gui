@@ -44,11 +44,6 @@ type Session struct {
 	networkAPI    *windowsNetworkAPI
 }
 
-type routeTarget struct {
-	ifIndex string
-	nextHop string
-}
-
 func CheckRuntime() error {
 	dllPath, err := findWintunDLL()
 	if err != nil {
@@ -369,40 +364,6 @@ func directDNSServer(value string) (netip.Addr, bool) {
 	return addr, true
 }
 
-func (s *Session) configureBypassRoutes() error {
-	for _, ip := range s.config.BypassIPs {
-		addr, err := netip.ParseAddr(strings.TrimSpace(ip))
-		if err != nil || !addr.IsValid() || addr.IsLoopback() || addr.IsUnspecified() {
-			continue
-		}
-		route, err := currentRouteTo(addr.String())
-		if err != nil {
-			return fmt.Errorf("find route for VPN bypass %s: %w", addr, err)
-		}
-		if addr.Is6() {
-			if !s.config.EnableIPv6 {
-				continue
-			}
-			args := []string{"interface", "ipv6", "add", "route", addr.String() + "/128", "interface=" + route.ifIndex, "metric=1", "store=active"}
-			if route.nextHop != "" && route.nextHop != "::" {
-				args = append(args, "nexthop="+route.nextHop)
-			}
-			if err := run("netsh", args...); err != nil {
-				return fmt.Errorf("add VPN IPv6 bypass route %s: %w", addr, err)
-			}
-			continue
-		}
-		nextHop := route.nextHop
-		if nextHop == "" {
-			nextHop = "0.0.0.0"
-		}
-		if err := run("route", "add", addr.String(), "mask", "255.255.255.255", nextHop, "metric", "1", "IF", route.ifIndex); err != nil {
-			return fmt.Errorf("add VPN bypass route %s: %w", addr, err)
-		}
-	}
-	return nil
-}
-
 func (s *Session) configureRoutes(trace func(string)) error {
 	step := time.Now()
 	if err := s.addWindowsRoutes(); err != nil {
@@ -445,25 +406,6 @@ func waitInterface(name string, timeout time.Duration) error {
 		time.Sleep(150 * time.Millisecond)
 	}
 	return fmt.Errorf("VPN interface %q did not appear", name)
-}
-
-func currentRouteTo(ip string) (routeTarget, error) {
-	script := "$r = Find-NetRoute -RemoteIPAddress '" + strings.ReplaceAll(ip, "'", "''") + "' | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($null -eq $r) { exit 2 }; Write-Output ([string]$r.InterfaceIndex + ',' + [string]$r.NextHop)"
-	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	output, err := cmd.Output()
-	if err != nil {
-		return routeTarget{}, err
-	}
-	parts := strings.SplitN(strings.TrimSpace(string(output)), ",", 2)
-	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		return routeTarget{}, fmt.Errorf("route not found")
-	}
-	route := routeTarget{ifIndex: strings.TrimSpace(parts[0])}
-	if len(parts) > 1 {
-		route.nextHop = strings.TrimSpace(parts[1])
-	}
-	return route, nil
 }
 
 func run(name string, args ...string) error {
