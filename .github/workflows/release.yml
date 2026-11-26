@@ -120,6 +120,8 @@ jobs:
       - name: Build Wails app
         shell: bash
         run: |
+          # The Windows exe's version resource comes from wails.json.
+          node -e 'const fs = require("fs"); const j = JSON.parse(fs.readFileSync("wails.json", "utf8")); j.info.productVersion = process.env.VERSION; fs.writeFileSync("wails.json", JSON.stringify(j, null, 2) + require("os").EOL);'
           # gonc_noexec leaves gonc's shell and command execution out of the app.
           if [[ -n "${{ matrix.linux_tags }}" ]]; then
             wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }},gonc_noexec" -o gonc-gui-webkit41
