@@ -94,6 +94,10 @@ export function SetTaskbarProgress(arg1:number,arg2:number):Promise<void>;
 
 export function SetUILanguage(arg1:string):Promise<void>;
 
+export function SetupNotifications():Promise<boolean>;
+
+export function ShowNotification(arg1:string,arg2:string):Promise<void>;
+
 export function StartHTTPDownload(arg1:string,arg2:string,arg3:Array<string>,arg4:Array<string>,arg5:Array<httpdownload.FileInfo>,arg6:boolean,arg7:number):Promise<void>;
 
 export function StartReceivedComparison(arg1:string,arg2:string,arg3:string):Promise<string>;

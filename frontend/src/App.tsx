@@ -71,6 +71,8 @@ import {
   SelectFiles,
   SelectFolder,
   SetUILanguage,
+  SetupNotifications,
+  ShowNotification,
   StartHTTPDownload,
   StartTransfer,
   Status,
@@ -80,7 +82,7 @@ import {
   SetTaskbarProgress,
   UpdateSharePaths
 } from '../wailsjs/go/main/App';
-import {BrowserOpenURL, ClipboardGetText, ClipboardSetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, InitializeNotifications, IsNotificationAvailable, RequestNotificationAuthorization, SendNotification, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
+import {BrowserOpenURL, ClipboardGetText, ClipboardSetText, Environment, EventsOff, EventsOn, OnFileDrop, OnFileDropOff, WindowMinimise, WindowSetAlwaysOnTop, WindowShow, WindowUnminimise} from '../wailsjs/runtime/runtime';
 
 type Mode = PassphraseMode;
 type InitialPassphrasePhase = 'prompt' | 'waiting' | 'ready';
@@ -1615,13 +1617,11 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    InitializeNotifications()
-      .then(() => IsNotificationAvailable())
-      .then(async (available) => {
-        if (!available || cancelled) {
-          return;
+    SetupNotifications()
+      .then((ready) => {
+        if (!cancelled) {
+          notificationsReady.current = ready;
         }
-        notificationsReady.current = await RequestNotificationAuthorization().catch(() => true);
       })
       .catch(() => {
         notificationsReady.current = false;
@@ -2751,11 +2751,7 @@ function App() {
       return;
     }
     vpnDisconnectNotified.current = true;
-    SendNotification({
-      id: `vpn-tunnel-paused-${Date.now()}`,
-      title: t.vpnTunnelPausedTitle,
-      body: t.vpnTunnelPausedBody,
-    }).catch(() => undefined);
+    ShowNotification(t.vpnTunnelPausedTitle, t.vpnTunnelPausedBody).catch(() => undefined);
   }
 
   function notifyVpnStarted() {
@@ -2763,11 +2759,7 @@ function App() {
       return;
     }
     vpnStartedNotified.current = true;
-    SendNotification({
-      id: `vpn-started-${Date.now()}`,
-      title: t.vpnStartedTitle,
-      body: t.vpnStartedBody,
-    }).catch(() => undefined);
+    ShowNotification(t.vpnStartedTitle, t.vpnStartedBody).catch(() => undefined);
   }
 
   function notifyVpnTunnelRestored() {
@@ -2776,11 +2768,7 @@ function App() {
       return;
     }
     vpnDisconnectNotified.current = false;
-    SendNotification({
-      id: `vpn-tunnel-restored-${Date.now()}`,
-      title: t.vpnTunnelRestoredTitle,
-      body: t.vpnTunnelRestoredBody,
-    }).catch(() => undefined);
+    ShowNotification(t.vpnTunnelRestoredTitle, t.vpnTunnelRestoredBody).catch(() => undefined);
   }
 
   function restoreAppWindowAfterCapture() {

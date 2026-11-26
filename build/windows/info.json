@@ -1,6 +1,7 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "{{.Info.ProductVersion}}",
+		"product_version": "{{.Info.ProductVersion}}"
 	},
 	"info": {
 		"0000": {
@@ -9,7 +10,10 @@
 			"FileDescription": "{{.Info.ProductName}}",
 			"LegalCopyright": "{{.Info.Copyright}}",
 			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+			"Comments": "{{.Info.Comments}}",
+			"FileVersion": "{{.Info.ProductVersion}}",
+			"InternalName": "gonc-gui",
+			"OriginalFilename": "gonc-gui.exe"
 		}
 	}
 }

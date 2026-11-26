@@ -14,7 +14,7 @@ test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
 export PATH="/usr/local/go/bin:$PATH"
 export GOWORK=off GOTOOLCHAIN=local GOMODCACHE=/go/pkg/mod GOPROXY=off CGO_ENABLED=1
 binary=build/bin/gonc-gui
-go build -mod=readonly -buildvcs=false -tags desktop,production -ldflags="-s -w" -o "$binary" .
+go build -mod=readonly -buildvcs=false -tags desktop,production,gonc_noexec -ldflags="-s -w" -o "$binary" .
 
 readelf -d "$binary" | grep -F 'Shared library: [libwebkit2gtk-4.0.so.37]'
 highest=$(readelf --version-info "$binary" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu | tail -1)

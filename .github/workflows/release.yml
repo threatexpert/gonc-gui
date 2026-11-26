@@ -120,10 +120,13 @@ jobs:
       - name: Build Wails app
         shell: bash
         run: |
+          # The Windows exe's version resource comes from wails.json.
+          node -e 'const fs = require("fs"); const j = JSON.parse(fs.readFileSync("wails.json", "utf8")); j.info.productVersion = process.env.VERSION; fs.writeFileSync("wails.json", JSON.stringify(j, null, 2) + require("os").EOL);'
+          # gonc_noexec leaves gonc's shell and command execution out of the app.
           if [[ -n "${{ matrix.linux_tags }}" ]]; then
-            wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }}" -o gonc-gui-webkit41
+            wails build -platform "${{ matrix.target }}" -tags "${{ matrix.linux_tags }},gonc_noexec" -o gonc-gui-webkit41
           else
-            wails build -platform "${{ matrix.target }}"
+            wails build -platform "${{ matrix.target }}" -tags gonc_noexec
           fi
 
       - name: Test WebKitGTK 4.1 app on Ubuntu
@@ -256,7 +259,7 @@ jobs:
           go install -mod=readonly golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
 
           aar="${work_dir}/mobilegonc.aar"
-          gomobile bind -target=android/arm64 -androidapi=26 -trimpath \
+          gomobile bind -target=android/arm64 -androidapi=26 -trimpath -tags gonc_noexec \
             -bootclasspath="${ANDROID_HOME}/platforms/android-35/android.jar" \
             -ldflags="-s -w -buildid= -checklinkname=0" \
             -o "${aar}" gonc-gui/android/mobilegonc gonc-gui/android/nearbygo

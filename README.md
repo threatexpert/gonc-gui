@@ -304,11 +304,18 @@ bindings or their Go dependencies change.
 
 The project, local CLI and GitHub workflow use Wails v2.17.1. For a manual
 desktop build, set `GOWORK=off` and use `wails build` with the desired platform
-(and `webkit2_41` tag on Linux). No embed-scanner bypass or placeholder script
+and the `gonc_noexec` tag (plus `webkit2_41` on Linux). No embed-scanner bypass or placeholder script
 is needed. Wails generates bindings, frontend assets, app icons and platform
 manifests normally, including on a fresh checkout. Prefer the supplied build
 scripts.
 
+
+Every gonc-gui build, desktop and Android, uses the `gonc_noexec` build tag.
+It leaves gonc's shell (`:sh`, `-shellagent`), external commands (`-e`) and
+`-daemon` out of the app, which only needs gonc's network features. The supplied scripts and the release workflow pass it. A build
+without it stops with `undefined: build_gonc_gui_with_tags_gonc_noexec`, so
+pass it to your own commands too, for example `wails dev -tags gonc_noexec` or
+`go test -tags gonc_noexec ./...`.
 
 Rebuild the Android Go bridge from the gonc-gui repository root:
 
@@ -354,7 +361,7 @@ frontend build or generate the Windows resources. During `wails build`, Wails
 writes a temporary `gonc-gui-res.syso` with the app icon and Windows manifest,
 links it in, and deletes it afterwards, so finding no `.syso` in the repository
 is normal, and separate `rsrc` or `windres` tools are not needed. A plain
-`go build` (which also needs the `desktop,production` tags and an
+`go build` (which also needs the `desktop,production,gonc_noexec` tags and an
 already-built `frontend\dist`) produces an exe without the icon and manifest:
 fine for diagnostics, but not a release build.
 

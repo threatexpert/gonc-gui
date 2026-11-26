@@ -52,7 +52,7 @@ echo "[3/4] Installing frontend dependencies..."
 npm install --prefix frontend
 
 echo "[4/4] Building gonc-gui..."
-wails build -platform "$target"
+wails build -platform "$target" -tags gonc_noexec
 
 echo
 echo "Build completed successfully."
