@@ -243,6 +243,13 @@ Android 可能会限制长时间运行的后台任务。请允许 Gonc 忽略电
 `mobilegonc.aar` 由本仓库的 `android/mobilegonc` 和 `android/nearbygo`
 通过 gomobile 生成，使用 `go.mod` 锁定的 gonc 版本。
 
+gonc-gui 的所有构建（桌面端和 Android）都使用 `gonc_noexec` 构建标签。它把
+gonc 的 shell（`:sh`、`-shellagent`）、外部命令（`-e`）和 `-daemon`
+排除在应用之外，应用只需要 gonc 的网络功能。仓库提供的脚本和发布
+工作流都会传入该标签。缺少它时构建会报错
+`undefined: build_gonc_gui_with_tags_gonc_noexec`，因此自行执行的命令也需要
+加上，例如 `wails dev -tags gonc_noexec` 或 `go test -tags gonc_noexec ./...`。
+
 Android 绑定或其 Go 依赖变动后，在仓库根目录重新生成 AAR：
 
 ```text
@@ -285,7 +292,7 @@ build\bin\wintun.dll
 生成 Windows 资源。`wails build` 过程中，Wails 会临时生成包含应用图标和
 Windows 清单的 `gonc-gui-res.syso`，链接后再将其删除，因此仓库中找不到
 `.syso` 文件属于正常现象，也不需要另外安装 `rsrc` 或 `windres`。直接
-`go build`（还需要 `desktop,production` 构建标签和已构建好的
+`go build`（还需要 `desktop,production,gonc_noexec` 构建标签和已构建好的
 `frontend\dist`）生成的 exe 没有图标和清单，可用于诊断，但不能作为发布构建。
 
 创建发布包（在 `dist\` 中生成 Windows amd64、arm64 压缩包及 Android APK）：

@@ -30,7 +30,7 @@ call npm install --prefix frontend
 if errorlevel 1 goto failed
 
 echo [3/4] Building gonc-gui...
-wails build -platform "%TARGET%"
+wails build -platform "%TARGET%" -tags gonc_noexec
 if errorlevel 1 goto failed
 
 echo [4/4] Copying Wintun runtime...

@@ -8,6 +8,8 @@ export GOWORK=off
 
 target="${1:-linux/amd64}"
 tags="${WAILS_TAGS:-webkit2_41}"
+# gonc_noexec leaves gonc's shell and command execution out of the app.
+tags="${tags:+$tags,}gonc_noexec"
 
 case "$target" in
   amd64) target="linux/amd64" ;;
@@ -47,11 +49,7 @@ echo "[3/5] Installing frontend dependencies..."
 npm install --prefix frontend
 
 echo "[4/5] Building gonc-gui..."
-if [[ -n "$tags" ]]; then
-  wails build -platform "$target" -tags "$tags"
-else
-  wails build -platform "$target"
-fi
+wails build -platform "$target" -tags "$tags"
 
 echo "[5/5] Done."
 echo
